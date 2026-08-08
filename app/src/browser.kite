@@ -1,0 +1,537 @@
+//! Storage, the clock, the address bar — the host, behind a typed door.
+//!
+//! Everything above this file talks about sessions and routes and never about
+//! `localStorage`. `JsValue` does not leave this module, for the same reason it
+//! does not leave `doc.kite`: the field is unmarked, so outside here a handle
+//! can be held and passed but not read.
+
+use std/js
+use std/math
+use std/dom
+
+fn window() -> JsValue {
+    return js.global("window")
+}
+
+// ---- the clock -------------------------------------------------------------
+
+/// A no-argument method call whose answer is a number, or 0.
+///
+/// The host is untyped and every crossing can fail, so the checking is done
+/// once here rather than four times in each of the date functions below. Kite
+/// will not let a `(T, error)` be used before the error is tested and will not
+/// let the error be dropped with `_`, which is what made writing it any other
+/// way impossible — correctly.
+fn number_from(target: JsValue, method: str) -> int {
+    let (value, err) = js.call0(target, method)
+    if err != nil {
+        return 0
+    }
+    let (n, nerr) = js.as_num(value)
+    if nerr != nil {
+        return 0
+    }
+    return math.round_to(n)
+}
+
+fn date_at(epoch: int) -> Option<JsValue> {
+    let (date, err) = js.new1("Date", js.of_num((epoch * 1000) as float))
+    if err != nil {
+        return nil
+    }
+    return date
+}
+
+/// Seconds since the epoch, which is the unit the API speaks in.
+pub fn now() -> int {
+    return math.trunc_to(ticks() as float / 1000.0)
+}
+
+/// Milliseconds, for measuring a gap rather than naming a moment.
+pub fn ticks() -> int {
+    return number_from(js.global("Date"), "now")
+}
+
+/// `hh:mm` in the device's own timezone, which is the shop's.
+pub fn clock_of(epoch: int) -> str {
+    let date = date_at(epoch)
+    if date == nil {
+        return ""
+    }
+    let h = number_from(date, "getHours")
+    let m = number_from(date, "getMinutes")
+    return "\(pad2(h)):\(pad2(m))"
+}
+
+/// `dd Mon`, for a status bar that has no room for a year.
+pub fn day_of(epoch: int) -> str {
+    let date = date_at(epoch)
+    if date == nil {
+        return ""
+    }
+    let names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    let index = clamp(number_from(date, "getMonth"), 0, 11)
+    return "\(number_from(date, "getDate")) \(names[index])"
+}
+
+/// A date the operator has to check an ID against, spelled out.
+///
+/// The dialog shows the minimum age *and this*, so nobody is doing arithmetic
+/// at the counter with a queue waiting.
+pub fn date_of(epoch: int) -> str {
+    let date = date_at(epoch)
+    if date == nil {
+        return ""
+    }
+    return "\(day_of(epoch)) \(number_from(date, "getFullYear"))"
+}
+
+fn pad2(value: int) -> str {
+    return pad_start("\(value)", 2, "0")
+}
+
+// ---- listeners -------------------------------------------------------------
+
+/// `YYYY-MM-DD`, which is what a filename wants.
+///
+/// `date_of` writes "10 Jul 2026" for a person to read; a folder of files
+/// named that way sorts April before January. A saved report is filed and
+/// found again months later, so its name sorts in the only order that is
+/// unambiguous in every locale.
+pub fn iso_day(epoch: int) -> str {
+    let date = date_at(epoch)
+    if date == nil {
+        return "unknown"
+    }
+    let (value, err) = js.call0(date, "toISOString")
+    if err != nil {
+        return "unknown"
+    }
+    let (text, terr) = js.as_str(value)
+    if terr != nil {
+        return "unknown"
+    }
+    return text.slice(0, 10)
+}
+
+pub fn on_window(name: str, handler: fn()) {
+    let bound = js.func(|raw: JsValue| { handler() })
+    let (_, err) = js.call2(window(), "addEventListener", js.of_str(name), bound)
+    if err != nil {
+        io.error("browser: no \(name) listener: \(err.message())")
+    }
+}
+
+/// Run something later.
+///
+/// `setTimeout` and never `requestAnimationFrame`: a background tab does not
+/// run frame callbacks, so a "a frame is already booked" flag set in one is
+/// never cleared and every later call is dropped — in a tab somebody comes back
+/// to and finds frozen. A till is left on a counter all day; this matters.
+pub fn after(ms: int, handler: fn()) {
+    let bound = js.func(|raw: JsValue| { handler() })
+    let (_, err) = js.call2(window(), "setTimeout", bound, js.of_num(ms as float))
+    if err != nil {
+        io.error("browser: could not defer: \(err.message())")
+    }
+}
+
+/// Run something on a fixed interval, for the heartbeat that keeps a lane's
+/// "last seen" honest in the back office.
+pub fn every(ms: int, handler: fn()) {
+    let bound = js.func(|raw: JsValue| { handler() })
+    let (_, err) = js.call2(window(), "setInterval", bound, js.of_num(ms as float))
+    if err != nil {
+        io.error("browser: could not set an interval: \(err.message())")
+    }
+}
+
+/// The nearest ancestor matching a selector, including the element itself.
+pub fn closest(e: dom.Element, selector: str) -> Option<dom.Element> {
+    let (found, err) = js.call1(dom.raw(e), "closest", js.of_str(selector))
+    if err != nil {
+        return nil
+    }
+    if js.is_nothing(found) {
+        return nil
+    }
+    return dom.wrap(found)
+}
+
+pub fn focus(selector: str) {
+    let target = dom.find(selector)
+    if target == nil {
+        return
+    }
+    let (_, err) = js.call0(dom.raw(target), "focus")
+    if err != nil {
+        io.error("browser: could not focus \(selector)")
+    }
+}
+
+/// Empty a field and put the caret back in it.
+///
+/// The scan box has to be ready for the next barcode the instant the last one
+/// lands, and a scanner is a fast keyboard that types wherever the focus is.
+pub fn clear_and_focus(selector: str) {
+    let target = dom.find(selector)
+    if target == nil {
+        return
+    }
+    let err = js.set(dom.raw(target), "value", js.of_str(""))
+    if err != nil {
+        return
+    }
+    let (_, ferr) = js.call0(dom.raw(target), "focus")
+    if ferr != nil {
+        io.error("browser: could not focus \(selector)")
+    }
+}
+
+pub fn set_value(selector: str, value: str) {
+    let target = dom.find(selector)
+    if target == nil {
+        return
+    }
+    let err = js.set(dom.raw(target), "value", js.of_str(value))
+    if err != nil {
+        io.error("browser: could not write \(selector)")
+    }
+}
+
+/// A `<meta name="…" content="…">` from the page, or "".
+///
+/// How a deployment tells the program where its API is without a rebuild: the
+/// same `dist/` is a test shop or a real one depending on one line of HTML.
+pub fn meta(name: str) -> str {
+    let tag = dom.find("meta[name=\"\(name)\"]")
+    if tag == nil {
+        return ""
+    }
+    let value = dom.attribute(tag, "content")
+    if value == nil {
+        return ""
+    }
+    return value
+}
+
+/// The document's own `lang`.
+///
+/// Not decoration: the stylesheet keys Burmese's taller line box off it, so
+/// this is the one write that makes မြန်မာ legible rather than cramped. One
+/// attribute rather than a class on every string.
+pub fn set_document_lang(tag: str) {
+    let (root, err) = js.get(js.global("document"), "documentElement")
+    if err != nil {
+        return
+    }
+    let serr = js.set(root, "lang", js.of_str(tag))
+    if serr != nil {
+        io.error("browser: could not set the document language")
+    }
+}
+
+/// The browser's own print dialog.
+///
+/// A receipt is printed by printing the page: `@media print` in the stylesheet
+/// drops the rail, the header and every card except the receipt itself, so
+/// there is nothing here to build.
+pub fn print_page() {
+    let (_, err) = js.call0(window(), "print")
+    if err != nil {
+        io.error("browser: could not print")
+    }
+}
+
+/// Whether a checkbox is ticked.
+pub fn is_checked(e: dom.Element) -> bool {
+    let (value, err) = js.get(dom.raw(e), "checked")
+    if err != nil {
+        return false
+    }
+    let (on, berr) = js.as_bool(value)
+    if berr != nil {
+        return false
+    }
+    return on
+}
+
+/// The first and last second of a month written `2026-08`.
+///
+/// Done by the host's own calendar rather than by counting days, because month
+/// lengths and the shop's timezone are exactly the arithmetic nobody should
+/// write twice.
+pub fn month_bounds(month: str) -> [int] {
+    let parts = split(month.trim(), "-")
+    if parts.len() != 2 {
+        return []
+    }
+    let parsed_year = parse_int(parts[0])
+    let parsed_index = parse_int(parts[1])
+    if parsed_year == nil {
+        return []
+    }
+    if parsed_index == nil {
+        return []
+    }
+    // Narrowed by the tests above; bound to plain ints so the arithmetic below
+    // is ordinary arithmetic.
+    let year = parsed_year
+    let index = parsed_index
+    if index < 1 || index > 12 {
+        return []
+    }
+    let (from, ferr) = js.new3("Date", js.of_num(year as float),
+        js.of_num((index - 1) as float), js.of_num(1.0))
+    if ferr != nil {
+        return []
+    }
+    let (to, terr) = js.new3("Date", js.of_num(year as float),
+        js.of_num(index as float), js.of_num(1.0))
+    if terr != nil {
+        return []
+    }
+    let starts = number_from(from, "getTime")
+    let ends = number_from(to, "getTime")
+    return [math.trunc_to(starts as float / 1000.0), math.trunc_to(ends as float / 1000.0) - 1]
+}
+
+/// Percent-encoded, for a query string.
+pub fn escaped(text: str) -> str {
+    let (value, err) = js.call1(js.global("globalThis"), "encodeURIComponent", js.of_str(text))
+    if err != nil {
+        return ""
+    }
+    let (body, terr) = js.as_str(value)
+    if terr != nil {
+        return ""
+    }
+    return body
+}
+
+// ---- where we are ----------------------------------------------------------
+
+fn location() -> JsValue {
+    return js.global("location")
+}
+
+pub fn hash() -> str {
+    let (value, err) = js.get(location(), "hash")
+    if err != nil {
+        return ""
+    }
+    let (body, terr) = js.as_str(value)
+    if terr != nil {
+        return ""
+    }
+    return body
+}
+
+pub fn set_hash(fragment: str) {
+    let err = js.set(location(), "hash", js.of_str(fragment))
+    if err != nil {
+        io.error("browser: could not navigate")
+    }
+}
+
+pub fn go_to(url: str) {
+    let (_, err) = js.call1(location(), "assign", js.of_str(url))
+    if err != nil {
+        io.error("browser: could not leave")
+    }
+}
+
+// ---- storage ---------------------------------------------------------------
+//
+// `localStorage` rather than `sessionStorage`, unlike a reader's cache: a till
+// is a device that belongs to the shop, and a cashier who reloads the page
+// mid-shift should not have to sign in again. The session token has a server
+// expiry, which is the thing actually bounding it.
+
+fn storage() -> Option<JsValue> {
+    let value = js.global("localStorage")
+    if js.is_nothing(value) {
+        return nil
+    }
+    return value
+}
+
+pub fn kept(key: str) -> Option<str> {
+    let store = storage()
+    if store == nil {
+        return nil
+    }
+    let (value, err) = js.call1(store, "getItem", js.of_str(key))
+    if err != nil {
+        return nil
+    }
+    if js.is_nothing(value) {
+        return nil
+    }
+    let (body, terr) = js.as_str(value)
+    if terr != nil {
+        return nil
+    }
+    return body
+}
+
+pub fn keep(key: str, value: str) {
+    let store = storage()
+    if store == nil {
+        return
+    }
+    let (_, err) = js.call2(store, "setItem", js.of_str(key), js.of_str(value))
+    if err != nil {
+        // A full or disabled store is not worth stopping a sale over.
+        io.error("browser: could not keep \(key)")
+    }
+}
+
+pub fn drop_kept(key: str) {
+    let store = storage()
+    if store == nil {
+        return
+    }
+    let (_, err) = js.call1(store, "removeItem", js.of_str(key))
+    if err != nil {
+        io.error("browser: could not drop \(key)")
+    }
+}
+
+// ---- the network -----------------------------------------------------------
+
+/// Whether the device believes it has a connection.
+///
+/// `navigator.onLine` is famously optimistic — it says true for a device
+/// attached to a router with no internet behind it — so this is the *cheap*
+/// signal and never the authority. What the status dot actually reports is
+/// whether the last request to the Worker succeeded, which `api.kite` records.
+pub fn seems_online() -> bool {
+    let (value, err) = js.get(js.global("navigator"), "onLine")
+    if err != nil {
+        return true
+    }
+    let (online, berr) = js.as_bool(value)
+    if berr != nil {
+        return true
+    }
+    return online
+}
+
+/// A random identifier, for an idempotency key the server can dedupe on.
+pub fn nonce() -> str {
+    let (value, err) = js.call0(js.global("crypto"), "randomUUID")
+    if err != nil {
+        return "n\(ticks())"
+    }
+    let (body, terr) = js.as_str(value)
+    if terr != nil {
+        return "n\(ticks())"
+    }
+    return body
+}
+
+/// Ask the browser to install the service worker.
+///
+/// Registered from Kite rather than from a `<script>` in the page, so the whole
+/// program including its offline story is in one language.
+pub fn register_worker(path: str) {
+    let (workers, err) = js.get(js.global("navigator"), "serviceWorker")
+    if err != nil {
+        return
+    }
+    if js.is_nothing(workers) {
+        return
+    }
+    let (_, rerr) = js.call1(workers, "register", js.of_str(path))
+    if rerr != nil {
+        io.error("browser: no service worker: \(rerr.message())")
+    }
+}
+
+// ---- saving a file ---------------------------------------------------------
+
+/// Hand the operator a file.
+///
+/// An export cannot be a plain link: the Worker wants an `Authorization`
+/// header, and a link carries none — and putting the token in the query string
+/// instead would write a credential into the browser's history and every log
+/// between here and there. So the body is fetched with the header, turned into
+/// a blob, and saved through an anchor that is created, clicked and thrown
+/// away.
+///
+/// **The byte-order mark is added here**, and that is not belt-and-braces: the
+/// Worker puts one at the front of every CSV, and the `fetch` that brought it
+/// back stripped it while decoding, because that is what a UTF-8 decoder is
+/// specified to do. Re-encoding without it would hand Excel on Windows a file
+/// it reads in the system code page — which turns every Burmese character in
+/// it into mojibake. It goes in as its own blob part, so no string in this
+/// program has to carry an invisible character.
+pub fn download(filename: str, body: str, mime: str) {
+    let (parts, aerr) = js.new0("Array")
+    if aerr != nil {
+        io.error("browser: could not build the file")
+        return
+    }
+    let bom = js.call1(js.global("String"), "fromCharCode", js.of_num(65279.0))
+    let (mark, berr) = bom
+    if berr == nil {
+        let (_, perr) = js.call1(parts, "push", mark)
+        if perr != nil {
+            io.error("browser: could not mark the file")
+        }
+    }
+    let (_, perr) = js.call1(parts, "push", js.of_str(body))
+    if perr != nil {
+        io.error("browser: could not fill the file")
+        return
+    }
+
+    let (options, oerr) = js.new0("Object")
+    if oerr != nil {
+        io.error("browser: could not describe the file")
+        return
+    }
+    let terr = js.set(options, "type", js.of_str(mime))
+    if terr != nil {
+        io.error("browser: could not type the file")
+        return
+    }
+
+    let (blob, blerr) = js.new2("Blob", parts, options)
+    if blerr != nil {
+        io.error("browser: this browser cannot make a file")
+        return
+    }
+    let (url, uerr) = js.call1(js.global("URL"), "createObjectURL", blob)
+    if uerr != nil {
+        io.error("browser: could not name the file")
+        return
+    }
+    let (link, lerr) = dom.create("a")
+    if lerr != nil {
+        io.error("browser: could not make the link")
+        return
+    }
+    let (href, herr) = js.as_str(url)
+    if herr != nil {
+        io.error("browser: could not read the file's address")
+        return
+    }
+    let h1 = dom.set_attribute(link, "href", href)
+    let h2 = dom.set_attribute(link, "download", filename)
+    if h1 != nil || h2 != nil {
+        io.error("browser: could not address the link")
+        return
+    }
+    let (_, cerr) = js.call0(dom.raw(link), "click")
+    if cerr != nil {
+        io.error("browser: could not save the file")
+    }
+    // The object URL holds the whole file in memory until it is let go.
+    let (_, rerr) = js.call1(js.global("URL"), "revokeObjectURL", url)
+    if rerr != nil {
+        io.error("browser: could not release the file")
+    }
+}

@@ -1,0 +1,732 @@
+//! What the back office is holding.
+//!
+//! The counterpart to `store.kite`, and separate from it for the reason the two
+//! apps are separate: a role decides which one a sign-in opens and there is no
+//! navigation between them. A cashier's session cannot reach any of this, and
+//! the Worker refuses it as well — this is not the only gate.
+//!
+//! ## A screen is a list of blocks
+//!
+//! The design gives the back office five ways of showing something: a row of
+//! stat cards with a tone bar, a ranked list with a meter under each name, a
+//! table, a grid of lane cards, and the pair of role cards on Staff & access.
+//! So a screen here is `[Block]`, and adding one is a function that returns a
+//! list — `office_view.kite` already knows how to draw every shape.
+//!
+//! Same discipline as the till: no `html.Node` in here, no document, and every
+//! field a handler changes written by a small function at the bottom, because a
+//! closure may not capture a `var`.
+
+use std/dom
+use std/html
+use doc
+use i18n
+use model
+use money
+use words
+
+/// Which screen the rail is showing.
+///
+/// **Tills is how a manager reaches a lane.** The register itself is not in
+/// this navigation, because a manager cannot ring a sale from a desk — they
+/// walk to the lane and authorise there, or take it over from here.
+pub enum Screen {
+    Overview
+    Tills
+    Sales
+    Shifts
+    Products
+    Inventory
+    Movements
+    Purchasing
+    Suppliers
+    Customers
+    Promotions
+    Reports
+    Accounting
+    Expenses
+    Staff
+    Settings
+
+    /// Drill-downs. Not in the rail — they are reached by touching a row, and
+    /// they carry the thing they are about in the address, so a manager can
+    /// send somebody a link to one receipt.
+    Product(id: str)
+    Sale(id: str)
+    Shift(id: str)
+    Order(id: str)
+}
+
+/// Every screen the rail lists, in order. Drill-downs are not among them.
+pub fn all_screens() -> [Screen] {
+    return [
+        Screen.Overview, Screen.Tills, Screen.Sales, Screen.Shifts,
+        Screen.Products, Screen.Inventory, Screen.Movements, Screen.Purchasing,
+        Screen.Suppliers, Screen.Customers, Screen.Promotions,
+        Screen.Reports, Screen.Accounting, Screen.Expenses,
+        Screen.Staff, Screen.Settings,
+    ]
+}
+
+pub fn slug_of(s: Screen) -> str {
+    return match s {
+        Overview => "",
+        Tills => "tills",
+        Sales => "sales",
+        Shifts => "shifts",
+        Products => "products",
+        Inventory => "inventory",
+        Movements => "movements",
+        Purchasing => "purchasing",
+        Suppliers => "suppliers",
+        Customers => "customers",
+        Promotions => "promotions",
+        Reports => "reports",
+        Accounting => "accounting",
+        Expenses => "expenses",
+        Staff => "staff",
+        Settings => "settings",
+        Product(id) => "products/\(id)",
+        Sale(id) => "sales/\(id)",
+        Shift(id) => "shifts/\(id)",
+        Order(id) => "purchasing/\(id)",
+    }
+}
+
+pub fn screen_of(hash: str) -> Screen {
+    var body = hash
+    if starts_with(body, "#") {
+        body = body.slice(1, body.len())
+    }
+    if starts_with(body, "/") {
+        body = body.slice(1, body.len())
+    }
+    for s in all_screens() {
+        if slug_of(s) == body {
+            return s
+        }
+    }
+    // `products/prd_x` is the product screen with a thing on it. Split rather
+    // than matched, so one more drill-down is one more line here and nothing
+    // else in the application.
+    let parts = split(body, "/")
+    if parts.len() == 2 && parts[1].len() > 0 {
+        if parts[0] == "products" {
+            return Screen.Product(id: parts[1])
+        }
+        if parts[0] == "sales" {
+            return Screen.Sale(id: parts[1])
+        }
+        if parts[0] == "shifts" {
+            return Screen.Shift(id: parts[1])
+        }
+        if parts[0] == "purchasing" {
+            return Screen.Order(id: parts[1])
+        }
+    }
+    return Screen.Overview
+}
+
+pub fn href_of(s: Screen) -> str {
+    return "#/\(slug_of(s))"
+}
+
+pub fn title_of(s: Screen, l: i18n.Lang) -> str {
+    return words.t(l, key_of(s))
+}
+
+/// The phrase a screen is named by. Separate from [`title_of`] so the rail,
+/// the page header and a document title all name a screen the same way.
+fn key_of(s: Screen) -> str {
+    return match s {
+        Overview => "nav.overview",
+        Tills => "nav.tills",
+        Sales => "common.sales",
+        Shifts => "shifts.shifts",
+        Products => "common.products",
+        Inventory => "common.inventory",
+        Movements => "common.stock_movements",
+        Purchasing => "common.purchasing",
+        Suppliers => "common.suppliers",
+        Customers => "customers.customers",
+        Promotions => "promotions.promotions",
+        Reports => "common.reports",
+        Accounting => "common.accounting",
+        Expenses => "common.expenses",
+        Staff => "nav.staff_access",
+        Settings => "common.settings",
+        Product(id) => "common.product",
+        Sale(id) => "common.receipt",
+        Shift(id) => "nav.shift",
+        Order(id) => "nav.purchase_order",
+    }
+}
+
+/// The rail item a drill-down belongs under, so it stays highlighted.
+pub fn rail_screen_of(s: Screen) -> Screen {
+    return match s {
+        Product(id) => Screen.Products,
+        Sale(id) => Screen.Sales,
+        Shift(id) => Screen.Shifts,
+        Order(id) => Screen.Purchasing,
+        Overview => Screen.Overview,
+        Tills => Screen.Tills,
+        Sales => Screen.Sales,
+        Shifts => Screen.Shifts,
+        Products => Screen.Products,
+        Inventory => Screen.Inventory,
+        Movements => Screen.Movements,
+        Purchasing => Screen.Purchasing,
+        Suppliers => Screen.Suppliers,
+        Customers => Screen.Customers,
+        Promotions => Screen.Promotions,
+        Reports => Screen.Reports,
+        Accounting => Screen.Accounting,
+        Expenses => Screen.Expenses,
+        Staff => Screen.Staff,
+        Settings => Screen.Settings,
+    }
+}
+
+/// Which of the rail's three groups a screen belongs to.
+///
+/// "" is the ungrouped set at the top — the day-to-day running of the shop.
+pub fn group_of(s: Screen) -> str {
+    return match s {
+        Overview => "",
+        Tills => "",
+        Sales => "",
+        Shifts => "",
+        Products => "nav.store",
+        Inventory => "nav.store",
+        Movements => "nav.store",
+        Purchasing => "nav.store",
+        Suppliers => "nav.store",
+        Customers => "nav.store",
+        Promotions => "nav.store",
+        Reports => "layout.insight",
+        Accounting => "layout.insight",
+        Expenses => "layout.insight",
+        Staff => "layout.insight",
+        Settings => "layout.insight",
+        Product(id) => "nav.store",
+        Sale(id) => "",
+        Shift(id) => "",
+        Order(id) => "nav.store",
+    }
+}
+
+// ---- the shapes a screen is made of ----------------------------------------
+
+/// A figure worth putting at the top of a screen.
+///
+/// `tone` is machine state and only machine state — "" is neutral, and the
+/// others paint the 4 px bar across the top of the card.
+pub struct Stat {
+    pub label: str
+    pub value: str
+    pub meta: str
+    pub tone: str
+}
+
+/// A ranked row with a meter under the name.
+///
+/// `width` is a percentage of the largest in the set, computed where the data
+/// is rather than in the view — the view has no idea what the maximum is and
+/// should not have to hold the whole list to find out.
+pub struct Meter {
+    pub key: str
+    pub rank: str
+    pub name: str
+    pub value: str
+    pub sub: str
+    pub width: int
+}
+
+pub struct Row {
+    pub key: str
+    pub cells: [str]
+    /// "", "ok", "warn", "stop" — machine state, never decoration.
+    pub tone: str
+    pub action: str
+    pub id: str
+}
+
+pub struct Table {
+    pub heading: str
+    pub note: str
+    pub columns: [str]
+    pub rows: [Row]
+}
+
+/// One lane, as a card on Tills.
+pub struct LaneCard {
+    pub id: str
+    pub name: str
+    pub state: str
+    pub tone: str
+    pub initials: str
+    pub operator: str
+    pub since: str
+    pub drawer: str
+    pub sales: str
+    pub held: str
+    pub note: str
+    pub close_label: str
+    pub closeable: bool
+}
+
+/// One of the two role explainers on Staff & access.
+pub struct RoleCard {
+    pub role: str
+    pub opens: str
+    pub body: str
+    pub chips: [str]
+}
+
+/// A button that does something, at the top of a screen or on a card.
+pub struct Action {
+    pub label: str
+    /// What `office.kite` should do — the same vocabulary a form id uses.
+    pub action: str
+    pub id: str
+    /// "filled", "soft", "quiet", "danger".
+    pub tone: str
+}
+
+pub fn action(label: str, what: str, id: str, tone: str) -> Action {
+    return Action{ label: label, action: what, id: id, tone: tone }
+}
+
+/// A pair of label and value, for a detail header.
+pub struct Fact {
+    pub label: str
+    pub value: str
+    pub tone: str
+}
+
+// ---- forms -----------------------------------------------------------------
+
+/// What kind of input a field wants.
+///
+/// Deliberately few. A back office for a corner shop asks for text, a whole
+/// number of minor units, a quantity, a choice from a list, and a yes or no —
+/// and anything that does not fit one of those is a screen rather than a field.
+pub enum FieldKind {
+    Text
+    /// Multi-line, for a note or an address.
+    Lines
+    /// An amount, entered the way a person writes one and parsed as digits.
+    Money
+    /// A whole number that is not money — a lead time, a priority, basis points.
+    Whole
+    /// The one legitimately fractional input.
+    Quantity
+    Choice(options: [str], labels: [str])
+    Toggle
+    Password
+    /// Shown, never edited — context the operator needs while filling the rest.
+    Readonly
+}
+
+pub struct Field {
+    pub name: str
+    pub label: str
+    pub kind: FieldKind
+    pub value: str
+    pub hint: str
+    pub required: bool
+}
+
+pub fn field(name: str, label: str, kind: FieldKind, value: str) -> Field {
+    return Field{ name: name, label: label, kind: kind, value: value, hint: "", required: false }
+}
+
+pub fn required(f: Field) -> Field {
+    return Field{ ..f, required: true }
+}
+
+pub fn hinted(f: Field, hint: str) -> Field {
+    return Field{ ..f, hint: hint }
+}
+
+/// A dialog that writes something.
+///
+/// One shape for every write in the application: `office.kite` matches on `id`
+/// to decide which call to make, and `subject` carries the thing being changed.
+/// Twenty forms are twenty entries in one `submit` function rather than twenty
+/// screens.
+pub struct Form {
+    pub id: str
+    pub title: str
+    pub lede: str
+    pub fields: [Field]
+    pub submit: str
+    pub subject: str
+    /// Shown in red under the title when the server refused.
+    pub trouble: str
+    pub busy: bool
+}
+
+pub fn form(id: str, title: str, submit: str, fields: [Field]) -> Form {
+    return Form{
+        id: id, title: title, lede: "", fields: fields,
+        submit: submit, subject: "", trouble: "", busy: false,
+    }
+}
+
+pub fn about(f: Form, subject: str) -> Form {
+    return Form{ ..f, subject: subject }
+}
+
+pub fn explained(f: Form, lede: str) -> Form {
+    return Form{ ..f, lede: lede }
+}
+
+/// What a screen is made of.
+pub enum Block {
+    Stats(items: [Stat])
+    Meters(heading: str, note: str, rows: [Meter])
+    Grid(table: Table)
+    Lanes(cards: [LaneCard])
+    Roles(cards: [RoleCard])
+    /// A sentence where a screen needs to say something rather than show it.
+    Note(heading: str, body: str)
+    /// A row of buttons — "Add product", "Raise an order".
+    Buttons(items: [Action])
+    /// The header of a drill-down: a title, some facts, and what can be done.
+    Detail(title: str, subtitle: str, facts: [Fact], actions: [Action])
+    /// A receipt, laid out to be printed.
+    Receipt(lines: [str], head: [str], foot: [str])
+}
+
+pub struct App {
+    pub root: dom.Element
+    pub view: html.Mounted
+
+    pub var session: Option<model.Session>
+    pub var screen: Screen
+    /// Which language the chrome is in. The same shape the till uses — see
+    /// `store.App` — so the back office follows the pattern rather than
+    /// inventing a second one.
+    pub var lang: i18n.Lang
+    pub var blocks: [Block]
+
+    /// What the header says about the lanes, from the last Tills read.
+    pub var lanes_open: int
+    pub var lanes_offline: int
+    pub var drawer_expected: str
+
+    /// Counts beside a rail item, keyed by slug. Only a few carry one.
+    pub var badges: { str: str }
+
+    /// The dialog in front of everything, if any. One at a time, on purpose.
+    pub var form: Option<Form>
+
+    /// Lists a form's dropdowns are built from, and whatever a drill-down is
+    /// about. Held as documents rather than parsed into structs: they are only
+    /// ever read back out by name to fill a field, and a struct per dropdown
+    /// would be a dozen types that exist for one line each.
+    pub var ref_categories: [doc.Doc]
+    pub var ref_suppliers: [doc.Doc]
+    pub var ref_products: [doc.Doc]
+    pub var ref_registers: [doc.Doc]
+    /// The expense accounts a running cost may be booked to. Fetched rather
+    /// than hard-coded, because the chart is data and a shop may extend it.
+    pub var ref_expense_accounts: [doc.Doc]
+    pub var ref_settings: doc.Doc
+    pub var subject: doc.Doc
+    pub var subject_lines: [doc.Doc]
+
+    /// What a screen is filtering by, kept so a reload of the screen keeps it.
+    pub var query: str
+
+    /// Which sheet the books are showing, and over what window.
+    ///
+    /// **State rather than a literal.** Every reporting window used to be
+    /// written into the code — thirty days for the books, ninety for expenses
+    /// — so a shopkeeper could not ask what happened last week without a
+    /// developer. One of these two decides what every accounting call asks
+    /// for, and the same window carries across the sheets: switching from a
+    /// profit and loss to a trial balance should not silently change the
+    /// period underneath it.
+    pub var books_view: str
+    pub var books_window: str
+    /// Which account the general ledger is open at, reached by touching a row
+    /// of the trial balance.
+    pub var books_account: str
+
+    pub var trouble: str
+    pub var notice: str
+    pub var busy: bool
+    pub var signing_in: bool
+    /// Whether the rail is showing on a narrow screen.
+    pub var rail_open: bool
+}
+
+pub fn holding(root: dom.Element, view: html.Mounted) -> App {
+    return App{
+        root: root,
+        view: view,
+        session: nil,
+        screen: Screen.Overview,
+        lang: i18n.Lang.En,
+        blocks: [],
+        lanes_open: 0,
+        lanes_offline: 0,
+        drawer_expected: "",
+        badges: {},
+        form: nil,
+        ref_categories: [],
+        ref_suppliers: [],
+        ref_products: [],
+        ref_registers: [],
+        ref_expense_accounts: [],
+        ref_settings: doc.nothing(),
+        subject: doc.nothing(),
+        subject_lines: [],
+        query: "",
+        books_view: "summary",
+        books_window: "30",
+        books_account: "",
+        trouble: "",
+        notice: "",
+        busy: false,
+        signing_in: false,
+        rail_open: false,
+    }
+}
+
+pub fn set_lang(var app: App, l: i18n.Lang) {
+    app.lang = l
+}
+
+pub fn lang_of(app: App) -> i18n.Lang {
+    return app.lang
+}
+
+pub fn token_of(app: App) -> str {
+    let session = app.session
+    if session == nil {
+        return ""
+    }
+    return session.token
+}
+
+pub fn currency_of(app: App) -> money.Currency {
+    let session = app.session
+    if session == nil {
+        return money.kyat()
+    }
+    return session.currency
+}
+
+pub fn shop_of(app: App) -> str {
+    let session = app.session
+    if session == nil {
+        return ""
+    }
+    return session.shop_name
+}
+
+pub fn who_of(app: App) -> str {
+    let session = app.session
+    if session == nil {
+        return ""
+    }
+    return session.name
+}
+
+/// Two letters standing for a name, for the avatar chips.
+pub fn initials_of(name: str) -> str {
+    let parts = words(name)
+    if parts.len() == 0 {
+        return "—"
+    }
+    if parts.len() == 1 {
+        return upper(parts[0].slice(0, min(2, parts[0].len())))
+    }
+    return upper(parts[0].slice(0, 1) + parts[1].slice(0, 1))
+}
+
+/// A meter width, as a percentage of the largest value in the set.
+///
+/// Relative to the biggest rather than to a total, because the question a
+/// ranked list answers is "how does this compare with the best", and shares of
+/// a total are unreadable once there are more than a handful of rows.
+pub fn width_of(value: int, largest: int) -> int {
+    if largest <= 0 {
+        return 0
+    }
+    return clamp((value * 100) / largest, 2, 100)
+}
+
+pub fn badge_of(app: App, s: Screen) -> str {
+    return or_else(app.badges[slug_of(s)], "")
+}
+
+// ---- the writes ------------------------------------------------------------
+
+pub fn signed_in(var app: App, session: model.Session) {
+    app.session = session
+    app.signing_in = false
+    app.trouble = ""
+}
+
+pub fn signed_out(var app: App) {
+    app.session = nil
+    app.blocks = []
+    app.badges = {}
+}
+
+pub fn go(var app: App, screen: Screen) {
+    app.screen = screen
+    app.blocks = []
+    app.trouble = ""
+    app.rail_open = false
+}
+
+pub fn took(var app: App, blocks: [Block]) {
+    app.blocks = blocks
+    app.busy = false
+    app.trouble = ""
+}
+
+pub fn lanes_are(var app: App, open: int, offline: int, expected: str) {
+    app.lanes_open = open
+    app.lanes_offline = offline
+    app.drawer_expected = expected
+}
+
+pub fn badge(var app: App, slug: str, value: str) {
+    var next = app.badges
+    next[slug] = value
+    app.badges = next
+}
+
+pub fn went_wrong(var app: App, trouble: str) {
+    app.trouble = trouble
+    app.busy = false
+}
+
+pub fn say(var app: App, notice: str) {
+    app.notice = notice
+}
+
+pub fn working(var app: App, busy: bool) {
+    app.busy = busy
+}
+
+pub fn signing_in(var app: App, on: bool) {
+    app.signing_in = on
+}
+
+pub fn toggle_rail(var app: App) {
+    app.rail_open = !app.rail_open
+}
+
+pub fn open_form(var app: App, f: Form) {
+    app.form = f
+    app.trouble = ""
+}
+
+pub fn close_form(var app: App) {
+    app.form = nil
+}
+
+/// A form that was refused, with the reason on it.
+pub fn form_refused(var app: App, why: str) {
+    let open = app.form
+    if open == nil {
+        app.trouble = why
+        return
+    }
+    app.form = Form{ ..open, trouble: why, busy: false }
+}
+
+pub fn form_working(var app: App) {
+    let open = app.form
+    if open == nil {
+        return
+    }
+    app.form = Form{ ..open, trouble: "", busy: true }
+}
+
+pub fn set_query(var app: App, q: str) {
+    app.query = q
+}
+
+pub fn took_refs(var app: App, categories: [doc.Doc], suppliers: [doc.Doc],
+    products: [doc.Doc], registers: [doc.Doc]) {
+    app.ref_categories = categories
+    app.ref_suppliers = suppliers
+    app.ref_products = products
+    app.ref_registers = registers
+}
+
+pub fn took_expense_accounts(var app: App, accounts: [doc.Doc]) {
+    app.ref_expense_accounts = accounts
+}
+
+pub fn took_settings(var app: App, settings: doc.Doc) {
+    app.ref_settings = settings
+}
+
+/// What a drill-down is about, kept so a form opened from it can read it.
+pub fn took_subject(var app: App, subject: doc.Doc, lines: [doc.Doc]) {
+    app.subject = subject
+    app.subject_lines = lines
+}
+
+// ---- the books -------------------------------------------------------------
+
+/// How many seconds a named window covers, and what to call it.
+///
+/// `"month"` is the calendar month to date rather than thirty days — an
+/// accountant closes months, not rolling windows, so "this month" has to mean
+/// the one that will be closed. `"all"` starts at the epoch, which is before
+/// any shop in this system opened.
+pub fn window_seconds(name: str, now: int) -> [int] {
+    if name == "today" {
+        return [now - (now % 86400), now]
+    }
+    if name == "7" {
+        return [now - 7 * 86400, now]
+    }
+    if name == "month" {
+        return [now - 30 * 86400, now]
+    }
+    if name == "all" {
+        return [0, now]
+    }
+    return [now - 30 * 86400, now]
+}
+
+pub fn window_label(name: str) -> str {
+    if name == "today" {
+        return "today"
+    }
+    if name == "7" {
+        return "seven days"
+    }
+    if name == "month" {
+        return "this month"
+    }
+    if name == "all" {
+        return "all time"
+    }
+    return "thirty days"
+}
+
+pub fn show_books(var app: App, view: str) {
+    app.books_view = view
+}
+
+pub fn set_books_window(var app: App, name: str) {
+    app.books_window = name
+}
+
+pub fn open_account(var app: App, code: str) {
+    app.books_account = code
+    app.books_view = "ledger"
+}

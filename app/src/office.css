@@ -1,0 +1,766 @@
+/* The back office.
+ *
+ * Tokens and shapes taken from the design document *Backoffice · Manager*:
+ * a page in `oklch(0.94 …)` with cards one step lighter at `0.96` and **no
+ * borders anywhere**, 12 px radii, pill buttons, a dark rail, and a 4 px field
+ * of colour across the top of a stat card.
+ *
+ * Light where the till is dark, and that is not decoration: they are two
+ * applications for two roles, opened on different devices in different light,
+ * and a manager reading a table of figures at a desk wants the opposite of a
+ * cashier reading a total across a counter.
+ *
+ * Colour still means what it means at the till — green is open or valid, amber
+ * and magenta are attention, red is closed or wrong — because a shop should not
+ * have to learn two vocabularies.
+ */
+
+:root {
+  --page: oklch(0.94 0.003 277);
+  --surface: oklch(0.96 0.003 277);
+  --sunken: oklch(0.90 0.004 277);
+  --rule: oklch(0.81 0.012 277);
+  --ink: oklch(0.21 0.005 277);
+  --ink-dim: oklch(0.37 0.016 277);
+
+  --accent: oklch(0.46 0.19 277);
+  --accent-soft: oklch(0.90 0.032 277);
+  --accent-on-soft: oklch(0.20 0.045 277);
+
+  --rail-bg: #141417;
+  --rail-ink: #c9c9d1;
+  --rail-dim: #7b7b88;
+
+  --ok: oklch(0.52 0.125 158);
+  --ok-bg: oklch(0.91 0.06 158);
+  --ok-ink: oklch(0.22 0.07 158);
+  --warn: oklch(0.46 0.105 337);
+  --warn-bg: oklch(0.90 0.04 337);
+  --warn-ink: oklch(0.20 0.06 337);
+  --stop: oklch(0.48 0.185 27);
+  --stop-bg: oklch(0.90 0.05 27);
+  --stop-ink: oklch(0.22 0.10 27);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--page);
+  color: var(--ink);
+  font-family: Roboto, ui-sans-serif, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  /* This is opened on a tablet now. The grey flash iOS paints over a tapped
+   * table row arrives late and stays too long; the `:active` rules below are
+   * the feedback, and they are immediate. */
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Burmese needs a taller line box than Roboto: 1.6–1.7 against 1.2–1.3. The
+ * till has had this since it shipped; the back office is built on 14px/20 and
+ * 12px/16 — ratios of 1.43 and 1.33, both under the floor — and loads no
+ * Burmese face at all, so every မြန်မာ string fell to a system fallback. */
+html[lang="my"] body { font-family: "Noto Sans Myanmar", Roboto, sans-serif; }
+html[lang="my"] .rail-item,
+html[lang="my"] .cell,
+html[lang="my"] .table th,
+html[lang="my"] .stat-label,
+html[lang="my"] .field-label,
+html[lang="my"] .card-body,
+/* These two carry a `font` shorthand with a *pixel* line-height — 22px/28px and
+ * 14px/20px, ratios of 1.27 and 1.43 — so the rule above cannot win by
+ * specificity or by order: a length always beats an inherited ratio. Named
+ * explicitly. Without them "ဝယ်ယူမှု" in the page title loses its ူ and ှ, and
+ * a wrapped Burmese card note puts line one's marks through line two. */
+html[lang="my"] .page-title,
+html[lang="my"] .card-note { line-height: 1.65; }
+/* At a 200 px portrait rail the Burmese for "Staff & access", "Purchasing" and
+ * "Accounting" is longer than the pill. It wraps and the row grows, rather than
+ * being clipped by a fixed height. */
+html[lang="my"] .rail-label { white-space: normal; }
+html[lang="my"] .rail-item { height: auto; min-height: 56px; padding-top: 6px; padding-bottom: 6px; }
+
+/* A Burmese string inside an English page. The language switch's own မြန်မာ
+ * button is the permanent example of one, and there is no document `lang` to
+ * key off at that moment — the page is in English. Without this the label
+ * falls to Roboto over a 1.3 line box and the stacked diacritics collide into
+ * an unreadable smudge, which is what the switch looked like. */
+[lang="my"] {
+  font-family: "Noto Sans Myanmar", Roboto, sans-serif;
+  line-height: 1.65;
+}
+
+a { color: var(--accent); text-decoration: none; }
+button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
+input { font: inherit; }
+.gap { flex: 1; }
+
+::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--rule);
+  border-radius: 9999px;
+  border: 4px solid transparent;
+  background-clip: content-box;
+}
+
+/* `dvh` after `vh` — see the same pair in style.css. A tablet browser toolbar
+ * that collapses on scroll makes `100vh` taller than the visible area. */
+.office { display: flex; height: 100vh; height: 100dvh; min-height: 0; }
+
+/* ---- the rail ------------------------------------------------------------ */
+
+/* 240 px, which is the design's width at desktop *and* at tablet landscape;
+ * 200 px at tablet portrait, in the block further down. Those two numbers plus
+ * the header status chip are the whole of the back office's responsiveness —
+ * there is no collapsed state at any size, and the rail keeps its full text
+ * labels on both tablets.
+ *
+ * The rail's own horizontal padding is the nav container's 12 px; the brand
+ * block and the section headings add 4 px to reach the design's 16 px inset,
+ * and a rail item's 16 px is its own, inside the pill. */
+.rail {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  width: 240px;
+  padding: 0 12px 16px;
+  background: var(--rail-bg);
+  color: var(--rail-ink);
+  overflow-y: auto;
+}
+.brand { display: flex; align-items: center; gap: 12px; min-height: 64px; padding: 16px 4px 12px; }
+.brand-text { display: flex; flex-direction: column; min-width: 0; }
+.brand-name {
+  font: 500 14px/20px Roboto, sans-serif;
+  color: #fff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.brand-sub {
+  font: 500 10px/14px ui-monospace, monospace;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--rail-dim);
+}
+.mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  font: 500 13px/1 Roboto, sans-serif;
+}
+.mark.small { width: 32px; height: 32px; border-radius: 9999px; font-size: 12px; }
+/* Scoped to the rail: the same class dresses the operator avatar on a lane
+ * card, which the design leaves alone. */
+.rail .mark { width: 40px; height: 40px; border-radius: 12px; }
+.rail .mark.small { width: 40px; height: 40px; border-radius: 9999px; }
+
+.rail-head {
+  padding: 24px 4px 8px;
+  font: 500 10px/14px ui-monospace, monospace;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--rail-dim);
+}
+.rail-group { display: flex; flex-direction: column; gap: 4px; }
+/* 56 px = 9.5 mm, which is the floor for anything interactive on a counter
+ * tablet. At the 40 px this rule used to set, the whole navigation of an app a
+ * manager now opens on a tablet sat under that floor. */
+.rail-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 56px;
+  padding: 0 16px;
+  border-radius: 9999px;
+  font: 500 14px/20px Roboto, sans-serif;
+  color: var(--rail-ink);
+}
+/* Gated: on a touch screen the hover background sticks to the last-tapped item
+ * until something else is tapped, which reads as a wrong selection. `:active`
+ * is the feedback that belongs on a finger. */
+@media (hover: hover) and (pointer: fine) {
+  .rail-item:hover { background: rgba(255, 255, 255, 0.06); }
+}
+.rail-item:active { background: rgba(255, 255, 255, 0.06); }
+.rail-item.on { background: #f0f0f5; color: #141417; font-weight: 500; }
+.rail-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Icons as background images rather than inline `<svg>`: `std/html` builds
+ * elements with `createElement`, which puts an `<svg>` in the HTML namespace
+ * where it does not render. A data URI in CSS is the one place this markup can
+ * carry a drawing and be certain of it. */
+.rail-item::before {
+  content: "";
+  flex: none;
+  width: 24px;
+  height: 24px;
+  background: currentColor;
+  -webkit-mask: var(--icon) center / contain no-repeat;
+  mask: var(--icon) center / contain no-repeat;
+  opacity: 0.9;
+}
+.i-overview   { --icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M9.5 21v-6h5v6"/></svg>'); }
+.i-tills      { --icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="12.5" rx="2"/><path d="M8.5 20.5h7M12 16.5v4"/></svg>'); }
+.i-sales      { --icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3v18l2.5-1.5L10 21l2-1.5L14 21l2.5-1.5L19 21V3z"/><path d="M8.5 8h7M8.5 12h7M8.5 16h4"/></svg>'); }
+.i-shifts     { --icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H18a2 2 0 0 1 2 2v1"/><path d="M3 7.5V17a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3"/><path d="M21 10.5h-4a2 2 0 0 0 0 4h4z"/></svg>'); }
+.i-products   { --icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5V4a1 1 0 0 1 1-1h7.5a1 1 0 0 1 .7.3l8.5 8.5a1 1 0 0 1 0 1.4l-7.5 7.5a1 1 0 0 1-1.4 0L3.3 12.2a1 1 0 0 1-.3-.7z"/><circle cx="7.5" cy="7.5" r="1.4"/></svg>'); }
+.i-inventory  { --icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8.5 4.5v9L12 21l-8.5-4.5v-9z"/><path d="m3.5 7.5 8.5 4.5 8.5-4.5"/><path d="M12 12v9"/></svg>'); }
+.i-movements  { --icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h13l-3-3M21 16H8l3 3"/></svg>'); }
+.i-purchasing { --icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5h11v9H3z"/><path d="M14 10h4l3 3v2.5h-7z"/><circle cx="7" cy="18" r="1.8"/><circle cx="17.5" cy="18" r="1.8"/></svg>'); }
+.i-suppliers  { --icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21V8l9-5 9 5v13"/><path d="M9 21v-6h6v6"/><path d="M3 12h18"/></svg>'); }
+.i-customers  { --icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16 5.4a3.2 3.2 0 0 1 0 5.2"/><path d="M17.5 14.6A5.5 5.5 0 0 1 20.5 20"/></svg>'); }
+.i-promotions { --icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 16 16 8"/><circle cx="8.5" cy="8.5" r="1.6"/><circle cx="15.5" cy="15.5" r="1.6"/><path d="M4 8V4h4M20 16v4h-4"/><path d="M4 12v8h8"/><path d="M20 12V4h-8"/></svg>'); }
+.i-reports    { --icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>'); }
+.i-accounting { --icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v14H6.5A2.5 2.5 0 0 0 4 19.5z"/><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H19v4H6.5A2.5 2.5 0 0 1 4 19.5z"/><path d="M8 7.5h7M8 11h5"/></svg>'); }
+.i-expenses   { --icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/><path d="M6 12h.01M18 12h.01"/></svg>'); }
+.i-staff      { --icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M18 8v6M15 11h6"/></svg>'); }
+.i-settings   { --icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8 2 2 0 1 1-2.8 2.8 1.6 1.6 0 0 0-2.8 1.1 2 2 0 1 1-4 0 1.6 1.6 0 0 0-2.8-1.1 2 2 0 1 1-2.8-2.8A1.6 1.6 0 0 0 3.4 13a2 2 0 1 1 0-4 1.6 1.6 0 0 0 1.1-2.8 2 2 0 1 1 2.8-2.8A1.6 1.6 0 0 0 10.1 3.4a2 2 0 1 1 4 0A1.6 1.6 0 0 0 16.9 4.5a2 2 0 1 1 2.8 2.8A1.6 1.6 0 0 0 20.6 11a2 2 0 1 1 0 4z"/></svg>'); }
+
+.badge {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.12);
+  font: 500 11px/16px Roboto, sans-serif;
+  text-align: center;
+}
+.rail-item.on .badge { background: var(--accent-soft); color: var(--accent-on-soft); }
+
+.rail-foot { margin-top: auto; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.08); }
+/* `min-height`, not `height`. The design says 56 px and a 40 px avatar with
+ * 12 px of padding, which is 64 — the two numbers do not agree, and a fixed 56
+ * would clip the avatar. Growing is the safe reading of the pair. */
+.rail-me {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  padding: 12px;
+  border-radius: 12px;
+  text-align: left;
+}
+@media (hover: hover) and (pointer: fine) {
+  .rail-me:hover { background: rgba(255, 255, 255, 0.06); }
+}
+.rail-me:active { background: rgba(255, 255, 255, 0.06); }
+
+/* ---- the page ------------------------------------------------------------ */
+
+.page { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+
+.page-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+  height: 64px;
+  padding: 0 16px 0 24px;
+}
+.page-title { margin: 0; font: 400 22px/28px Roboto, sans-serif; }
+/* No `flex-wrap`. A row that wraps inside a fixed 64 px header does not get
+ * taller — it gets clipped, and the second line is the one that disappears. */
+.head-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.lane-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: var(--sunken);
+  color: var(--ink-dim);
+  font: 400 12px/1 Roboto, sans-serif;
+  /* "N lanes open · <amount> expected" is long. Truncating is what keeps it
+   * from pushing the page title off its own left edge. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lane-pill.ok { background: var(--ok-bg); color: var(--ok-ink); }
+.lane-pill.ok::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+.lane-pill.warn { background: var(--warn-bg); color: var(--warn-ink); }
+
+/* 48 × 48 with a 22 px glyph — the header's controls are sized for a finger
+ * now, not a pointer. Still shown only where the rail is a drawer: above that
+ * the rail is permanent and there is nothing for this button to open. */
+.burger { display: none; width: 48px; height: 48px; border-radius: 9999px; }
+.burger::before {
+  content: "";
+  display: block;
+  width: 22px;
+  height: 22px;
+  margin: 0 auto;
+  background: currentColor;
+  -webkit-mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>') center / contain no-repeat;
+  mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>') center / contain no-repeat;
+}
+
+/* The language switch, the back office's half of the till's. Same 44 px height
+ * — it is a shared token — but the long labels, "English" / "မြန်မာ", which is
+ * the design's own asymmetry and not ours. Two adjacent pills, no container. */
+.lang { display: flex; align-items: center; flex: none; }
+.lang button {
+  min-width: 56px;
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 9999px;
+  font: 500 12px/1 Roboto, sans-serif;
+  white-space: nowrap;
+}
+.lang-on { background: var(--accent-soft); color: var(--accent-on-soft); }
+.lang-off { background: transparent; color: var(--ink-dim); }
+/* The switch's own မြန်မာ button is a Burmese string inside an English page:
+ * there is no document `lang` to key off at that moment. The button carries
+ * its own, so key off that — and scope it past `.lang button`'s `font`
+ * shorthand, which resets both family and line box. */
+.lang button[lang="my"] {
+  font-family: "Noto Sans Myanmar", Roboto, sans-serif;
+  line-height: 1.65;
+}
+
+.scroll { flex: 1; min-height: 0; overflow-y: auto; }
+/* 24 px each side. The design derives its tablet column widths from exactly
+ * this — 1280 − 240 rail − 24 − 24 = 992 landscape, 800 − 200 − 24 − 24 = 552
+ * portrait — and every `auto-fit` column count below depends on the answer. The
+ * 1536 px cap never binds at either tablet size. */
+.inner {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: 100%;
+  max-width: 1536px;
+  margin: 0 auto;
+  padding: 8px 24px 32px;
+}
+/* Two card blocks side by side rather than one very wide card per row. Only
+ * takes effect once `block_of` emits consecutive cards into a container of this
+ * class — `.inner` is a flex column, so today every card is full width. */
+.card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(352px, 1fr)); gap: 16px; }
+
+.greeting { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; padding-top: 8px; }
+.greet-title { margin: 0; font: 400 24px/32px Roboto, sans-serif; }
+.greet-sub { margin: 4px 0 0; font: 400 14px/20px Roboto, sans-serif; color: var(--ink-dim); }
+.greet-actions { display: flex; align-items: center; gap: 8px; }
+
+/* ---- pills --------------------------------------------------------------- */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 24px;
+  border-radius: 9999px;
+  font: 500 14px/20px Roboto, sans-serif;
+  white-space: nowrap;
+}
+.pill.filled { background: var(--accent); color: #fff; }
+.pill.soft { background: var(--accent-soft); color: var(--accent-on-soft); }
+.pill.quiet { background: var(--sunken); color: var(--ink-dim); }
+.pill.danger { background: var(--stop-bg); color: var(--stop-ink); }
+.pill.wide { width: 100%; height: 48px; }
+
+/* ---- cards --------------------------------------------------------------- */
+
+/* Filled surfaces, no borders. The page is one step darker than the card, which
+ * is what separates them. */
+.card { background: var(--surface); border-radius: 12px; overflow: hidden; }
+.card-head { display: flex; align-items: center; gap: 12px; padding: 16px 16px 12px; }
+.card-title { margin: 0; font: 500 16px/24px Roboto, sans-serif; }
+.card-note { font: 400 14px/20px Roboto, sans-serif; color: var(--ink-dim); }
+.card-body { margin: 0; padding: 0 16px 16px; font: 400 14px/22px Roboto, sans-serif; color: var(--ink-dim); }
+.empty-note { margin: 0; padding: 24px 4px; color: var(--ink-dim); text-align: center; }
+
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(224px, 1fr)); gap: 16px; }
+.stat {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px;
+  background: var(--surface);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.stat-tone { position: absolute; inset: 0 0 auto 0; height: 4px; background: var(--rule); }
+.stat-tone.ok { background: var(--ok); }
+.stat-tone.warn { background: var(--warn); }
+.stat-tone.stop { background: var(--stop); }
+.stat-tone.info { background: var(--accent); }
+.stat-label {
+  font: 500 12px/16px Roboto, sans-serif;
+  letter-spacing: 0.031em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.stat-value { font: 400 28px/36px Roboto, sans-serif; letter-spacing: -0.01em; }
+.stat-meta { font: 400 12px/16px Roboto, sans-serif; color: var(--ink-dim); }
+
+/* ---- meters -------------------------------------------------------------- */
+
+.meters { padding: 0 16px 16px; }
+.meter {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.meter:last-child { border-bottom: 0; }
+.rank {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9999px;
+  background: var(--sunken);
+  color: var(--ink-dim);
+  font: 500 12px/16px Roboto, sans-serif;
+}
+.meter-body { min-width: 0; }
+.meter-name {
+  display: block;
+  font: 400 16px/24px Roboto, sans-serif;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.track { margin-top: 4px; height: 4px; border-radius: 9999px; background: var(--sunken); overflow: hidden; }
+.fill { height: 100%; border-radius: inherit; background: var(--accent); }
+.meter-value { text-align: right; font: 500 16px/24px Roboto, sans-serif; }
+.meter-value small { display: block; font: 400 12px/16px Roboto, sans-serif; color: var(--ink-dim); }
+
+/* ---- tables -------------------------------------------------------------- */
+
+.table-wrap { overflow-x: auto; }
+.table { width: 100%; border-collapse: collapse; font: 400 14px/20px Roboto, sans-serif; }
+/* A heading follows its column: `numeric_columns` puts `.cell.num` on the `<th>`
+ * as well as the `<td>`, so a heading never sits left over a column of
+ * right-aligned amounts. */
+.table th {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--rule);
+  font: 500 12px/16px Roboto, sans-serif;
+  letter-spacing: 0.031em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  text-align: left;
+  white-space: nowrap;
+}
+.cell { padding: 12px 16px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+.cell.first { font-weight: 500; white-space: normal; }
+.cell.num { text-align: right; }
+.cell.empty { padding: 32px 16px; color: var(--ink-dim); text-align: center; }
+.table tbody tr:last-child .cell { border-bottom: 0; }
+
+.trow.ok .cell.first { box-shadow: inset 3px 0 0 var(--ok); }
+.trow.warn { background: var(--warn-bg); }
+.trow.warn .cell.first { box-shadow: inset 3px 0 0 var(--warn); }
+.trow.stop { background: var(--stop-bg); }
+.trow.stop .cell.first { box-shadow: inset 3px 0 0 var(--stop); }
+
+/* ---- lane cards ---------------------------------------------------------- */
+
+/* 352 px, not 320: at the 992 px tablet-landscape content width 320 gives three
+ * columns where the design draws two, and the card is designed for the wider
+ * measure. At the 552 px portrait width both give one. */
+.lane-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(352px, 1fr)); gap: 16px; }
+.lane-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  background: var(--surface);
+  border-radius: 12px;
+  overflow: hidden;
+}
+/* The state of a lane, as a bar down its leading edge — the same idea as the
+ * stat card's tone strip, turned ninety degrees. */
+.lane-card::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--rule); }
+.lane-card.ok::before { background: var(--ok); }
+.lane-card.warn::before { background: var(--warn); }
+.lane-card.stop::before { background: var(--stop); }
+
+.lane-top { display: flex; align-items: center; gap: 12px; }
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 12px;
+  border-radius: 9999px;
+  background: var(--sunken);
+  color: var(--ink-dim);
+  font: 500 12px/1 Roboto, sans-serif;
+  text-transform: capitalize;
+}
+.state::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.state.ok { background: var(--ok-bg); color: var(--ok-ink); }
+.state.warn { background: var(--warn-bg); color: var(--warn-ink); }
+.state.stop { background: var(--stop-bg); color: var(--stop-ink); }
+
+.lane-who { display: flex; align-items: center; gap: 12px; }
+.lane-who .brand-name { color: var(--ink); font-size: 14px; }
+.lane-who .brand-sub {
+  font: 400 12px/16px Roboto, sans-serif;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-dim);
+}
+.lane-who .mark { background: var(--accent-soft); color: var(--accent-on-soft); }
+
+.lane-figures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.lane-figures .k {
+  display: block;
+  font: 500 11px/16px Roboto, sans-serif;
+  letter-spacing: 0.031em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.lane-figures .v { font: 400 20px/28px Roboto, sans-serif; }
+.lane-note { margin: 0; font: 400 13px/20px Roboto, sans-serif; color: var(--ink-dim); }
+.lane-actions { display: flex; align-items: center; gap: 8px; }
+.lane-actions .pill { height: 36px; padding: 0 16px; font-size: 13px; }
+
+/* ---- role cards ---------------------------------------------------------- */
+
+.role-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(352px, 1fr)); gap: 16px; }
+.role-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 20px;
+  background: var(--surface);
+  border-radius: 12px;
+}
+.role-name {
+  font: 500 11px/16px ui-monospace, monospace;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.role-opens { font: 500 18px/26px Roboto, sans-serif; }
+.role-body { margin: 0; font: 400 14px/22px Roboto, sans-serif; color: var(--ink-dim); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.chip {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 9999px;
+  background: var(--sunken);
+  color: var(--ink-dim);
+  font: 400 12px/28px Roboto, sans-serif;
+}
+
+.trouble-bar {
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--stop-bg);
+  color: var(--stop-ink);
+  font: 400 14px/20px Roboto, sans-serif;
+}
+
+/* ---- signing in ---------------------------------------------------------- */
+
+.office-signin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  height: 100dvh;
+  padding: 24px;
+  background: var(--rail-bg);
+}
+.signin-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(400px, 100%);
+  padding: 28px;
+  border-radius: 16px;
+  background: var(--surface);
+}
+.signin-card h1 { margin: 4px 0 0; font: 400 24px/32px Roboto, sans-serif; }
+.signin-card .lede { margin: 0 0 6px; font: 400 14px/20px Roboto, sans-serif; color: var(--ink-dim); }
+.field {
+  height: 48px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--sunken);
+  color: var(--ink);
+  outline: 2px solid transparent;
+}
+.field:focus { outline-color: var(--accent); }
+.trouble { min-height: 18px; margin: 0; font: 400 13px/18px Roboto, sans-serif; color: var(--stop-ink); }
+
+/* ---- buttons, details, receipts ------------------------------------------ */
+
+.buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.detail { padding: 20px; }
+.detail-top { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.detail-title { margin: 0; font: 400 24px/32px Roboto, sans-serif; }
+.detail-sub { margin: 4px 0 0; font: 400 14px/20px Roboto, sans-serif; color: var(--ink-dim); }
+.detail-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.detail-actions .pill { height: 36px; padding: 0 16px; font-size: 13px; }
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+.fact .k {
+  display: block;
+  font: 500 11px/16px Roboto, sans-serif;
+  letter-spacing: 0.031em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.fact .v { font: 400 20px/28px Roboto, sans-serif; }
+.fact .v.ok { color: var(--ok-ink); }
+.fact .v.warn { color: var(--warn-ink); }
+.fact .v.stop { color: var(--stop-ink); }
+
+/* A receipt is monospaced and narrow because that is the shape of the paper it
+ * comes out on. What is on screen is what prints. */
+.receipt-card { display: flex; justify-content: center; padding: 24px 16px; }
+.receipt {
+  width: 320px;
+  padding: 20px 16px;
+  background: #fff;
+  font: 400 12px/1.6 ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: pre-wrap;
+}
+.r-head { text-align: center; }
+.r-rule { margin: 10px 0; border-top: 1px dashed #999; }
+.r-foot { text-align: right; }
+.r-foot:last-child { text-align: center; }
+
+/* ---- forms --------------------------------------------------------------- */
+
+.form-panel {
+  width: min(560px, 100%);
+  max-height: 92vh;
+  max-height: 92dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 24px;
+  border-radius: 16px;
+  background: var(--surface);
+}
+.form-title { margin: 0 0 4px; font: 400 22px/30px Roboto, sans-serif; }
+.form-lede { margin: 0 0 16px; font: 400 13px/20px Roboto, sans-serif; color: var(--ink-dim); }
+.fields { display: flex; flex-direction: column; gap: 14px; margin-top: 16px; }
+.field-row { display: flex; flex-direction: column; gap: 6px; }
+.field-label {
+  font: 500 12px/16px Roboto, sans-serif;
+  letter-spacing: 0.031em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.field-hint { font: 400 12px/17px Roboto, sans-serif; color: var(--ink-dim); }
+.field.lines { height: auto; padding: 12px 16px; resize: vertical; }
+.field.readonly {
+  display: flex;
+  align-items: center;
+  background: transparent;
+  color: var(--ink-dim);
+  padding-left: 0;
+}
+select.field { appearance: none; padding-right: 40px; }
+.toggle { display: flex; align-items: center; gap: 10px; font: 400 14px/20px Roboto, sans-serif; }
+.toggle input { width: 18px; height: 18px; accent-color: var(--accent); }
+.form-actions { display: flex; gap: 8px; margin-top: 20px; }
+.form-actions .pill { flex: 1; height: 48px; }
+
+.shade {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(20, 20, 23, 0.55);
+  overscroll-behavior: contain;
+}
+/* The page behind a dialog does not move. The till gets this from
+ * `html, body { overflow: hidden }`; here the scroller is `.scroll`, and on a
+ * touch screen a drag anywhere over the shade otherwise scrolls the page under
+ * it. */
+body:has(.shade) { overflow: hidden; }
+body:has(.shade) .scroll { overflow: hidden; }
+
+/* Rows that do something say so — and on a tablet that cannot be hover, because
+ * `:hover` is the *only* signal several of these tables give that a row is
+ * tappable at all. Several card notes read "touch a row to edit". */
+.trow[data-action] { cursor: pointer; }
+@media (hover: hover) and (pointer: fine) {
+  .trow[data-action]:hover { background: var(--sunken); }
+}
+.trow[data-action]:active { background: var(--sunken); }
+
+/* ---- printing ------------------------------------------------------------ */
+/*
+ * The print button is the browser's own. Everything that is not the receipt is
+ * dropped, so what comes out of the printer is the paper and nothing else — no
+ * rail, no navigation, no card the reader was not looking at.
+ */
+@media print {
+  .rail, .page-head, .buttons, .detail, .card, .trouble-bar, .shade { display: none !important; }
+  .receipt-card { display: block; padding: 0; }
+  .receipt { width: auto; padding: 0; }
+  html, body, .office, .page, .scroll, .inner { display: block; height: auto; background: #fff; }
+  .inner { padding: 0; }
+}
+
+/* ---- tablet portrait ----------------------------------------------------- */
+
+/* The only thing the back office changes for a tablet, and it changes exactly
+ * two things: the rail loses 40 px, and the header status chip goes. The rail
+ * stays permanent and keeps its full text labels — there is no icon rail and no
+ * drawer at this size. 800 − 200 = 600, less 24 px of padding each side, is the
+ * 552 px content column the design's column counts are derived from. */
+@media (orientation: portrait) and (min-width: 600px) {
+  .rail { width: 200px; }
+  .head-right .lane-pill { display: none; }
+}
+
+/* ---- narrow -------------------------------------------------------------- */
+
+/* Phones only. This used to fire at 900 px, which is every portrait tablet a
+ * shop owns — 768, 800, 810, 834 — and hid a navigation the design keeps
+ * permanent behind a burger with no scrim and no tap-outside-to-close. */
+@media (max-width: 599px) {
+  .burger { display: block; }
+  .page-head { padding: 0 16px 0 8px; }
+  /* The rail slides over rather than reflowing into a strip: a fourteen-item
+   * navigation laid out horizontally is a scrolling bar nobody can find
+   * anything in. */
+  .rail {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 20;
+    transform: translateX(-100%);
+    transition: transform 160ms ease;
+  }
+  .rail.open { transform: none; box-shadow: 0 0 40px rgba(0, 0, 0, 0.4); }
+  .inner { padding: 8px 16px 40px; }
+  .lane-grid, .role-grid { grid-template-columns: 1fr; }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "Kite POS — Back office",
+  "short_name": "Back office",
+  "description": "Stock, buying, books, staff, and the lanes.",
+  "start_url": "/office.html",
+  "scope": "/office.html",
+  "display": "standalone",
+  "background_color": "#eff0f4",
+  "theme_color": "#141417",
+  "icons": [
+    { "src": "/icon-office-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-office-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-office-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

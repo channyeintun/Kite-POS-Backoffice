@@ -1,0 +1,959 @@
+//! The till: what to mount, what to listen to, and what a touch means.
+//!
+//! This is the wiring. It mounts a description, attaches three listeners, and
+//! turns each event into a call on somebody else — `till.kite` says what the
+//! screen looks like, `api.kite` talks to the Worker, and `store.kite` holds
+//! the value both of them are about.
+//!
+//! **Every closure in this program is created here**, and that is a language
+//! rule showing through rather than a filing decision: a closure may not
+//! capture a `var`, so the handlers are made where `app` is a `let` and each
+//! calls an ordinary function that takes it as `var`.
+//!
+//! ## Work is marked as started on the line that starts it
+//!
+//! Calling an `async fn` in Kite does not run its body — it queues a state
+//! machine the scheduler polls on a later turn. So a guard written at the top
+//! of an async body has not run yet when the next event arrives, and a cashier
+//! double-tapping Pay would get two of everything. Every handler below is an
+//! ordinary function that writes the guard and repaints *before* the `async`
+//! one behind it is called.
+
+use std/dom
+use std/html
+use api
+use browser
+use doc
+use i18n
+use model
+use money
+use store
+use till
+
+// ---- drawing ---------------------------------------------------------------
+
+fn repaint(app: store.App) {
+    // The stylesheet keys Burmese's taller line box off the document's `lang`,
+    // so this has to be written before the description that depends on it.
+    browser.set_document_lang(i18n.tag_of(app.lang))
+    let err = html.update(app.view, till.page(app))
+    if err != nil {
+        io.error("till: could not draw: \(err.message())")
+        return
+    }
+    // The scan field takes focus back the moment anything else finishes,
+    // because a barcode scanner is a fast keyboard and whatever it types has to
+    // land in the box. This is the line that keeps that promise after a dialog
+    // closes, a tile is tapped, or the basket is redrawn.
+    if app.session != nil && app.mode == store.Mode.Sale && app.overlay == store.Overlay.None {
+        browser.focus("#scan")
+    }
+}
+
+fn field_value(selector: str) -> str {
+    let field = dom.find(selector)
+    if field == nil {
+        return ""
+    }
+    return dom.value(field).trim()
+}
+
+// ---- signing in ------------------------------------------------------------
+
+fn press_pin(app: store.App, key: str) {
+    store.press_pin(app, key)
+    // Four digits is the common case, and submitting on the fourth saves a tap
+    // at the busiest moment of the day. A longer PIN uses the → key.
+    if app.pin.len() == 4 {
+        submit_pin(app)
+        return
+    }
+    repaint(app)
+}
+
+fn submit_pin(app: store.App) {
+    if app.signing_in {
+        return
+    }
+    if app.pin.len() < 4 {
+        return
+    }
+    store.signing_in(app, true)
+    repaint(app)
+    do_sign_in(app, app.pin)
+}
+
+async fn do_sign_in(app: store.App, pin: str) {
+    let lane = or_else(browser.kept("kite-pos.register"), "reg_1")
+    let (session, err) = await api.sign_in_with_pin(pin, lane)
+    if err != nil {
+        store.signing_in(app, false)
+        store.went_wrong(app, err.message())
+        store.press_pin(app, "clear")
+        repaint(app)
+        return
+    }
+    browser.keep("kite-pos.token", session.token)
+    store.signed_in(app, session)
+    repaint(app)
+    load_everything(app)
+}
+
+async fn resume(app: store.App, token: str) {
+    let (session, err) = await api.whoami(token)
+    if err != nil {
+        // An expired or unknown token is not an error the cashier can act on;
+        // it is simply the sign-in screen.
+        browser.drop_kept("kite-pos.token")
+        store.signing_in(app, false)
+        repaint(app)
+        return
+    }
+    store.signed_in(app, session)
+    repaint(app)
+    load_everything(app)
+}
+
+fn sign_off(app: store.App) {
+    let token = store.token_of(app)
+    browser.drop_kept("kite-pos.token")
+    store.signed_out(app)
+    repaint(app)
+    do_sign_out(token)
+}
+
+async fn do_sign_out(token: str) {
+    let (_, err) = await api.sign_out(token)
+    if err != nil {
+        io.error("till: sign-out did not reach the server")
+    }
+}
+
+// ---- loading ---------------------------------------------------------------
+
+fn load_everything(app: store.App) {
+    load_catalogue(app)
+    refresh(app)
+}
+
+async fn load_catalogue(app: store.App) {
+    let (answer, err) = await api.grid(store.token_of(app))
+    if err != nil {
+        store.reachable(app, false)
+        repaint(app)
+        return
+    }
+    store.took_catalogue(app,
+        map(doc.items(doc.field(answer, "products")), model.product_of),
+        map(doc.items(doc.field(answer, "categories")), model.category_of))
+    store.reachable(app, true)
+    repaint(app)
+}
+
+async fn refresh(app: store.App) {
+    let (answer, err) = await api.basket(store.token_of(app))
+    if err != nil {
+        store.reachable(app, false)
+        store.went_wrong(app, err.message())
+        repaint(app)
+        return
+    }
+    store.took_basket(app, model.basket_of(answer))
+    repaint(app)
+}
+
+/// A call that did not get through.
+///
+/// The connection dot is set from this rather than from `navigator.onLine`,
+/// which says true for a device attached to a router with no internet behind
+/// it. Whether the last request actually worked is the only thing this end can
+/// honestly know.
+fn failed(app: store.App, why: str) {
+    store.reachable(app, false)
+    store.went_wrong(app, why)
+    repaint(app)
+}
+
+/// What every basket-changing call does with its answer.
+///
+/// One shape for all of them: a scan, a quantity change and a discount all come
+/// back as the whole basket, so the lines, the totals and the badges cannot
+/// show different numbers to each other.
+///
+/// Kite will not let an error be handed to another function to look at — it has
+/// to be tested in the scope it arrived in — so every caller checks its own
+/// failure and only a success reaches here. That is a better shape anyway: this
+/// function is about baskets, not about the network.
+fn settle(app: store.App, answer: doc.Doc) {
+    store.reachable(app, true)
+
+    // A 422 is a step in the sale rather than a failure of one: the till is
+    // being told it needs ID, or a price, before this item can go on.
+    let needs = doc.text(answer, "needs", "")
+    if needs == "age_check" {
+        let product = doc.field(answer, "product")
+        store.show(app, store.Overlay.AgeCheck(
+                name: doc.text(product, "name", ""),
+                min_age: doc.int_of(answer, "min_age", 18),
+                born_before: doc.int_of(answer, "born_on_or_before", 0),
+                code: "",
+                product_id: doc.text(product, "id", "")))
+        repaint(app)
+        return
+    }
+    if needs == "price" {
+        let product = doc.field(answer, "product")
+        store.show(app, store.Overlay.AskPrice(
+                name: doc.text(product, "name", ""),
+                product_id: doc.text(product, "id", "")))
+        repaint(app)
+        return
+    }
+
+    store.took_basket(app, model.basket_of(answer))
+    store.dismiss(app)
+    repaint(app)
+}
+
+// ---- ringing ---------------------------------------------------------------
+
+fn scan_typed(app: store.App) {
+    let code = field_value("#scan")
+    if code.len() == 0 {
+        return
+    }
+    browser.clear_and_focus("#scan")
+    store.working(app, true)
+    do_scan(app, code, "", 0.0, false, 0, false)
+}
+
+fn tap_tile(app: store.App, product_id: str) {
+    let product = store.product_of(app, product_id)
+    if product == nil {
+        return
+    }
+    store.working(app, true)
+    repaint(app)
+    do_scan(app, "", product_id, 1.0, false, 0, false)
+}
+
+async fn do_scan(app: store.App, code: str, product_id: str, qty: float,
+    age_checked: bool, price: int, ask_price: bool) {
+    let (answer, err) = await api.scan(store.token_of(app), code, product_id, qty,
+        age_checked, price, ask_price)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    settle(app, answer)
+}
+
+async fn do_qty(app: store.App, line_id: str, qty: float) {
+    let (answer, err) = await api.set_qty(store.token_of(app), line_id, qty)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    settle(app, answer)
+}
+
+async fn do_void_line(app: store.App, line_id: str) {
+    let (answer, err) = await api.void_line(store.token_of(app), line_id)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    settle(app, answer)
+}
+
+async fn do_adjust(app: store.App, line_id: str, kind: str, value: int, manager_pin: str) {
+    let (answer, err) = await api.adjust_line(store.token_of(app), line_id, kind, value, manager_pin)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    settle(app, answer)
+}
+
+async fn do_hold(app: store.App, label: str) {
+    let (answer, err) = await api.hold(store.token_of(app), label)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    settle(app, answer)
+}
+
+async fn do_recall(app: store.App, id: str) {
+    let (answer, err) = await api.recall(store.token_of(app), id)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    settle(app, answer)
+}
+
+async fn do_void_sale(app: store.App, reason: str, manager_pin: str) {
+    let (answer, err) = await api.void_sale(store.token_of(app), reason, manager_pin)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    settle(app, answer)
+}
+
+async fn load_held(app: store.App) {
+    let (answer, err) = await api.held(store.token_of(app))
+    if err != nil {
+        store.went_wrong(app, err.message())
+        repaint(app)
+        return
+    }
+    store.took_held(app, map(doc.items(doc.field(answer, "held")), model.held_of))
+    store.show(app, store.Overlay.Held)
+    repaint(app)
+}
+
+async fn do_search(app: store.App, q: str) {
+    let (answer, err) = await api.search(store.token_of(app), q)
+    if err != nil {
+        return
+    }
+    store.found_products(app, map(doc.items(doc.field(answer, "products")), model.product_of))
+    repaint(app)
+}
+
+async fn do_price_check(app: store.App, code: str) {
+    let (answer, err) = await api.price_check(store.token_of(app), code)
+    if err != nil {
+        store.went_wrong(app, err.message())
+        repaint(app)
+        return
+    }
+    let product = doc.field(answer, "product")
+    let saved = doc.int_of(answer, "promo_saved", 0)
+    var detail = doc.text(product, "sku", "")
+    if saved > 0 {
+        detail = "\(detail) · \(doc.text(answer, "promo_name", "")) · \(i18n.t(app.lang, "saved")) \(money.show(saved, store.currency_of(app)))"
+    }
+    store.show(app, store.Overlay.PriceCheck(
+            name: doc.text(product, "name", ""),
+            detail: detail,
+            price: money.show(doc.int_of(answer, "total", 0), store.currency_of(app))))
+    repaint(app)
+}
+
+// ---- taking payment --------------------------------------------------------
+
+fn add_tender(app: store.App) {
+    let typed = money.from_keys(app.entry, store.currency_of(app))
+    if typed == nil {
+        return
+    }
+    if typed <= 0 {
+        return
+    }
+    let due = store.balance_due(app)
+    // Only cash returns change, so a card or a wallet may not be charged more
+    // than the balance. The till refuses it here rather than letting the server
+    // do it, because the cashier is standing in front of the customer.
+    if !model.returns_change(app.tender) && typed > due {
+        store.went_wrong(app, i18n.t(app.lang, "only_cash_change"))
+        repaint(app)
+        return
+    }
+    store.add_payment(app, model.Payment{ tender: app.tender, amount: typed, reference: "" })
+    repaint(app)
+}
+
+fn finish(app: store.App) {
+    if app.busy {
+        return
+    }
+    if store.balance_due(app) > 0 {
+        return
+    }
+    if app.taken.len() == 0 {
+        return
+    }
+    store.working(app, true)
+    repaint(app)
+    do_pay(app)
+}
+
+async fn do_pay(app: store.App) {
+    // The idempotency key is made once **per basket**, not once per attempt —
+    // see `store.pay_key_of`. A lane that loses the answer and presses Pay
+    // again sends the same key and lands on the same sale, which is the whole
+    // reason the server takes one. Minting it here, which is what this did,
+    // gave every retry a key the server had never seen.
+    let (answer, err) = await api.pay(store.token_of(app), app.taken,
+        store.pay_key_of(app, browser.nonce()))
+    if err != nil {
+        store.went_wrong(app, err.message())
+        repaint(app)
+        return
+    }
+    let change = doc.int_of(answer, "change", 0)
+    let number = doc.int_of(answer, "number", 0)
+    store.clear_payments(app)
+    store.go_to_mode(app, store.Mode.Sale)
+    if change > 0 {
+        store.say(app, "#\(number) · \(i18n.t(app.lang, "change_due")) \(money.show(change, store.currency_of(app)))")
+    } else {
+        store.say(app, "#\(number)")
+    }
+    repaint(app)
+    refresh(app)
+}
+
+// ---- what a touch means ----------------------------------------------------
+
+fn command(app: store.App, id: str) {
+    if id == "hold" {
+        store.show(app, store.Overlay.Confirm(purpose: "hold",
+                message: i18n.t(app.lang, "label")))
+        repaint(app)
+        return
+    }
+    if id == "held" {
+        load_held(app)
+        return
+    }
+    if id == "price_check" {
+        let code = field_value("#scan")
+        if code.len() == 0 {
+            store.went_wrong(app, i18n.t(app.lang, "scan_hint"))
+            repaint(app)
+            return
+        }
+        browser.clear_and_focus("#scan")
+        do_price_check(app, code)
+        return
+    }
+    if id == "void_sale" {
+        store.show(app, store.Overlay.Confirm(purpose: "void_sale",
+                message: i18n.t(app.lang, "reason")))
+        repaint(app)
+        return
+    }
+    if id == "discount" {
+        let line = last(app.basket.lines)
+        if line == nil {
+            return
+        }
+        store.show(app, store.Overlay.Keypad(purpose: "discount", line_id: line.id,
+                title: "\(i18n.t(app.lang, "discount")) · \(line.name)"))
+        repaint(app)
+        return
+    }
+    if id == "customer" {
+        store.show(app, store.Overlay.Customers)
+        repaint(app)
+        browser.focus("#who")
+        load_customers(app, "")
+        return
+    }
+    if id == "return" {
+        store.show(app, store.Overlay.Receipts)
+        repaint(app)
+        browser.focus("#receipt")
+        load_receipts(app, "")
+        return
+    }
+    if id == "no_sale" {
+        // Manager-only and logged to the shift: the drawer coming open outside
+        // a transaction is the single most useful line in an audit trail.
+        store.show(app, store.Overlay.Confirm(purpose: "no_sale",
+                message: i18n.t(app.lang, "why")))
+        repaint(app)
+        return
+    }
+    if id == "close_lane" {
+        store.show(app, store.Overlay.Keypad(purpose: "close_lane", line_id: "",
+                title: i18n.t(app.lang, "counted")))
+        repaint(app)
+        return
+    }
+}
+
+// ---- customers, returns, the drawer ----------------------------------------
+
+async fn load_customers(app: store.App, q: str) {
+    let (answer, err) = await api.customers_at_till(store.token_of(app), q)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    store.took_customers(app, map(doc.items(doc.field(answer, "customers")), model.customer_of))
+    repaint(app)
+}
+
+async fn do_attach_customer(app: store.App, id: str) {
+    let (answer, err) = await api.set_customer(store.token_of(app), id)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    settle(app, answer)
+}
+
+async fn do_new_customer(app: store.App, name: str, phone: str) {
+    let (answer, err) = await api.new_customer(store.token_of(app), name, phone)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    do_attach_customer(app, doc.text(answer, "id", ""))
+}
+
+async fn load_receipts(app: store.App, q: str) {
+    let (answer, err) = await api.receipts(store.token_of(app), q)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    store.took_receipts(app, map(doc.items(doc.field(answer, "receipts")), model.receipt_of))
+    repaint(app)
+}
+
+async fn load_receipt(app: store.App, id: str) {
+    let (answer, err) = await api.receipt(store.token_of(app), id)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    let sale = doc.field(answer, "sale")
+    store.took_return_lines(app,
+        map(doc.items(doc.field(answer, "lines")), model.return_line_of))
+    store.show(app, store.Overlay.Returning(sale_id: id,
+            number: doc.int_of(sale, "number", 0)))
+    repaint(app)
+}
+
+fn step_return(app: store.App, id: str, by: float) {
+    let line = find(app.returning, |l: model.ReturnLine| l.id == id)
+    if line == nil {
+        return
+    }
+    store.set_return_qty(app, id, line.taking + by)
+    repaint(app)
+}
+
+async fn do_return(app: store.App, sale_id: str, reason: str, manager_pin: str) {
+    let (answer, err) = await api.take_return(store.token_of(app), sale_id,
+        app.returning, reason, manager_pin)
+    if err != nil {
+        store.went_wrong(app, err.message())
+        repaint(app)
+        return
+    }
+    store.dismiss(app)
+    store.say(app, "\(i18n.t(app.lang, "return")) \(money.show(doc.int_of(answer, "total", 0), store.currency_of(app)))")
+    repaint(app)
+    refresh(app)
+}
+
+async fn do_no_sale(app: store.App, reason: str, manager_pin: str) {
+    let (_, err) = await api.no_sale(store.token_of(app), reason, manager_pin)
+    if err != nil {
+        store.went_wrong(app, err.message())
+        repaint(app)
+        return
+    }
+    store.dismiss(app)
+    store.say(app, i18n.t(app.lang, "no_sale"))
+    repaint(app)
+}
+
+async fn do_close_lane(app: store.App, counted: int, manager_pin: str) {
+    let (answer, err) = await api.close_lane(store.token_of(app), counted, manager_pin)
+    if err != nil {
+        store.went_wrong(app, err.message())
+        repaint(app)
+        return
+    }
+    // The lane's sessions are gone, so this device is signed out — which is
+    // what closing a drawer means.
+    let variance = doc.int_of(answer, "variance", 0)
+    browser.drop_kept("kite-pos.token")
+    store.signed_out(app)
+    store.say(app, "\(i18n.t(app.lang, "close_lane")) · \(money.show(variance, store.currency_of(app)))")
+    repaint(app)
+}
+
+fn clicked(app: store.App, e: dom.Event) {
+    let hit = dom.target(e)
+    if hit == nil {
+        return
+    }
+    let acted = browser.closest(hit, "[data-action]")
+    if acted == nil {
+        return
+    }
+    let name = dom.attribute(acted, "data-action")
+    if name == nil {
+        return
+    }
+    let id = or_else(dom.attribute(acted, "data-id"), "")
+    let purpose = or_else(dom.attribute(acted, "data-purpose"), "")
+    _ = dom.prevent_default(e)
+
+    if name == "pin-key" {
+        press_pin(app, id)
+        return
+    }
+    if name == "pin-go" {
+        submit_pin(app)
+        return
+    }
+    if name == "lang-en" {
+        store.set_lang(app, i18n.Lang.En)
+        browser.keep("kite-pos.lang", "en")
+        repaint(app)
+        return
+    }
+    if name == "lang-my" {
+        store.set_lang(app, i18n.Lang.My)
+        browser.keep("kite-pos.lang", "my")
+        repaint(app)
+        return
+    }
+    if name == "tab" {
+        store.set_tab(app, id)
+        repaint(app)
+        return
+    }
+    if name == "tile" {
+        tap_tile(app, id)
+        return
+    }
+    if name == "line" {
+        let line = store.line_of(app, id)
+        if line == nil {
+            return
+        }
+        store.show(app, store.Overlay.Keypad(purpose: "qty", line_id: id,
+                title: "\(i18n.t(app.lang, "quantity")) · \(line.name)"))
+        repaint(app)
+        return
+    }
+    if name == "command" {
+        command(app, id)
+        return
+    }
+    if name == "dismiss" {
+        store.dismiss(app)
+        repaint(app)
+        return
+    }
+    if name == "pay" {
+        if app.basket.lines.len() == 0 {
+            return
+        }
+        store.go_to_mode(app, store.Mode.Tender)
+        repaint(app)
+        return
+    }
+    if name == "back-to-sale" {
+        store.clear_payments(app)
+        store.go_to_mode(app, store.Mode.Sale)
+        repaint(app)
+        return
+    }
+    if name == "tender" {
+        if id == "cash" {
+            store.choose_tender(app, model.Tender.Cash)
+        }
+        if id == "card" {
+            store.choose_tender(app, model.Tender.Card)
+        }
+        if id == "wallet" {
+            store.choose_tender(app, model.Tender.Wallet)
+        }
+        if id == "store_credit" {
+            store.choose_tender(app, model.Tender.StoreCredit)
+        }
+        repaint(app)
+        return
+    }
+    if name == "key" {
+        store.press_key(app, id)
+        repaint(app)
+        return
+    }
+    if name == "quick" {
+        store.set_entry(app, id)
+        repaint(app)
+        return
+    }
+    if name == "add-tender" {
+        add_tender(app)
+        return
+    }
+    if name == "finish" {
+        finish(app)
+        return
+    }
+    if name == "age-ok" {
+        let product_id = or_else(dom.attribute(acted, "data-pid"), "")
+        store.dismiss(app)
+        repaint(app)
+        do_scan(app, id, product_id, 0.0, true, 0, false)
+        return
+    }
+    if name == "price-ok" {
+        let typed = money.from_keys(app.entry, store.currency_of(app))
+        if typed == nil {
+            return
+        }
+        store.dismiss(app)
+        repaint(app)
+        do_scan(app, "", id, 1.0, false, typed, true)
+        return
+    }
+    if name == "keypad-ok" {
+        let typed = money.from_keys(app.entry, store.currency_of(app))
+        if typed == nil {
+            return
+        }
+        if purpose == "qty" {
+            store.dismiss(app)
+            repaint(app)
+            do_qty(app, id, typed as float)
+            return
+        }
+        if purpose == "discount" {
+            // A discount is the "PIN" row of the command matrix: a cashier may
+            // take one with a manager's PIN entered at the lane, and a manager
+            // needs nobody. The till asks either way and the server decides.
+            store.show(app, store.Overlay.ManagerPin(purpose: "discount", line_id: id,
+                    amount: typed))
+            repaint(app)
+            return
+        }
+        if purpose == "override" {
+            store.show(app, store.Overlay.ManagerPin(purpose: "override", line_id: id,
+                    amount: typed))
+            repaint(app)
+            return
+        }
+        if purpose == "close_lane" {
+            store.show(app, store.Overlay.ManagerPin(purpose: "close_lane", line_id: "",
+                    amount: typed))
+            repaint(app)
+            return
+        }
+        return
+    }
+    if name == "manager-ok" {
+        let pin = app.entry
+        let value = or_else(parse_int(or_else(dom.attribute(acted, "data-amount"), "0")), 0)
+        store.dismiss(app)
+        repaint(app)
+        if purpose == "void_sale" {
+            do_void_sale(app, "voided at the lane", pin)
+            return
+        }
+        if purpose == "return" {
+            // The reason was parked in `notice` when the operator confirmed the
+            // lines; it is the only thing that has to survive the PIN dialog.
+            do_return(app, id, app.notice, pin)
+            return
+        }
+        if purpose == "no_sale" {
+            do_no_sale(app, app.notice, pin)
+            return
+        }
+        if purpose == "close_lane" {
+            do_close_lane(app, value, pin)
+            return
+        }
+        do_adjust(app, id, purpose, value, pin)
+        return
+    }
+    if name == "confirm-ok" {
+        let typed = field_value("#reason")
+        if typed.len() == 0 {
+            return
+        }
+        store.dismiss(app)
+        repaint(app)
+        if purpose == "hold" {
+            do_hold(app, typed)
+            return
+        }
+        if purpose == "void_sale" {
+            do_void_sale(app, typed, "")
+            return
+        }
+        if purpose == "no_sale" {
+            store.say(app, typed)
+            store.show(app, store.Overlay.ManagerPin(purpose: "no_sale", line_id: "", amount: 0))
+            repaint(app)
+            return
+        }
+        return
+    }
+    if name == "customer-pick" {
+        store.dismiss(app)
+        repaint(app)
+        do_attach_customer(app, id)
+        return
+    }
+    if name == "customer-new" {
+        let typed_name = field_value("#who")
+        if typed_name.len() == 0 {
+            return
+        }
+        store.dismiss(app)
+        repaint(app)
+        do_new_customer(app, typed_name, "")
+        return
+    }
+    if name == "receipt-pick" {
+        load_receipt(app, id)
+        return
+    }
+    if name == "return-less" {
+        step_return(app, id, -1.0)
+        return
+    }
+    if name == "return-more" {
+        step_return(app, id, 1.0)
+        return
+    }
+    if name == "return-go" {
+        let why = field_value("#reason")
+        if why.len() == 0 {
+            store.went_wrong(app, i18n.t(app.lang, "reason"))
+            repaint(app)
+            return
+        }
+        // A return is the "PIN" row of the command matrix, so a manager proves
+        // it at the lane before anything is paid out.
+        store.show(app, store.Overlay.ManagerPin(purpose: "return", line_id: id, amount: 0))
+        store.say(app, why)
+        repaint(app)
+        return
+    }
+    if name == "recall" {
+        store.dismiss(app)
+        repaint(app)
+        do_recall(app, id)
+        return
+    }
+    if name == "search" {
+        store.show(app, store.Overlay.Search)
+        repaint(app)
+        browser.focus("#find")
+        return
+    }
+    if name == "keypad" {
+        let line = last(app.basket.lines)
+        if line == nil {
+            return
+        }
+        store.show(app, store.Overlay.Keypad(purpose: "qty", line_id: line.id,
+                title: "\(i18n.t(app.lang, "quantity")) · \(line.name)"))
+        repaint(app)
+        return
+    }
+    if name == "sign-out" {
+        sign_off(app)
+        return
+    }
+}
+
+fn typed(app: store.App, e: dom.Event) {
+    let key = dom.key(e)
+    let hit = dom.target(e)
+    if hit == nil {
+        return
+    }
+    let field = or_else(dom.attribute(hit, "id"), "")
+
+    if key == "Enter" {
+        if field == "scan" {
+            _ = dom.prevent_default(e)
+            scan_typed(app)
+            return
+        }
+        if field == "find" {
+            _ = dom.prevent_default(e)
+            do_search(app, field_value("#find"))
+            return
+        }
+        if field == "reason" {
+            return
+        }
+        return
+    }
+    if key == "Escape" {
+        store.dismiss(app)
+        repaint(app)
+        return
+    }
+    // Xstore maps every menu button to a function key, and a counter with a
+    // keyboard is faster for it. F2 is the commit, which is the one worth
+    // having under a finger.
+    if key == "F2" {
+        _ = dom.prevent_default(e)
+        if app.basket.lines.len() > 0 && app.mode == store.Mode.Sale {
+            store.go_to_mode(app, store.Mode.Tender)
+            repaint(app)
+        }
+        return
+    }
+    if key == "F3" {
+        _ = dom.prevent_default(e)
+        command(app, "hold")
+        return
+    }
+    if key == "F4" {
+        _ = dom.prevent_default(e)
+        command(app, "held")
+        return
+    }
+}
+
+// ---- starting up -----------------------------------------------------------
+
+pub fn main() {
+    let root = dom.find("#app")
+    if root == nil {
+        io.error("till: there is no #app to mount into")
+        return
+    }
+    let (mounted, merr) = html.mount(root, [])
+    if merr != nil {
+        io.error("till: could not mount: \(merr.message())")
+        return
+    }
+
+    let lang = i18n.of_code(or_else(browser.kept("kite-pos.lang"), "en"))
+    let app = store.holding(root, mounted, lang)
+    repaint(app)
+
+    // One listener for every touch in the application. A repainted description
+    // has nothing to reattach, because nothing was ever attached to a described
+    // element in the first place.
+    let (_, cerr) = dom.on(root, "click", |e: dom.Event| { clicked(app, e) })
+    if cerr != nil {
+        io.error("till: no clicks: \(cerr.message())")
+    }
+    // On the document rather than the root: a scanner types wherever the focus
+    // happens to be, and a keystroke that lands outside the mounted tree still
+    // has to reach the scan box.
+    let (_, kerr) = dom.on(root, "keydown", |e: dom.Event| { typed(app, e) })
+    if kerr != nil {
+        io.error("till: no keys: \(kerr.message())")
+    }
+
+    browser.register_worker("/sw.js")
+
+    let token = browser.kept("kite-pos.token")
+    if token != nil {
+        resume(app, token)
+    }
+}

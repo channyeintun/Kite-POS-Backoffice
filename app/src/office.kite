@@ -1,0 +1,1532 @@
+//! The back office: the rail, the screens, and what a press means.
+//!
+//! The wiring. `screens.kite` says what each screen shows, `forms.kite` says
+//! what each dialog asks for, `office_view.kite` draws both, and this file is
+//! the three-way join: it loads, it dispatches, and it submits.
+//!
+//! ## One vocabulary
+//!
+//! A `data-action` on a button, a row or a form is a string, and the same
+//! string appears in exactly three places: where the block names it, in
+//! [`pressed`], and — for anything that writes — in [`submit`]. Adding a
+//! feature is a form constructor, an arm in each of those two, and an API call.
+
+use std/dom
+use std/html
+use api
+use browser
+use desk
+use doc
+use forms
+use i18n
+use money
+use office_view
+use screens
+use words
+
+fn repaint(app: desk.App) {
+    // The stylesheet keys Burmese's taller line box off the document's own
+    // `lang`, so this write is what makes မြန်မာ legible rather than cramped.
+    // Written on every repaint rather than only on the switch, because a
+    // reload restores the kept language and nothing else would announce it.
+    browser.set_document_lang(i18n.tag_of(app.lang))
+    let err = html.update(app.view, office_view.page(app))
+    if err != nil {
+        io.error("office: could not draw: \(err.message())")
+    }
+}
+
+fn field_value(selector: str) -> str {
+    let field = dom.find(selector)
+    if field == nil {
+        return ""
+    }
+    return dom.value(field).trim()
+}
+
+fn day() -> int {
+    return 86400
+}
+
+// ---- signing in ------------------------------------------------------------
+
+fn submit_sign_in(app: desk.App) {
+    if app.signing_in {
+        return
+    }
+    let username = field_value("#username")
+    let password = field_value("#password")
+    if username.len() == 0 || password.len() == 0 {
+        return
+    }
+    desk.signing_in(app, true)
+    repaint(app)
+    do_sign_in(app, username, password)
+}
+
+async fn do_sign_in(app: desk.App, username: str, password: str) {
+    let (session, err) = await api.sign_in_with_password(username, password)
+    if err != nil {
+        desk.signing_in(app, false)
+        desk.went_wrong(app, err.message())
+        repaint(app)
+        return
+    }
+    browser.keep("kite-office.token", session.token)
+    desk.signed_in(app, session)
+    repaint(app)
+    load(app)
+    load_header(app)
+    load_refs(app)
+}
+
+async fn resume(app: desk.App, token: str) {
+    let (session, err) = await api.whoami(token)
+    if err != nil {
+        browser.drop_kept("kite-office.token")
+        repaint(app)
+        return
+    }
+    desk.signed_in(app, session)
+    repaint(app)
+    load(app)
+    load_header(app)
+    load_refs(app)
+}
+
+fn sign_off(app: desk.App) {
+    let token = desk.token_of(app)
+    browser.drop_kept("kite-office.token")
+    desk.signed_out(app)
+    repaint(app)
+    do_sign_out(token)
+}
+
+async fn do_sign_out(token: str) {
+    let (_, err) = await api.sign_out(token)
+    if err != nil {
+        io.error("office: sign-out did not reach the server")
+    }
+}
+
+/// The lists every dropdown is built from.
+///
+/// Asked for once on arrival rather than per form, because a shop's categories
+/// and suppliers change about as often as its address and a dialog that waits
+/// on two requests before it opens feels broken.
+async fn load_refs(app: desk.App) {
+    let token = desk.token_of(app)
+    // Each of these is tested in its own `if` before the answer is touched:
+    // Kite will not let a `(T, error)` be read inside the same expression that
+    // tests the error, and a missing list is a screen with an empty dropdown
+    // rather than a failure worth stopping for.
+    var categories: [doc.Doc] = []
+    let (cats, cerr) = await api.categories(token)
+    if cerr == nil {
+        categories = doc.items(doc.field(cats, "categories"))
+    }
+    var suppliers: [doc.Doc] = []
+    let (sups, serr) = await api.suppliers(token)
+    if serr == nil {
+        suppliers = doc.items(doc.field(sups, "suppliers"))
+    }
+    var products: [doc.Doc] = []
+    let (prods, perr) = await api.products(token, "")
+    if perr == nil {
+        products = doc.items(doc.field(prods, "products"))
+    }
+    var registers: [doc.Doc] = []
+    let (lanes, lerr) = await api.lanes(token)
+    if lerr == nil {
+        registers = doc.items(doc.field(lanes, "lanes"))
+    }
+    desk.took_refs(app, categories, suppliers, products, registers)
+
+    var expense_accounts: [doc.Doc] = []
+    let (chart, aerr) = await api.expense_accounts(token)
+    if aerr == nil {
+        expense_accounts = doc.items(doc.field(chart, "accounts"))
+    }
+    desk.took_expense_accounts(app, expense_accounts)
+
+    let (settings, terr) = await api.settings(token)
+    if terr == nil {
+        let values = doc.field(settings, "settings")
+        desk.took_settings(app, values)
+        // Seed from the shop's own `locale.default` when nobody at this desk
+        // has chosen yet. The setting has been on the wire since the first
+        // build and nothing has ever read it.
+        if browser.kept("kite-office.lang") == nil {
+            let code = doc.text(values, "locale.default", "en")
+            desk.set_lang(app, i18n.of_code(code))
+            repaint(app)
+        }
+    }
+}
+
+async fn load_header(app: desk.App) {
+    let (answer, err) = await api.lanes(desk.token_of(app))
+    if err != nil {
+        return
+    }
+    var open = 0
+    var offline = 0
+    var expected = 0
+    for lane in doc.items(doc.field(answer, "lanes")) {
+        let state = doc.text(lane, "state", "closed")
+        if state == "open" || state == "offline" {
+            open = open + 1
+        }
+        if state == "offline" {
+            offline = offline + 1
+        }
+        expected = expected + doc.int_of(lane, "drawer_expected", 0)
+    }
+    desk.lanes_are(app, open, offline, money.show(expected, desk.currency_of(app)))
+    if open > 0 {
+        desk.badge(app, "tills", "\(open)")
+    }
+    repaint(app)
+}
+
+// ---- filling a screen ------------------------------------------------------
+
+fn load(app: desk.App) {
+    desk.working(app, true)
+    repaint(app)
+    match app.screen {
+        Overview => load_overview(app),
+        Tills => load_tills(app),
+        Sales => load_sales(app),
+        Shifts => load_shifts(app),
+        Products => load_products(app),
+        Inventory => load_inventory(app),
+        Movements => load_movements(app),
+        Purchasing => load_purchasing(app),
+        Suppliers => load_suppliers(app),
+        Customers => load_customers(app),
+        Promotions => load_promotions(app),
+        Reports => load_reports(app),
+        Accounting => load_accounting(app),
+        Expenses => load_expenses(app),
+        Staff => load_staff(app),
+        Settings => load_settings(app),
+        Product(id) => load_product(app, id),
+        Sale(id) => load_sale(app, id),
+        Shift(id) => load_shift(app, id),
+        Order(id) => load_order(app, id),
+    }
+}
+
+fn failed(app: desk.App, why: str) {
+    desk.went_wrong(app, why)
+    repaint(app)
+}
+
+fn done(app: desk.App, blocks: [desk.Block]) {
+    desk.took(app, blocks)
+    repaint(app)
+}
+
+async fn load_overview(app: desk.App) {
+    let (answer, err) = await api.overview(desk.token_of(app))
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    done(app, screens.overview(answer, desk.lang_of(app), desk.currency_of(app), desk.who_of(app)))
+}
+
+async fn load_tills(app: desk.App) {
+    let token = desk.token_of(app)
+    let (answer, err) = await api.lanes(token)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    var entries = doc.nothing()
+    let (audit, aerr) = await api.audit(token, browser.now() - day())
+    if aerr == nil {
+        entries = audit
+    }
+    done(app, screens.tills(answer, entries, desk.lang_of(app), desk.currency_of(app)))
+}
+
+async fn load_sales(app: desk.App) {
+    let to = browser.now()
+    let (answer, err) = await api.sales_history(desk.token_of(app), to - 7 * day(), to)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    done(app, screens.sales(answer, desk.lang_of(app), desk.currency_of(app)))
+}
+
+async fn load_sale(app: desk.App, id: str) {
+    let (answer, err) = await api.sale(desk.token_of(app), id)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    desk.took_subject(app, doc.field(answer, "sale"), doc.items(doc.field(answer, "lines")))
+    done(app, screens.sale_detail(answer, desk.lang_of(app), desk.currency_of(app)))
+}
+
+async fn load_shifts(app: desk.App) {
+    let (answer, err) = await api.shifts(desk.token_of(app))
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    done(app, screens.shifts(answer, desk.lang_of(app), desk.currency_of(app)))
+}
+
+async fn load_shift(app: desk.App, id: str) {
+    let (answer, err) = await api.shift(desk.token_of(app), id)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    desk.took_subject(app, answer, [])
+    done(app, screens.shift_detail(answer, desk.lang_of(app), desk.currency_of(app)))
+}
+
+async fn load_products(app: desk.App) {
+    let (answer, err) = await api.products(desk.token_of(app), app.query)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    done(app, screens.products(answer, desk.lang_of(app), desk.currency_of(app), app.query))
+}
+
+async fn load_product(app: desk.App, id: str) {
+    let (answer, err) = await api.product(desk.token_of(app), id)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    desk.took_subject(app, doc.field(answer, "product"), [])
+    done(app, screens.product_detail(answer, desk.lang_of(app), desk.currency_of(app)))
+}
+
+async fn load_categories(app: desk.App) {
+    let (answer, err) = await api.categories(desk.token_of(app))
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    done(app, screens.categories(answer, desk.lang_of(app)))
+}
+
+async fn load_suppliers(app: desk.App) {
+    let (answer, err) = await api.suppliers(desk.token_of(app))
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    done(app, screens.suppliers(answer, desk.lang_of(app), desk.currency_of(app)))
+}
+
+async fn load_inventory(app: desk.App) {
+    let (answer, err) = await api.inventory(desk.token_of(app))
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    let totals = doc.field(answer, "totals")
+    let attention = doc.int_of(totals, "low", 0) + doc.int_of(totals, "out", 0)
+    if attention > 0 {
+        desk.badge(app, "inventory", "\(attention)")
+    }
+    done(app, screens.inventory(answer, desk.lang_of(app), desk.currency_of(app)))
+}
+
+async fn load_movements(app: desk.App) {
+    let (answer, err) = await api.movements(desk.token_of(app), browser.now() - 7 * day(), "")
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    done(app, screens.movements(answer, desk.lang_of(app), desk.currency_of(app)))
+}
+
+async fn load_purchasing(app: desk.App) {
+    let token = desk.token_of(app)
+    let (sheet, err) = await api.worksheet(token, 28)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    var os = doc.nothing()
+    let (orders, oerr) = await api.purchase_orders(token)
+    if oerr == nil {
+        os = orders
+    }
+    var ps = doc.nothing()
+    let (payables, perr) = await api.payables(token)
+    if perr == nil {
+        ps = payables
+    }
+    done(app, screens.purchasing(sheet, os, ps, desk.lang_of(app), desk.currency_of(app)))
+}
+
+async fn load_order(app: desk.App, id: str) {
+    let (answer, err) = await api.order(desk.token_of(app), id)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    desk.took_subject(app, doc.field(answer, "order"), doc.items(doc.field(answer, "lines")))
+    done(app, screens.order_detail(answer, desk.lang_of(app), desk.currency_of(app)))
+}
+
+async fn load_customers(app: desk.App) {
+    let (answer, err) = await api.customers(desk.token_of(app))
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    done(app, screens.customers(answer, desk.lang_of(app), desk.currency_of(app)))
+}
+
+async fn load_promotions(app: desk.App) {
+    let token = desk.token_of(app)
+    let (answer, err) = await api.promotions(token)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    var p = doc.nothing()
+    let (perf, perr) = await api.promotion_performance(token, browser.now() - 30 * day())
+    if perr == nil {
+        p = perf
+    }
+    done(app, screens.promotions(answer, p, desk.lang_of(app), desk.currency_of(app)))
+}
+
+async fn load_reports(app: desk.App) {
+    let token = desk.token_of(app)
+    let to = browser.now()
+    let from = to - 30 * day()
+    let (products, err) = await api.product_report(token, from, to)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    var d = doc.nothing()
+    let (daily, derr) = await api.sales_report(token, from, to)
+    if derr == nil {
+        d = daily
+    }
+    var s = doc.nothing()
+    let (shrink, serr) = await api.shrinkage(token, from, to)
+    if serr == nil {
+        s = shrink
+    }
+    done(app, screens.reports(products, d, s, desk.lang_of(app), desk.currency_of(app)))
+}
+
+/// Fetch only what the open sheet needs.
+///
+/// Eight sheets, and loading all of them on every switch would be eight round
+/// trips to look at one. The summary is the exception: it is a page *about*
+/// the whole of the books, so it reads several and each of those is allowed to
+/// fail on its own — a health sweep that times out should not take the
+/// revenue figure down with it.
+async fn load_accounting(app: desk.App) {
+    let token = desk.token_of(app)
+    let (summary, serr) = await api.accounting_summary(token)
+    if serr != nil {
+        failed(app, serr.message())
+        return
+    }
+    if !doc.bool_of(summary, "enabled", false) {
+        done(app, screens.accounting_off(desk.lang_of(app)))
+        return
+    }
+
+    let view = app.books_view
+    let span = desk.window_seconds(app.books_window, browser.now())
+    let from = span[0]
+    let to = span[1]
+
+    let data = doc.object()
+    doc.put(data, "summary", summary)
+
+    if view == "summary" || view == "pl" {
+        let (pl, perr) = await api.profit_and_loss(token, from, to)
+        if perr != nil {
+            failed(app, perr.message())
+            return
+        }
+        doc.put(data, "pl", pl)
+    }
+    if view == "summary" || view == "balance" {
+        let (sheet, berr) = await api.balance_sheet(token, to)
+        if berr == nil {
+            doc.put(data, "sheet", sheet)
+        }
+    }
+    if view == "summary" {
+        let (health, herr) = await api.books_health(token)
+        if herr == nil {
+            doc.put(data, "health", health)
+        }
+        let (owing, oerr) = await api.payables(token)
+        if oerr == nil {
+            doc.put(data, "payables", owing)
+        }
+    }
+    if view == "trial" {
+        let (trial, terr) = await api.trial_balance(token, from, to)
+        if terr != nil {
+            failed(app, terr.message())
+            return
+        }
+        doc.put(data, "trial", trial)
+    }
+    if view == "journal" {
+        let (journal, jerr) = await api.journal(token, from, to)
+        if jerr != nil {
+            failed(app, jerr.message())
+            return
+        }
+        doc.put(data, "journal", journal)
+    }
+    if view == "accounts" {
+        let (accounts, aerr) = await api.accounts(token)
+        if aerr != nil {
+            failed(app, aerr.message())
+            return
+        }
+        doc.put(data, "accounts", accounts)
+    }
+    if view == "ledger" && app.books_account.len() > 0 {
+        let (ledger, lerr) = await api.general_ledger(token, app.books_account, from, to)
+        if lerr != nil {
+            failed(app, lerr.message())
+            return
+        }
+        doc.put(data, "ledger", ledger)
+    }
+
+    done(app, screens.accounting(view, app.books_window, data, app.books_account,
+            desk.lang_of(app), desk.currency_of(app)))
+}
+
+/// Save the open sheet as a file.
+///
+/// The window and the account travel with it, so the file matches what is on
+/// screen rather than some default the shopkeeper did not choose. Not every
+/// sheet is exportable — Periods is a list of four dates — so the ones that
+/// are not fall back to the trial balance's window rather than producing an
+/// empty file under a misleading name.
+async fn do_export_books(app: desk.App, view: str) {
+    let token = desk.token_of(app)
+    let span = desk.window_seconds(app.books_window, browser.now())
+    var sheet = view
+    if view == "summary" || view == "periods" {
+        sheet = "trial"
+    }
+    var query = "?view=\(sheet)&from=\(span[0])&to=\(span[1])"
+    if sheet == "ledger" {
+        query = "\(query)&account_code=\(app.books_account)"
+    }
+    let (body, err) = await api.fetch_text(token, "/accounting/export\(query)")
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    let name = "\(sheet)-\(browser.iso_day(span[0])).csv"
+    browser.download(name, body, "text/csv;charset=utf-8")
+    desk.say(app, words.fill(desk.lang_of(app), "toast.saved_n", name))
+    repaint(app)
+}
+
+async fn load_expenses(app: desk.App) {
+    let to = browser.now()
+    let (answer, err) = await api.expenses(desk.token_of(app), to - 90 * day(), to)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    done(app, screens.expenses(answer, desk.lang_of(app), desk.currency_of(app)))
+}
+
+async fn load_staff(app: desk.App) {
+    let (answer, err) = await api.staff(desk.token_of(app))
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    done(app, screens.staff(answer, desk.lang_of(app)))
+}
+
+async fn load_settings(app: desk.App) {
+    let (answer, err) = await api.settings(desk.token_of(app))
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    desk.took_settings(app, doc.field(answer, "settings"))
+    done(app, screens.settings(answer, desk.lang_of(app)))
+}
+
+// ---- opening a form --------------------------------------------------------
+
+/// A document from a list, by id — what an edit form is filled from.
+fn one_of(list: [doc.Doc], id: str) -> doc.Doc {
+    for d in list {
+        if doc.text(d, "id", "") == id {
+            return d
+        }
+    }
+    return doc.nothing()
+}
+
+fn names_of(list: [doc.Doc]) -> [str] {
+    var out: [str] = []
+    for d in list {
+        out.push(doc.text(d, "name", ""))
+    }
+    return out
+}
+
+fn ids_of(list: [doc.Doc]) -> [str] {
+    var out: [str] = []
+    for d in list {
+        out.push(doc.text(d, "id", ""))
+    }
+    return out
+}
+
+fn open_form(app: desk.App, what: str, id: str) {
+    let c = desk.currency_of(app)
+    let l = desk.lang_of(app)
+
+    if what == "form-product" {
+        let existing = if id.len() > 0 { app.subject } else { doc.nothing() }
+        desk.open_form(app, forms.product(existing, id, app.ref_categories, app.ref_suppliers, l, c))
+    } else if what == "form-barcode" {
+        desk.open_form(app, forms.barcode(id, doc.text(app.subject, "name", ""), l))
+    } else if what == "form-category" {
+        desk.open_form(app, forms.category(one_of(app.ref_categories, id), id, l))
+    } else if what == "form-supplier" {
+        desk.open_form(app, forms.supplier(one_of(app.ref_suppliers, id), id, l))
+    } else if what == "form-promotion" {
+        desk.open_form(app, forms.promotion(doc.nothing(), id, app.ref_products,
+                app.ref_categories, l, c))
+    } else if what == "form-customer" {
+        desk.open_form(app, forms.customer(doc.nothing(), id, l))
+    } else if what == "form-staff" {
+        desk.open_form(app, forms.staff(l))
+    } else if what == "form-expense" {
+        desk.open_form(app, forms.expense(app.ref_expense_accounts, l, c))
+    } else if what == "form-settings" {
+        desk.open_form(app, forms.settings(app.ref_settings, l))
+    } else if what == "form-close-period" {
+        desk.open_form(app, forms.close_period(l))
+    } else if what == "form-register" {
+        desk.open_form(app, forms.register(l))
+    } else if what == "form-adjust" {
+        desk.open_form(app, forms.adjust(id, doc.text(app.subject, "name", ""),
+                doc.num_of(app.subject, "stock", 0.0), l))
+    } else if what == "form-open-shift" {
+        desk.open_form(app, forms.open_shift(ids_of(app.ref_registers),
+                names_of(app.ref_registers), l, c))
+    } else if what == "form-invoice" {
+        desk.open_form(app, forms.invoice(ids_of(app.ref_suppliers), names_of(app.ref_suppliers),
+                id, doc.text(app.subject, "supplier_id", ""),
+                doc.int_of(app.subject, "total", 0), l, c))
+    } else {
+        // A developer's message, not a shopkeeper's: it only appears when a
+        // button names a form nobody wrote, which is a bug rather than a state.
+        desk.went_wrong(app, "\(what) is not wired up")
+    }
+    repaint(app)
+}
+
+/// Forms that need a read before they can be filled.
+async fn open_close_shift(app: desk.App, id: str) {
+    let (answer, err) = await api.shift(desk.token_of(app), id)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    let shift = doc.field(answer, "shift")
+    desk.open_form(app, forms.close_shift(id, doc.text(shift, "register_name", ""),
+            doc.int_of(doc.field(answer, "drawer"), "expected", 0),
+            desk.lang_of(app), desk.currency_of(app)))
+    repaint(app)
+}
+
+async fn open_pay_invoice(app: desk.App, id: str) {
+    let (answer, err) = await api.payables(desk.token_of(app))
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    for i in doc.items(doc.field(answer, "invoices")) {
+        if doc.text(i, "id", "") == id {
+            desk.open_form(app, forms.pay_invoice(id, doc.text(i, "supplier_name", ""),
+                    doc.int_of(i, "outstanding", 0), desk.lang_of(app), desk.currency_of(app)))
+            repaint(app)
+            return
+        }
+    }
+    failed(app, words.t(desk.lang_of(app), "payables.that_invoice_is_not_open_any_more"))
+}
+
+async fn open_refund(app: desk.App, id: str) {
+    let (answer, err) = await api.sale(desk.token_of(app), id)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    let sale = doc.field(answer, "sale")
+    desk.open_form(app, forms.refund(id, doc.int_of(sale, "number", 0),
+            doc.items(doc.field(answer, "lines")), desk.lang_of(app), desk.currency_of(app)))
+    repaint(app)
+}
+
+fn open_receive(app: desk.App, item_id: str) {
+    for line in app.subject_lines {
+        if doc.text(line, "id", "") == item_id {
+            let left = doc.num_of(line, "qty", 0.0) - doc.num_of(line, "qty_received", 0.0)
+            desk.open_form(app, forms.receive(item_id, doc.text(line, "product_name", ""),
+                    left, doc.int_of(line, "unit_cost", 0),
+                    desk.lang_of(app), desk.currency_of(app)))
+            repaint(app)
+            return
+        }
+    }
+}
+
+async fn open_staff_menu(app: desk.App, id: str) {
+    let (answer, err) = await api.staff(desk.token_of(app))
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    for u in doc.items(doc.field(answer, "staff")) {
+        if doc.text(u, "id", "") == id {
+            if doc.text(u, "signs_in_with", "") == "pin" {
+                desk.open_form(app, forms.staff_pin(id, doc.text(u, "name", ""), desk.lang_of(app)))
+            } else {
+                desk.open_form(app, forms.staff_password(id, doc.text(u, "name", ""),
+                        desk.lang_of(app)))
+            }
+            repaint(app)
+            return
+        }
+    }
+}
+
+// ---- reading a form back ---------------------------------------------------
+
+/// A field, by the name the form declared.
+///
+/// Matched on the `data-field` attribute rather than on an id, because a
+/// settings key contains a dot: `#f-shop.name` parses as "the element with id
+/// `f-shop` and class `name`" and matches nothing at all. Every settings field
+/// read empty, so Settings could be opened, filled in and saved — and saved
+/// every value as "". An attribute selector has no such syntax to trip over.
+fn field_of(name: str) -> Option<dom.Element> {
+    return dom.find("[data-field=\"\(name)\"]")
+}
+
+fn value_of(name: str) -> str {
+    let field = field_of(name)
+    if field == nil {
+        return ""
+    }
+    return dom.value(field).trim()
+}
+
+fn checked(name: str) -> bool {
+    let field = field_of(name)
+    if field == nil {
+        return false
+    }
+    return browser.is_checked(field)
+}
+
+/// An amount, after `first_unreadable` has already refused the form if any
+/// money field could not be read. The zero here is unreachable, and is a zero
+/// rather than a panic because a till has nobody to show a panic to.
+fn money_of(app: desk.App, name: str) -> int {
+    return or_else(money.from_text(value_of(name), desk.currency_of(app)), 0)
+}
+
+fn whole_of(name: str) -> int {
+    return or_else(parse_int(value_of(name)), 0)
+}
+
+fn qty_of(name: str) -> float {
+    return or_else(parse_float(value_of(name)), 0.0)
+}
+
+fn put_text_if(body: doc.Doc, key: str, value: str) {
+    if value.len() > 0 {
+        doc.put_text(body, key, value)
+    }
+}
+
+// ---- what a press means ----------------------------------------------------
+
+fn pressed(app: desk.App, what: str, id: str) {
+    if what == "sign-in" {
+        submit_sign_in(app)
+        return
+    }
+    if what == "sign-out" {
+        sign_off(app)
+        return
+    }
+    if what == "lang" {
+        desk.set_lang(app, i18n.of_code(id))
+        browser.keep("kite-office.lang", id)
+        repaint(app)
+        // And ask for the screen again. A `desk.Block` carries its own words —
+        // a table's headings were said in whichever language was on when the
+        // screen was built — so a repaint alone changed the rail and the page
+        // title and left the body in the old language. An open dialog is
+        // deliberately not rebuilt: its labels go stale, but rebuilding it
+        // would throw away whatever has been typed into it.
+        load(app)
+        return
+    }
+    if what == "rail" {
+        desk.toggle_rail(app)
+        repaint(app)
+        return
+    }
+    if what == "go" {
+        if id == "categories" {
+            desk.go(app, desk.Screen.Products)
+            desk.working(app, true)
+            repaint(app)
+            load_categories(app)
+            return
+        }
+        browser.set_hash("#/\(id)")
+        return
+    }
+    if what == "open-product" {
+        browser.set_hash("#/products/\(id)")
+        return
+    }
+    if what == "open-sale" {
+        browser.set_hash("#/sales/\(id)")
+        return
+    }
+    if what == "open-shift-detail" {
+        browser.set_hash("#/shifts/\(id)")
+        return
+    }
+    if what == "open-order" {
+        browser.set_hash("#/purchasing/\(id)")
+        return
+    }
+    if what == "print" {
+        browser.print_page()
+        return
+    }
+    if what == "form-cancel" {
+        desk.close_form(app)
+        repaint(app)
+        return
+    }
+    if what == "form-submit" {
+        submit(app)
+        return
+    }
+    // ---- the books --------------------------------------------------------
+    //
+    // Switching sheet or window re-reads only what the new sheet needs, which
+    // is why each of these ends in `load` rather than a repaint: the window is
+    // what the request is built from, so changing it without re-asking would
+    // show last window's figures under this window's label.
+    if what == "books-view" {
+        desk.show_books(app, id)
+        load(app)
+        return
+    }
+    if what == "books-window" {
+        desk.set_books_window(app, id)
+        load(app)
+        return
+    }
+    if what == "books-account" {
+        desk.open_account(app, id)
+        load(app)
+        return
+    }
+    if what == "books-export" {
+        do_export_books(app, id)
+        return
+    }
+    if what == "books-reverse" {
+        desk.open_form(app, forms.reverse_entry(id, desk.lang_of(app)))
+        repaint(app)
+        return
+    }
+    if what == "books-reopen" {
+        do_reopen_period(app, id)
+        return
+    }
+    if what == "form-close-shift" {
+        open_close_shift(app, id)
+        return
+    }
+    if what == "form-pay-invoice" {
+        open_pay_invoice(app, id)
+        return
+    }
+    if what == "form-refund" {
+        open_refund(app, id)
+        return
+    }
+    if what == "form-receive" {
+        open_receive(app, id)
+        return
+    }
+    if what == "form-movement" {
+        desk.open_form(app, forms.movement(id, desk.lang_of(app), desk.currency_of(app)))
+        repaint(app)
+        return
+    }
+    if what == "staff-menu" {
+        open_staff_menu(app, id)
+        return
+    }
+    if what == "retire-product" {
+        do_retire_product(app, id)
+        return
+    }
+    if what == "drop-barcode" {
+        do_drop_barcode(app, id)
+        return
+    }
+    if what == "send-order" {
+        do_send_order(app, id)
+        return
+    }
+    if what == "receive-all" {
+        do_receive_all(app, id)
+        return
+    }
+    if what == "raise-orders" {
+        do_raise_orders(app)
+        return
+    }
+    if what == "close-lane" {
+        open_close_lane(app, id)
+        return
+    }
+    if what == "authorise" {
+        desk.went_wrong(app, words.t(desk.lang_of(app), "tills.authorise_at_the_lane_itself"))
+        repaint(app)
+        return
+    }
+    if what == "shift-detail" {
+        browser.set_hash("#/shifts")
+        return
+    }
+    if starts_with(what, "form-") {
+        open_form(app, what, id)
+        return
+    }
+}
+
+// ---- submitting ------------------------------------------------------------
+
+fn submit(app: desk.App) {
+    let open = app.form
+    if open == nil {
+        return
+    }
+    if open.busy {
+        return
+    }
+    let bad = first_unreadable(app, open)
+    if bad.len() > 0 {
+        desk.form_refused(app,
+            words.fill(desk.lang_of(app), "error.not_a_number", bad))
+        repaint(app)
+        return
+    }
+    desk.form_working(app)
+    repaint(app)
+    do_submit(app, open.id, open.subject)
+}
+
+/// The label of the first amount or quantity the parser refuses, or "".
+///
+/// **The refusal has to stop the submission**, and it did not. `money.from_text`
+/// is written to return nothing rather than guess — "anything that is not an
+/// amount is refused rather than read as zero — so a slip in a form cannot
+/// quietly become a free item" — and then every call site wrote
+/// `or_else(…, 0)` and turned the refusal back into a zero.
+///
+/// What that cost: a manager retyping a shelf price as "1,200.00" out of habit
+/// in a currency with no decimals sent `price: 0`, the server took it, and the
+/// till gave that product away on every scan. The same keystroke on a supplier
+/// invoice sent `total: 0`, which posts nothing at all — `post` drops zero
+/// lines — so the payable to that supplier simply did not exist. On a drawer
+/// count it sent `counted_total: 0`, booking the whole session's takings as a
+/// loss and skipping the sweep, so the drawer never returned to zero.
+///
+/// Checked here, once, against the fields the form declared, rather than at
+/// nine call sites that each have to remember.
+fn first_unreadable(app: desk.App, open: desk.Form) -> str {
+    let c = desk.currency_of(app)
+    for f in open.fields {
+        if f.kind == desk.FieldKind.Money {
+            if money.from_text(value_of(f.name), c) == nil {
+                return f.label
+            }
+        }
+        if f.kind == desk.FieldKind.Quantity {
+            if parse_float(value_of(f.name)) == nil {
+                return f.label
+            }
+        }
+    }
+    return ""
+}
+
+/// Everything that writes, in one place.
+///
+/// A long function on purpose: the alternative is twenty small ones that each
+/// have to be found before a field can be traced from the form that asked for
+/// it to the call that sends it. Every arm reads its own fields by name and
+/// ends in one API call.
+async fn do_submit(app: desk.App, id: str, subject: str) {
+    let token = desk.token_of(app)
+    let c = desk.currency_of(app)
+    let l = desk.lang_of(app)
+    let body = doc.object()
+
+    if id == "product" {
+        doc.put_text(body, "sku", value_of("sku"))
+        doc.put_text(body, "name", value_of("name"))
+        doc.put_text(body, "name_my", value_of("name_my"))
+        doc.put_text(body, "category_id", value_of("category_id"))
+        doc.put_text(body, "supplier_id", value_of("supplier_id"))
+        doc.put_int(body, "price", money_of(app, "price"))
+        doc.put_int(body, "cost", money_of(app, "cost"))
+        doc.put_int(body, "tax_bp", whole_of("tax_bp"))
+        doc.put_int(body, "min_age", whole_of("min_age"))
+        doc.put_text(body, "unit", value_of("unit"))
+        doc.put_bool(body, "ask_price", checked("ask_price"))
+        doc.put_num(body, "reorder_point", qty_of("reorder_point"))
+        doc.put_num(body, "reorder_qty", qty_of("reorder_qty"))
+        doc.put_int(body, "quick_key", whole_of("quick_key"))
+        doc.put_bool(body, "active", checked("active"))
+        let (_, err) = await api.save_product(token, subject, body)
+        settle(app, err, words.t(l, "toast.saved"))
+        return
+    }
+    if id == "barcode" {
+        doc.put_text(body, "barcode", value_of("barcode"))
+        doc.put_num(body, "pack_size", qty_of("pack_size"))
+        doc.put_text(body, "label", value_of("label"))
+        let (_, err) = await api.add_barcode(token, subject, body)
+        settle(app, err, words.t(l, "toast.barcode_added"))
+        return
+    }
+    if id == "category" {
+        doc.put_text(body, "name", value_of("name"))
+        doc.put_text(body, "name_my", value_of("name_my"))
+        doc.put_int(body, "sort", whole_of("sort"))
+        let (_, err) = await api.save_category(token, subject, body)
+        settle(app, err, words.t(l, "toast.saved"))
+        return
+    }
+    if id == "supplier" {
+        doc.put_text(body, "name", value_of("name"))
+        doc.put_text(body, "phone", value_of("phone"))
+        doc.put_text(body, "email", value_of("email"))
+        doc.put_text(body, "address", value_of("address"))
+        doc.put_int(body, "lead_days", whole_of("lead_days"))
+        doc.put_bool(body, "active", checked("active"))
+        let (_, err) = await api.save_supplier(token, subject, body)
+        settle(app, err, words.t(l, "toast.saved"))
+        return
+    }
+    if id == "promotion" {
+        doc.put_text(body, "name", value_of("name"))
+        doc.put_text(body, "name_my", value_of("name_my"))
+        doc.put_text(body, "kind", value_of("kind"))
+        doc.put_int(body, "value", whole_of("value"))
+        doc.put_int(body, "n", whole_of("n"))
+        doc.put_text(body, "scope", value_of("scope"))
+        put_text_if(body, "product_id", value_of("product_id"))
+        put_text_if(body, "category_id", value_of("category_id"))
+        doc.put_int(body, "priority", whole_of("priority"))
+        doc.put_bool(body, "active", checked("active"))
+        let (_, err) = await api.save_promotion(token, subject, body)
+        settle(app, err, words.t(l, "toast.saved"))
+        return
+    }
+    if id == "customer" {
+        doc.put_text(body, "name", value_of("name"))
+        doc.put_text(body, "phone", value_of("phone"))
+        doc.put_text(body, "note", value_of("note"))
+        let (_, err) = await api.save_customer(token, subject, body)
+        settle(app, err, words.t(l, "toast.saved"))
+        return
+    }
+    if id == "staff" {
+        doc.put_text(body, "name", value_of("name"))
+        doc.put_text(body, "role", value_of("role"))
+        put_text_if(body, "pin", value_of("pin"))
+        put_text_if(body, "username", value_of("username"))
+        put_text_if(body, "password", value_of("password"))
+        let (_, err) = await api.save_staff(token, "", body)
+        settle(app, err, words.t(l, "toast.added"))
+        return
+    }
+    if id == "staff-pin" {
+        let (_, err) = await api.set_staff_pin(token, subject, value_of("pin"))
+        settle(app, err, words.t(l, "toast.pin_set"))
+        return
+    }
+    if id == "staff-password" {
+        let (_, err) = await api.set_staff_password(token, subject, value_of("password"))
+        settle(app, err, words.t(l, "toast.password_set"))
+        return
+    }
+    if id == "staff-edit" {
+        doc.put_text(body, "name", value_of("name"))
+        doc.put_bool(body, "active", checked("active"))
+        let (_, err) = await api.save_staff(token, subject, body)
+        settle(app, err, words.t(l, "toast.saved"))
+        return
+    }
+    if id == "adjust" {
+        doc.put_text(body, "product_id", subject)
+        doc.put_num(body, "counted", qty_of("counted"))
+        doc.put_text(body, "reason", value_of("reason"))
+        doc.put_text(body, "note", value_of("note"))
+        let (_, err) = await api.adjust_stock(token, body)
+        settle(app, err, words.t(l, "toast.stock_was_adjusted"))
+        return
+    }
+    if id == "receive" {
+        let lines = doc.array()
+        let line = doc.object()
+        doc.put_text(line, "item_id", subject)
+        doc.put_num(line, "qty", qty_of("qty"))
+        doc.put_int(line, "unit_cost", money_of(app, "unit_cost"))
+        doc.push(lines, line)
+        doc.put(body, "lines", lines)
+        let (_, err) = await api.receive_order(token, order_id_of(app), body)
+        settle(app, err, words.t(l, "common.received"))
+        return
+    }
+    if id == "invoice" {
+        doc.put_text(body, "supplier_id", value_of("supplier_id"))
+        put_text_if(body, "po_id", subject)
+        doc.put_text(body, "reference", value_of("reference"))
+        doc.put_int(body, "total", money_of(app, "total"))
+        doc.put_int(body, "issued_at", browser.now())
+        doc.put_int(body, "due_at", browser.now() + whole_of("due_days") * day())
+        let (_, err) = await api.add_invoice(token, body)
+        settle(app, err, words.t(l, "toast.invoice_recorded"))
+        return
+    }
+    if id == "pay-invoice" {
+        doc.put_int(body, "amount", money_of(app, "amount"))
+        doc.put_text(body, "method", value_of("method"))
+        let (_, err) = await api.pay_invoice(token, subject, body)
+        settle(app, err, words.t(l, "payables.paid"))
+        return
+    }
+    if id == "expense" {
+        doc.put_text(body, "account_code", value_of("account_code"))
+        doc.put_text(body, "category", value_of("category"))
+        doc.put_text(body, "payee", value_of("payee"))
+        put_text_if(body, "reference", value_of("reference"))
+        doc.put_int(body, "amount", money_of(app, "amount"))
+        doc.put_int(body, "tax", money_of(app, "tax"))
+        doc.put_text(body, "method", value_of("method"))
+        doc.put_text(body, "note", value_of("note"))
+        let (_, err) = await api.add_expense(token, body)
+        settle(app, err, words.t(l, "toast.recorded"))
+        return
+    }
+    if id == "open-shift" {
+        let (_, err) = await api.open_shift(token, value_of("register_id"),
+            money_of(app, "opening_float"))
+        settle(app, err, words.t(l, "toast.drawer_open"))
+        return
+    }
+    if id == "close-shift" {
+        let (_, err) = await api.close_shift(token, subject,
+            money_of(app, "counted_total"), value_of("note"))
+        settle(app, err, words.t(l, "toast.drawer_closed"))
+        return
+    }
+    if id == "movement" {
+        doc.put_text(body, "kind", value_of("kind"))
+        doc.put_int(body, "amount", money_of(app, "amount"))
+        doc.put_text(body, "reason", value_of("reason"))
+        let (_, err) = await api.shift_movement(token, subject, body)
+        settle(app, err, words.t(l, "toast.recorded"))
+        return
+    }
+    if id == "register" {
+        doc.put_text(body, "name", value_of("name"))
+        doc.put_text(body, "kind", value_of("kind"))
+        let (_, err) = await api.add_register(token, body)
+        settle(app, err, words.t(l, "toast.lane_added"))
+        return
+    }
+    if id == "reverse-entry" {
+        doc.put_text(body, "reason", value_of("reason"))
+        let (_, err) = await api.reverse_entry(token, subject, body)
+        settle(app, err, words.t(l, "toast.correction_posted"))
+        return
+    }
+    if id == "refund" {
+        let lines = doc.array()
+        for line in app.subject_lines {
+            let line_id = doc.text(line, "id", "")
+            let wanted = qty_of("line:\(line_id)")
+            if wanted > 0.0 {
+                let entry = doc.object()
+                doc.put_text(entry, "sale_item_id", line_id)
+                doc.put_num(entry, "qty", wanted)
+                doc.push(lines, entry)
+            }
+        }
+        doc.put(body, "lines", lines)
+        doc.put_text(body, "reason", value_of("reason"))
+        doc.put_text(body, "method", value_of("method"))
+        doc.put_bool(body, "restock", checked("restock"))
+        let (_, err) = await api.refund_sale(token, subject, body)
+        settle(app, err, words.t(l, "common.refunded"))
+        return
+    }
+    if id == "settings" {
+        for key in [
+            "shop.name", "shop.name_my", "shop.address", "shop.phone", "shop.tax_id",
+            "shop.receipt_footer", "currency.code", "currency.symbol", "currency.minor_units",
+            "currency.symbol_first", "tax.inclusive", "tax.default_bp", "locale.default",
+            "loyalty.points_per_unit", "accounting.enabled",
+        ] {
+            doc.put_text(body, key, value_of(key))
+        }
+        let (_, err) = await api.save_settings(token, body)
+        settle(app, err, words.t(l, "toast.saved"))
+        return
+    }
+    if id == "close-period" {
+        let month = value_of("month")
+        let bounds = browser.month_bounds(month)
+        if bounds.len() != 2 {
+            desk.form_refused(app, words.t(l, "error.write_the_month_as"))
+            repaint(app)
+            return
+        }
+        doc.put_int(body, "starts_at", bounds[0])
+        doc.put_int(body, "ends_at", bounds[1])
+        let (_, err) = await api.close_period(token, body)
+        settle(app, err, words.t(l, "toast.month_closed"))
+        return
+    }
+
+    // Left in English on purpose, like "is not wired up" above: it can only
+    // appear when a form was written and its submit arm was not, which nobody
+    // outside this file can act on.
+    desk.form_refused(app, "\(id) has no handler")
+    repaint(app)
+}
+
+/// The purchase order a receive form belongs to.
+fn order_id_of(app: desk.App) -> str {
+    return match app.screen {
+        Order(id) => id,
+        Overview => "",
+        Tills => "",
+        Sales => "",
+        Shifts => "",
+        Products => "",
+        Inventory => "",
+        Movements => "",
+        Purchasing => "",
+        Suppliers => "",
+        Customers => "",
+        Promotions => "",
+        Reports => "",
+        Accounting => "",
+        Expenses => "",
+        Staff => "",
+        Settings => "",
+        Product(pid) => "",
+        Sale(sid) => "",
+        Shift(sid) => "",
+    }
+}
+
+/// What every write does with its answer.
+fn settle(app: desk.App, err: error, said: str) {
+    if err != nil {
+        desk.form_refused(app, err.message())
+        repaint(app)
+        return
+    }
+    desk.close_form(app)
+    desk.say(app, said)
+    repaint(app)
+    load(app)
+    load_refs(app)
+}
+
+// ---- writes with no form in front of them ----------------------------------
+
+/// Let a closed month be posted into again.
+///
+/// The endpoint existed from the beginning and nothing ever called it, so a
+/// month closed by mistake was a month nobody could reopen. Closing guards
+/// against a backdated correction landing in a period already reported to the
+/// outside world; reopening is admitting the report itself was wrong, which
+/// happens often enough to need a button.
+async fn do_reopen_period(app: desk.App, id: str) {
+    let (_, err) = await api.reopen_period(desk.token_of(app), id)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    desk.say(app, words.t(desk.lang_of(app), "toast.that_month_is_open_again"))
+    load(app)
+}
+
+async fn do_retire_product(app: desk.App, id: str) {
+    let (_, err) = await api.retire_product(desk.token_of(app), id)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    browser.set_hash("#/products")
+}
+
+async fn do_drop_barcode(app: desk.App, barcode: str) {
+    let (_, err) = await api.drop_barcode(desk.token_of(app), barcode)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    load(app)
+}
+
+async fn do_send_order(app: desk.App, id: str) {
+    let (_, err) = await api.send_order(desk.token_of(app), id)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    load(app)
+}
+
+/// Receive everything a delivery brought, in one press.
+async fn do_receive_all(app: desk.App, id: str) {
+    let token = desk.token_of(app)
+    let (answer, err) = await api.order(token, id)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    let body = doc.object()
+    let lines = doc.array()
+    for l in doc.items(doc.field(answer, "lines")) {
+        let left = doc.num_of(l, "qty", 0.0) - doc.num_of(l, "qty_received", 0.0)
+        if left > 0.0 {
+            let entry = doc.object()
+            doc.put_text(entry, "item_id", doc.text(l, "id", ""))
+            doc.put_num(entry, "qty", left)
+            doc.put_int(entry, "unit_cost", doc.int_of(l, "unit_cost", 0))
+            doc.push(lines, entry)
+        }
+    }
+    doc.put(body, "lines", lines)
+    let (_, rerr) = await api.receive_order(token, id, body)
+    if rerr != nil {
+        failed(app, rerr.message())
+        return
+    }
+    desk.say(app, words.t(desk.lang_of(app), "common.received"))
+    load(app)
+}
+
+/// Turn the worksheet into draft orders, one per supplier.
+///
+/// The worksheet already knows what to buy and from whom; this is the press
+/// that writes it down. Grouped by supplier because that is how it will be
+/// sent, and left as a draft because somebody should look at it first.
+async fn do_raise_orders(app: desk.App) {
+    let token = desk.token_of(app)
+    let (sheet, err) = await api.worksheet(token, 28)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    let lines = doc.items(doc.field(sheet, "lines"))
+    var suppliers: [str] = []
+    for l in lines {
+        let supplier = doc.text(l, "supplier_id", "")
+        if supplier.len() > 0 && doc.num_of(l, "suggested", 0.0) > 0.0 && !includes(suppliers, supplier) {
+            suppliers.push(supplier)
+        }
+    }
+    if suppliers.len() == 0 {
+        desk.went_wrong(app,
+            words.t(desk.lang_of(app), "purchasing.nothing_to_order"))
+        repaint(app)
+        return
+    }
+
+    var raised = 0
+    for supplier in suppliers {
+        let body = doc.object()
+        doc.put_text(body, "supplier_id", supplier)
+        doc.put_text(body, "status", "draft")
+        let items = doc.array()
+        for l in lines {
+            if doc.text(l, "supplier_id", "") == supplier && doc.num_of(l, "suggested", 0.0) > 0.0 {
+                let entry = doc.object()
+                doc.put_text(entry, "product_id", doc.text(l, "id", ""))
+                doc.put_num(entry, "qty", doc.num_of(l, "suggested", 0.0))
+                doc.put_int(entry, "unit_cost", doc.int_of(l, "cost", 0))
+                doc.push(items, entry)
+            }
+        }
+        doc.put(body, "lines", items)
+        let (_, oerr) = await api.raise_order(token, body)
+        if oerr == nil {
+            raised = raised + 1
+        }
+    }
+    // No singular against plural: မြန်မာ does not mark it, and the reviewed
+    // phrase already says "one per supplier", which is the fact worth saying.
+    desk.say(app, words.fill_n(desk.lang_of(app), "toast.pos_raised", "\(raised)"))
+    load(app)
+}
+
+async fn open_close_lane(app: desk.App, id: str) {
+    let (answer, err) = await api.lanes(desk.token_of(app))
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    for lane in doc.items(doc.field(answer, "lanes")) {
+        if doc.text(lane, "id", "") == id {
+            let shift = doc.text(lane, "shift_id", "")
+            if shift.len() == 0 {
+                desk.went_wrong(app,
+                    words.t(desk.lang_of(app), "tills.that_lane_has_no_open_drawer"))
+                repaint(app)
+                return
+            }
+            desk.open_form(app, forms.close_shift(shift, doc.text(lane, "name", ""),
+                    doc.int_of(lane, "drawer_expected", 0),
+                    desk.lang_of(app), desk.currency_of(app)))
+            repaint(app)
+            return
+        }
+    }
+}
+
+// ---- events ----------------------------------------------------------------
+
+fn arrived(app: desk.App) {
+    let wanted = desk.screen_of(browser.hash())
+    desk.go(app, wanted)
+    if app.session == nil {
+        repaint(app)
+        return
+    }
+    load(app)
+}
+
+fn clicked(app: desk.App, e: dom.Event) {
+    let hit = dom.target(e)
+    if hit == nil {
+        return
+    }
+    let acted = browser.closest(hit, "[data-action]")
+    if acted == nil {
+        return
+    }
+    let name = dom.attribute(acted, "data-action")
+    if name == nil {
+        return
+    }
+    let id = or_else(dom.attribute(acted, "data-id"), "")
+    _ = dom.prevent_default(e)
+    pressed(app, name, id)
+}
+
+fn typed(app: desk.App, e: dom.Event) {
+    if dom.key(e) != "Enter" {
+        return
+    }
+    let hit = dom.target(e)
+    if hit == nil {
+        return
+    }
+    let field = or_else(dom.attribute(hit, "id"), "")
+    if field == "username" || field == "password" {
+        _ = dom.prevent_default(e)
+        submit_sign_in(app)
+    }
+}
+
+pub fn main() {
+    let root = dom.find("#app")
+    if root == nil {
+        io.error("office: there is no #app to mount into")
+        return
+    }
+    let (mounted, merr) = html.mount(root, [])
+    if merr != nil {
+        io.error("office: could not mount: \(merr.message())")
+        return
+    }
+
+    let app = desk.holding(root, mounted)
+    // A kept choice wins over the shop's default: the person at this desk
+    // chose it, and the shop's setting is only ever the starting point. The
+    // key is the office's own — a manager reading မြန်မာ at the desk should
+    // not silently switch every lane in the building.
+    let kept = browser.kept("kite-office.lang")
+    if kept != nil {
+        desk.set_lang(app, i18n.of_code(kept))
+    }
+    desk.go(app, desk.screen_of(browser.hash()))
+    repaint(app)
+
+    let (_, cerr) = dom.on(root, "click", |e: dom.Event| { clicked(app, e) })
+    if cerr != nil {
+        io.error("office: no clicks: \(cerr.message())")
+    }
+    let (_, kerr) = dom.on(root, "keydown", |e: dom.Event| { typed(app, e) })
+    if kerr != nil {
+        io.error("office: no keys: \(kerr.message())")
+    }
+    browser.on_window("hashchange", || { arrived(app) })
+
+    // The lanes are the one thing on this page that is about *now*, so they are
+    // re-read on a slow beat. Everything else is a window and waits to be asked.
+    browser.every(30000, || { load_header(app) })
+
+    browser.register_worker("/sw.js")
+
+    let token = browser.kept("kite-office.token")
+    if token != nil {
+        resume(app, token)
+    }
+}

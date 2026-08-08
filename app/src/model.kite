@@ -1,0 +1,381 @@
+//! The values: what the server says, and who is at the lane.
+//!
+//! Every struct here is built from a [`doc.Doc`] by a function in this file and
+//! nowhere else, so there is exactly one place that knows what the API's field
+//! names are. Nothing above this reads a JSON document.
+//!
+//! There are no optionals for things the server always sends. A missing field
+//! becomes its empty value rather than an `Option` every call site has to
+//! unwrap — the API is ours and its shape is a contract, not a guess.
+
+use doc
+use money
+use i18n
+
+// ---- who is signed in ------------------------------------------------------
+
+pub enum Role {
+    SaleStaff
+    Manager
+    Owner
+}
+
+pub fn role_of(code: str) -> Role {
+    if code == "owner" {
+        return Role.Owner
+    }
+    if code == "manager" {
+        return Role.Manager
+    }
+    return Role.SaleStaff
+}
+
+pub fn is_manager(r: Role) -> bool {
+    return match r {
+        SaleStaff => false,
+        Manager => true,
+        Owner => true,
+    }
+}
+
+pub struct Session {
+    pub token: str
+    pub user_id: str
+    pub name: str
+    pub role: Role
+    pub register_id: str
+    pub shop_name: str
+    pub currency: money.Currency
+}
+
+pub fn session_of(d: doc.Doc, token: str) -> Session {
+    let user = doc.field(d, "user")
+    let shop = doc.field(d, "shop")
+    return Session{
+        token: token,
+        user_id: doc.text(user, "id", ""),
+        name: doc.text(user, "name", ""),
+        role: role_of(doc.text(user, "role", "sale_staff")),
+        register_id: doc.text(d, "register_id", ""),
+        shop_name: doc.text(shop, "name", ""),
+        currency: money.Currency{
+            code: doc.text(shop, "currency", "MMK"),
+            symbol: doc.text(shop, "symbol", "K"),
+            minor_units: doc.int_of(shop, "minor_units", 0),
+            symbol_first: doc.bool_of(shop, "symbol_first", true),
+        },
+    }
+}
+
+// ---- the basket ------------------------------------------------------------
+
+pub struct Line {
+    pub id: str
+    pub product_id: str
+    pub name: str
+    pub sku: str
+    pub qty: float
+    pub unit_price: int
+    pub list_price: int
+    pub line_discount: int
+    pub promo_name: str
+    pub promo_saved: int
+    pub price_override: bool
+    pub total: int
+    pub min_age: int
+    pub age_checked: bool
+}
+
+pub fn line_of(d: doc.Doc) -> Line {
+    return Line{
+        id: doc.text(d, "id", ""),
+        product_id: doc.text(d, "product_id", ""),
+        name: doc.text(d, "name", ""),
+        sku: doc.text(d, "sku", ""),
+        qty: doc.num_of(d, "qty", 0.0),
+        unit_price: doc.int_of(d, "unit_price", 0),
+        list_price: doc.int_of(d, "list_price", 0),
+        line_discount: doc.int_of(d, "line_discount", 0),
+        promo_name: doc.text(d, "promo_name", ""),
+        promo_saved: doc.int_of(d, "promo_saved", 0),
+        price_override: doc.bool_of(d, "price_override", false),
+        total: doc.int_of(d, "total", 0),
+        min_age: doc.int_of(d, "min_age", 0),
+        age_checked: doc.bool_of(d, "age_checked", false),
+    }
+}
+
+pub struct Totals {
+    pub subtotal: int
+    pub promo_saved: int
+    pub discount: int
+    pub tax: int
+    pub total: int
+    pub item_count: float
+}
+
+pub struct Basket {
+    pub sale_id: str
+    pub lines: [Line]
+    pub totals: Totals
+    pub customer_name: str
+    pub customer_points: int
+    pub held_count: int
+    pub shift_open: bool
+    pub commands: [Command]
+}
+
+pub fn empty_basket() -> Basket {
+    return Basket{
+        sale_id: "",
+        lines: [],
+        totals: Totals{ subtotal: 0, promo_saved: 0, discount: 0, tax: 0, total: 0, item_count: 0.0 },
+        customer_name: "",
+        customer_points: 0,
+        held_count: 0,
+        shift_open: false,
+        commands: [],
+    }
+}
+
+pub fn basket_of(d: doc.Doc) -> Basket {
+    let sale = doc.field(d, "sale")
+    let customer = doc.field(sale, "customer")
+    return Basket{
+        sale_id: doc.text(sale, "id", ""),
+        lines: map(doc.items(doc.field(d, "lines")), line_of),
+        totals: Totals{
+            subtotal: doc.int_of(sale, "subtotal", 0),
+            promo_saved: doc.int_of(sale, "promoSaved", 0),
+            discount: doc.int_of(sale, "discount", 0),
+            tax: doc.int_of(sale, "tax", 0),
+            total: doc.int_of(sale, "total", 0),
+            item_count: doc.num_of(sale, "item_count", 0.0),
+        },
+        customer_name: doc.text(customer, "name", ""),
+        customer_points: doc.int_of(customer, "points", 0),
+        held_count: doc.int_of(d, "held_count", 0),
+        shift_open: doc.bool_of(d, "shift_open", false),
+        commands: map(doc.items(doc.field(d, "commands")), command_of),
+    }
+}
+
+// ---- the command bar -------------------------------------------------------
+
+/// One button, as the server describes it.
+///
+/// **A command the operator cannot use still arrives**, with `allowed` false —
+/// the till draws it locked rather than hiding it, which is how a cashier
+/// learns to call a manager instead of learning the button does not exist.
+pub struct Command {
+    pub id: str
+    pub label: str
+    pub label_my: str
+    pub fkey: int
+    pub allowed: bool
+    pub needs_approval: bool
+    pub danger: bool
+    pub confirm: str
+}
+
+pub fn command_of(d: doc.Doc) -> Command {
+    return Command{
+        id: doc.text(d, "id", ""),
+        label: doc.text(d, "label", ""),
+        label_my: doc.text(d, "labelMy", ""),
+        fkey: doc.int_of(d, "fkey", 0),
+        allowed: doc.bool_of(d, "allowed", true),
+        needs_approval: doc.bool_of(d, "needsApproval", false),
+        danger: doc.text(d, "tone", "normal") == "danger",
+        confirm: doc.text(d, "confirm", "none"),
+    }
+}
+
+pub fn label_of(c: Command, l: i18n.Lang) -> str {
+    return match l {
+        En => c.label,
+        My => if c.label_my.len() > 0 { c.label_my } else { c.label },
+    }
+}
+
+// ---- the catalogue ---------------------------------------------------------
+
+pub struct Product {
+    pub id: str
+    pub sku: str
+    pub name: str
+    pub name_my: str
+    pub category_id: str
+    pub price: int
+    pub stock: float
+    pub min_age: int
+    pub unit: str
+    pub ask_price: bool
+    pub quick_key: int
+    pub photo_key: str
+}
+
+pub fn product_of(d: doc.Doc) -> Product {
+    return Product{
+        id: doc.text(d, "id", ""),
+        sku: doc.text(d, "sku", ""),
+        name: doc.text(d, "name", ""),
+        name_my: doc.text(d, "name_my", ""),
+        category_id: doc.text(d, "category_id", ""),
+        price: doc.int_of(d, "price", 0),
+        stock: doc.num_of(d, "stock", 0.0),
+        min_age: doc.int_of(d, "min_age", 0),
+        unit: doc.text(d, "unit", "each"),
+        ask_price: doc.int_of(d, "ask_price", 0) == 1,
+        quick_key: doc.int_of(d, "quick_key", 0),
+        photo_key: doc.text(d, "photo_key", ""),
+    }
+}
+
+pub struct Category {
+    pub id: str
+    pub name: str
+    pub name_my: str
+}
+
+pub fn category_of(d: doc.Doc) -> Category {
+    return Category{
+        id: doc.text(d, "id", ""),
+        name: doc.text(d, "name", ""),
+        name_my: doc.text(d, "name_my", ""),
+    }
+}
+
+pub fn category_label(c: Category, l: i18n.Lang) -> str {
+    return match l {
+        En => c.name,
+        My => if c.name_my.len() > 0 { c.name_my } else { c.name },
+    }
+}
+
+// ---- parked baskets --------------------------------------------------------
+
+pub struct Held {
+    pub id: str
+    pub label: str
+    pub total: int
+    pub items: int
+    pub customer: str
+    pub created_at: int
+}
+
+pub fn held_of(d: doc.Doc) -> Held {
+    return Held{
+        id: doc.text(d, "id", ""),
+        label: doc.text(d, "hold_label", ""),
+        total: doc.int_of(d, "total", 0),
+        items: doc.int_of(d, "items", 0),
+        customer: doc.text(d, "customer", ""),
+        created_at: doc.int_of(d, "created_at", 0),
+    }
+}
+
+// ---- taking payment --------------------------------------------------------
+
+pub enum Tender {
+    Cash
+    Card
+    Wallet
+    StoreCredit
+}
+
+pub fn tender_code(t: Tender) -> str {
+    return match t {
+        Cash => "cash",
+        Card => "card",
+        Wallet => "wallet",
+        StoreCredit => "store_credit",
+    }
+}
+
+pub fn tender_key(t: Tender) -> str {
+    return match t {
+        Cash => "cash",
+        Card => "card",
+        Wallet => "wallet",
+        StoreCredit => "store_credit",
+    }
+}
+
+/// Only cash can produce change, which is the rule the tender screen enforces
+/// before the server has to.
+pub fn returns_change(t: Tender) -> bool {
+    return match t {
+        Cash => true,
+        Card => false,
+        Wallet => false,
+        StoreCredit => false,
+    }
+}
+
+pub struct Payment {
+    pub tender: Tender
+    pub amount: int
+    pub reference: str
+}
+
+// ---- returns and customers -------------------------------------------------
+
+pub struct Customer {
+    pub id: str
+    pub name: str
+    pub phone: str
+    pub points: int
+    pub credit: int
+}
+
+pub fn customer_of(d: doc.Doc) -> Customer {
+    return Customer{
+        id: doc.text(d, "id", ""),
+        name: doc.text(d, "name", ""),
+        phone: doc.text(d, "phone", ""),
+        points: doc.int_of(d, "points", 0),
+        credit: doc.int_of(d, "credit", 0),
+    }
+}
+
+pub struct Receipt {
+    pub id: str
+    pub number: int
+    pub total: int
+    pub items: int
+    pub cashier: str
+    pub completed_at: int
+}
+
+pub fn receipt_of(d: doc.Doc) -> Receipt {
+    return Receipt{
+        id: doc.text(d, "id", ""),
+        number: doc.int_of(d, "number", 0),
+        total: doc.int_of(d, "total", 0),
+        items: doc.int_of(d, "items", 0),
+        cashier: doc.text(d, "cashier", ""),
+        completed_at: doc.int_of(d, "completed_at", 0),
+    }
+}
+
+/// One line of a receipt, and how much of it the operator is taking back.
+pub struct ReturnLine {
+    pub id: str
+    pub name: str
+    pub qty: float
+    pub total: int
+    pub returnable: float
+    pub taking: float
+}
+
+pub fn return_line_of(d: doc.Doc) -> ReturnLine {
+    return ReturnLine{
+        id: doc.text(d, "id", ""),
+        name: doc.text(d, "name", ""),
+        qty: doc.num_of(d, "qty", 0.0),
+        total: doc.int_of(d, "total", 0),
+        returnable: doc.num_of(d, "returnable", 0.0),
+        taking: 0.0,
+    }
+}

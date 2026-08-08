@@ -1,0 +1,182 @@
+//! Money, as a person reads it.
+//!
+//! Every amount that crosses from the API is a whole count of the currency's
+//! minor unit — kyat for MMK, cents for USD — and stays an `int` for its whole
+//! life in this program. Nothing here does arithmetic on a price: the server
+//! owns every total, and this file's only job is deciding where the separators
+//! go.
+//!
+//! **Money does not translate.** Amounts, quantities, SKUs and dates are shown
+//! in Latin digits whatever the interface language is, exactly as the shop's
+//! current till does. The chrome switches; the numbers do not.
+
+use std/math
+
+/// How this shop writes an amount down. Read once, from the API.
+pub struct Currency {
+    pub code: str
+    pub symbol: str
+    /// Digits after the separator: 0 for MMK, 2 for a currency with cents.
+    pub minor_units: int
+    pub symbol_first: bool
+}
+
+pub fn kyat() -> Currency {
+    return Currency{ code: "MMK", symbol: "K", minor_units: 0, symbol_first: true }
+}
+
+/// Digits grouped in threes.
+///
+/// Walked forwards with a separator wherever the number of digits still to come
+/// is a multiple of three. Kite has no `while`, and this is the better loop
+/// anyway: there is no index to step backwards and nothing to get wrong at the
+/// ends.
+fn grouped(digits: str) -> str {
+    let n = digits.len()
+    if n <= 3 {
+        return digits
+    }
+    var out = ""
+    for i in 0..n {
+        if i > 0 && (n - i) % 3 == 0 {
+            out = out + ","
+        }
+        out = out + digits.slice(i, i + 1)
+    }
+    return out
+}
+
+/// An amount with its symbol: `K31,700`, `$12.50`.
+pub fn show(value: int, c: Currency) -> str {
+    let body = plain(value, c)
+    // The sign goes outside the symbol — "-K300", never "K-300", where a minus
+    // between the symbol and the digits reads as part of the number.
+    if value < 0 {
+        let unsigned = body.slice(1, body.len())
+        if c.symbol_first {
+            return "-\(c.symbol)\(unsigned)"
+        }
+        return "-\(unsigned) \(c.symbol)"
+    }
+    if c.symbol_first {
+        return "\(c.symbol)\(body)"
+    }
+    return "\(body) \(c.symbol)"
+}
+
+/// The digits alone, for a column where the symbol is in the heading.
+pub fn plain(value: int, c: Currency) -> str {
+    let negative = value < 0
+    let magnitude = abs(value)
+    var digits = "\(magnitude)"
+    if c.minor_units > 0 {
+        digits = pad_start(digits, c.minor_units + 1, "0")
+        let cut = digits.len() - c.minor_units
+        let whole = grouped(digits.slice(0, cut))
+        let frac = digits.slice(cut, digits.len())
+        if negative {
+            return "-\(whole).\(frac)"
+        }
+        return "\(whole).\(frac)"
+    }
+    if negative {
+        return "-\(grouped(digits))"
+    }
+    return grouped(digits)
+}
+
+/// A quantity, shown as a count when it is one and as a measurement when not.
+///
+/// "×3" and "0.35 kg" are different things and a till that renders the first as
+/// "3.00" is asking a cashier to read a decimal point at speed for no reason.
+pub fn quantity(value: float) -> str {
+    let whole = math.trunc_to(value)
+    if approx_eq(value, whole as float, 0.0001) {
+        return "\(whole)"
+    }
+    // Three decimals is a gram on a kilo, which is finer than any shop scale
+    // reads — so the trim below can only ever remove two of them.
+    let scaled = math.round_to(value * 1000.0)
+    var frac = pad_start("\(scaled % 1000)", 3, "0")
+    if ends_with(frac, "0") {
+        frac = frac.slice(0, 2)
+    }
+    if ends_with(frac, "0") {
+        frac = frac.slice(0, 1)
+    }
+    return "\(scaled / 1000).\(frac)"
+}
+
+/// An amount as a person wrote it, in whole minor units.
+///
+/// Read as **digits, never as a float**. `"1.005"` is really
+/// 1.00499999999999989 as a double and would round *down* to 1.00; read as
+/// digits it correctly becomes 1.01. More precision than the currency has is a
+/// typo rather than a rounding request, and anything that is not an amount is
+/// refused rather than read as zero — so a slip in a form cannot quietly become
+/// a free item.
+///
+/// The same rule as the server's `parseAmount`, because the two have to agree
+/// about what somebody typed.
+pub fn from_text(text: str, c: Currency) -> Option<int> {
+    var body = ""
+    for i in 0..text.len() {
+        let ch = text.slice(i, i + 1)
+        if ch == " " || ch == "," || ch == "_" {
+            continue
+        }
+        body = body + ch
+    }
+    if body.len() == 0 {
+        return nil
+    }
+    var negative = false
+    if starts_with(body, "-") {
+        negative = true
+        body = body.slice(1, body.len())
+    }
+    let parts = split(body, ".")
+    if parts.len() > 2 {
+        return nil
+    }
+    let whole = parts[0]
+    let frac = if parts.len() == 2 { parts[1] } else { "" }
+    if whole.len() == 0 && frac.len() == 0 {
+        return nil
+    }
+    if frac.len() > c.minor_units {
+        return nil
+    }
+    var digits = if whole.len() == 0 { "0" } else { whole }
+    var padded = frac
+    for _i in 0..(c.minor_units - frac.len()) {
+        padded = padded + "0"
+    }
+    let value = parse_int(digits + padded)
+    if value == nil {
+        return nil
+    }
+    if negative {
+        return -value
+    }
+    return value
+}
+
+/// What the operator typed on the keypad, as whole minor units.
+///
+/// The keypad only ever produces digits, so this is a digit walk rather than a
+/// parse — there is no separator to interpret and no float anywhere near it.
+/// An empty entry is nothing rather than zero, so "Add tender" on an untouched
+/// keypad is refused rather than adding a payment of zero.
+pub fn from_keys(entry: str, c: Currency) -> Option<int> {
+    if entry.len() == 0 {
+        return nil
+    }
+    let parsed = parse_int(entry)
+    if parsed == nil {
+        return nil
+    }
+    // The keypad is in minor units already for a zero-decimal currency; for one
+    // with cents the operator types "1250" and means twelve fifty.
+    return parsed
+}

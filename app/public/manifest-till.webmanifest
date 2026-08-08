@@ -1,0 +1,17 @@
+{
+  "name": "Kite POS — Till",
+  "short_name": "Till",
+  "description": "The counter till: scan, take payment, hold and recall.",
+  "start_url": "/index.html",
+  "scope": "/index.html",
+  "display": "fullscreen",
+  "//orientation": "Not locked. Tablet portrait is one of the design's four first-class viewports with a layout of its own — a fixed 420 px ledger band, a 3-column grid and a full-width commit bar at the bottom edge. With `display: fullscreen` and a landscape lock, none of that ever ran in the installed till; it only ever appeared in a browser tab.",
+  "orientation": "any",
+  "background_color": "#0b0d0f",
+  "theme_color": "#0b0d0f",
+  "icons": [
+    { "src": "/icon-till-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-till-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-till-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

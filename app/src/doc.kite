@@ -1,0 +1,209 @@
+//! JSON, read and written by the host.
+//!
+//! `std/json` is a real JSON implementation written in Kite, and on this target
+//! it cannot be used for a document this size. The reason is in the generated
+//! glue rather than in the library: a `str` is an index into a table the glue
+//! holds, and every string primitive rebuilds the whole string to answer a
+//! question about one character — so `s.len()` and `s.slice(i, i + 1)` are O(n)
+//! in the length of the *whole* string, and a parser walking a document one
+//! character at a time is O(n²) with a very large constant. A basket is small,
+//! but the catalogue the till caches is not, and a frozen tab at the counter is
+//! the one failure a queue notices.
+//!
+//! So the parsing is left to the thing that already has a parser written in C++.
+//! This module is the typed door in front of it: `JsValue` never leaves, because
+//! `Doc`'s field is unmarked and an unmarked field is module-private — outside
+//! this file a `Doc` can be held and passed but not read or built.
+//!
+//! Nothing above this file knows the host is involved.
+
+use std/js
+use std/math
+use std/errors
+
+/// A JSON value the host is holding.
+pub struct Doc {
+    raw: JsValue
+}
+
+/// A value that is not there.
+///
+/// Every accessor answers with this rather than with an `Option<Doc>`, which is
+/// what makes them chain: `doc.field(doc.field(d, "sale"), "total")` reads left
+/// to right and is absent the moment anything on the path is.
+pub fn nothing() -> Doc {
+    return Doc{ raw: js.nothing() }
+}
+
+pub fn missing(d: Doc) -> bool {
+    return js.is_nothing(d.raw)
+}
+
+// ---- reading ---------------------------------------------------------------
+
+pub fn parse(body: str) -> (Doc, error) {
+    let (value, err) = js.call1(js.global("JSON"), "parse", js.of_str(body))
+    check errors.wrap(err, "that is not JSON")
+    return Doc{ raw: value }, nil
+}
+
+pub fn field(d: Doc, name: str) -> Doc {
+    if js.is_nothing(d.raw) {
+        return nothing()
+    }
+    let (value, err) = js.get(d.raw, name)
+    if err != nil {
+        return nothing()
+    }
+    return Doc{ raw: value }
+}
+
+/// The elements of an array, or nothing at all.
+///
+/// A slice rather than a branch, because a caller iterating them wants a loop
+/// and not an `if` around one.
+pub fn items(d: Doc) -> [Doc] {
+    var out: [Doc] = []
+    if js.is_nothing(d.raw) {
+        return out
+    }
+    let (count, err) = js.length(d.raw)
+    if err != nil {
+        return out
+    }
+    for i in 0..count {
+        let (item, ierr) = js.at(d.raw, i)
+        if ierr == nil {
+            out.push(Doc{ raw: item })
+        }
+    }
+    return out
+}
+
+/// This value as text, or "" when it is not text.
+pub fn text_of(d: Doc) -> str {
+    let (body, err) = js.as_str(d.raw)
+    if err != nil {
+        return ""
+    }
+    return body
+}
+
+pub fn text(d: Doc, name: str, fallback: str) -> str {
+    if js.is_nothing(d.raw) {
+        return fallback
+    }
+    return js.str_or(d.raw, name, fallback)
+}
+
+/// A whole-number field, rounded rather than cast.
+///
+/// JSON has one numeric type and a count crosses as a double; `as int`
+/// truncates towards zero, which is the wrong answer for anything that was a
+/// whole number before it crossed — and every amount of money in this
+/// application is one.
+pub fn int_of(d: Doc, name: str, fallback: int) -> int {
+    if js.is_nothing(d.raw) {
+        return fallback
+    }
+    return math.round_to(js.num_or(d.raw, name, fallback as float))
+}
+
+/// A quantity, which is the one field that is legitimately fractional.
+pub fn num_of(d: Doc, name: str, fallback: float) -> float {
+    if js.is_nothing(d.raw) {
+        return fallback
+    }
+    return js.num_or(d.raw, name, fallback)
+}
+
+pub fn bool_of(d: Doc, name: str, fallback: bool) -> bool {
+    if js.is_nothing(d.raw) {
+        return fallback
+    }
+    return js.bool_or(d.raw, name, fallback)
+}
+
+/// An int held directly rather than under a name, for an array of numbers.
+pub fn as_int(d: Doc) -> int {
+    let (value, err) = js.as_num(d.raw)
+    if err != nil {
+        return 0
+    }
+    return math.round_to(value)
+}
+
+// ---- writing ---------------------------------------------------------------
+//
+// A request body is built as host objects and serialised by the host, so
+// writing costs what `JSON.stringify` costs rather than what appending
+// characters one at a time costs.
+
+pub fn object() -> Doc {
+    let (made, err) = js.new0("Object")
+    if err != nil {
+        return nothing()
+    }
+    return Doc{ raw: made }
+}
+
+pub fn array() -> Doc {
+    let (made, err) = js.new0("Array")
+    if err != nil {
+        return nothing()
+    }
+    return Doc{ raw: made }
+}
+
+fn write_field(d: Doc, name: str, value: JsValue) {
+    let err = js.set(d.raw, name, value)
+    if err != nil {
+        io.error("json: could not write \(name): \(err.message())")
+    }
+}
+
+pub fn put_text(d: Doc, name: str, value: str) {
+    write_field(d, name, js.of_str(value))
+}
+
+pub fn put_int(d: Doc, name: str, value: int) {
+    write_field(d, name, js.of_num(value as float))
+}
+
+pub fn put_num(d: Doc, name: str, value: float) {
+    write_field(d, name, js.of_num(value))
+}
+
+pub fn put_bool(d: Doc, name: str, value: bool) {
+    write_field(d, name, js.of_bool(value))
+}
+
+pub fn put(d: Doc, name: str, child: Doc) {
+    write_field(d, name, child.raw)
+}
+
+pub fn push(d: Doc, child: Doc) {
+    let (_, err) = js.call1(d.raw, "push", child.raw)
+    if err != nil {
+        io.error("json: could not append: \(err.message())")
+    }
+}
+
+pub fn push_text(d: Doc, value: str) {
+    let (_, err) = js.call1(d.raw, "push", js.of_str(value))
+    if err != nil {
+        io.error("json: could not append: \(err.message())")
+    }
+}
+
+pub fn write(d: Doc) -> str {
+    let (body, err) = js.call1(js.global("JSON"), "stringify", d.raw)
+    if err != nil {
+        return "null"
+    }
+    let (out, terr) = js.as_str(body)
+    if terr != nil {
+        return "null"
+    }
+    return out
+}

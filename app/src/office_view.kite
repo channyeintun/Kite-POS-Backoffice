@@ -1,0 +1,742 @@
+//! The back office, described.
+//!
+//! Pure functions from `desk.App` to `html.Node`, the same arrangement the till
+//! has — no document, no listeners, no requests.
+//!
+//! The shapes come from the design: a filled surface card with a 12 px radius
+//! on a slightly darker page (no borders anywhere), a stat card with a 4 px
+//! tone bar across its top, a ranked list with a meter under each name, pill
+//! buttons, and a dark rail with a section heading between groups.
+//!
+//! Colour means what it means at the till: green is open or valid, amber and
+//! magenta are attention, red is closed or wrong. A shop should not have to
+//! learn two vocabularies.
+
+use std/html
+use desk
+use i18n
+use words
+
+// ---- small pieces ----------------------------------------------------------
+
+fn act(name: str) -> html.Attr {
+    return html.data("action", name)
+}
+
+fn pill(label: str, classes: str, attrs: [html.Attr]) -> html.Node {
+    var all: [html.Attr] = [html.class(classes), html.attr("type", "button")]
+    all = concat(all, attrs)
+    return html.txt("button", all, label)
+}
+
+fn avatar(initials: str, classes: str) -> html.Node {
+    return html.txt("span", [html.class(classes)], initials)
+}
+
+/// The heading strip every card carries.
+fn card_head(heading: str, note: str, action: [html.Node]) -> html.Node {
+    var kids: [html.Node] = [
+        html.keyed("h", html.txt("h3", [html.class("card-title")], heading)),
+    ]
+    if note.len() > 0 {
+        kids.push(html.keyed("n", html.txt("span", [html.class("card-note")], note)))
+    }
+    kids.push(html.keyed("gap", html.el("span", [html.class("gap")], [])))
+    kids = concat(kids, action)
+    return html.keyed("head", html.el("div", [html.class("card-head")], kids))
+}
+
+// ---- the rail --------------------------------------------------------------
+
+fn nav_item(app: desk.App, screen: desk.Screen) -> html.Node {
+    let slug = desk.slug_of(screen)
+    var classes = "rail-item i-\(if slug.len() > 0 { slug } else { "overview" })"
+    // A drill-down keeps its section lit, so a reader on one receipt can still
+    // see where they are.
+    if desk.rail_screen_of(app.screen) == screen {
+        classes = classes + " on"
+    }
+    var kids: [html.Node] = [
+        html.keyed("label", html.txt("span", [html.class("rail-label")], desk.title_of(screen, app.lang))),
+    ]
+    let badge = desk.badge_of(app, screen)
+    if badge.len() > 0 {
+        kids.push(html.keyed("badge", html.txt("span", [html.class("badge")], badge)))
+    }
+    return html.keyed(slug + "-item", html.el("a", [
+                html.class(classes),
+                html.attr("href", desk.href_of(screen)),
+            ], kids))
+}
+
+/// The rail, grouped as the design groups it.
+///
+/// Built by walking `all_screens()` and starting a new group whenever the
+/// heading changes, so adding a screen is one line in `desk.kite` and nothing
+/// here.
+fn rail(app: desk.App) -> html.Node {
+    var kids: [html.Node] = [
+        html.keyed("brand", html.el("div", [html.class("brand")], [
+                    html.keyed("mark", avatar("CM", "mark")),
+                    html.keyed("name", html.el("span", [html.class("brand-text")], [
+                                html.keyed("n", html.txt("strong", [html.class("brand-name")],
+                                        desk.shop_of(app))),
+                                html.keyed("s", html.txt("span", [html.class("brand-sub")],
+                                        words.t(app.lang, "layout.back_office"))),
+                            ])),
+                ])),
+    ]
+
+    var group = ""
+    var items: [html.Node] = []
+    for screen in desk.all_screens() {
+        let wanted = desk.group_of(screen)
+        if wanted != group {
+            if items.len() > 0 {
+                kids.push(html.keyed("g\(group)", html.el("nav", [html.class("rail-group")], items)))
+                items = []
+            }
+            if wanted.len() > 0 {
+                kids.push(html.keyed("h\(wanted)",
+                        html.txt("div", [html.class("rail-head")], words.t(app.lang, wanted))))
+            }
+            group = wanted
+        }
+        items.push(nav_item(app, screen))
+    }
+    if items.len() > 0 {
+        kids.push(html.keyed("g\(group)", html.el("nav", [html.class("rail-group")], items)))
+    }
+
+    kids.push(html.keyed("foot", html.el("div", [html.class("rail-foot")], [
+                    html.keyed("out", html.el("button", [
+                                html.class("rail-me"),
+                                html.attr("type", "button"),
+                                act("sign-out"),
+                            ], [
+                                html.keyed("av", avatar(desk.initials_of(desk.who_of(app)), "mark small")),
+                                html.keyed("t", html.el("span", [html.class("brand-text")], [
+                                            html.keyed("n", html.txt("strong", [html.class("brand-name")],
+                                                    desk.who_of(app))),
+                                            html.keyed("s", html.txt("span", [html.class("brand-sub")],
+                                                    words.t(app.lang, "layout.sign_out"))),
+                                        ])),
+                            ])),
+                ])))
+
+    return html.keyed("rail", html.el("aside",
+            [html.class(if app.rail_open { "rail open" } else { "rail" })], kids))
+}
+
+// ---- the header ------------------------------------------------------------
+
+/// Lane health, in the back office's own words.
+///
+/// The same fact the till's status bar carries, said for somebody who is not
+/// standing at a lane: how many are open, what the drawers should hold, and
+/// whether any has stopped talking to the Worker.
+fn header(app: desk.App) -> html.Node {
+    var right: [html.Node] = []
+    if app.lanes_open > 0 {
+        // One phrase for any number of lanes. English lost its "1 lane"
+        // against "2 lanes" here, which is a smaller loss than a pill that
+        // reads correctly in one language and stitched-together in the other:
+        // မြန်မာ does not mark plurals, so the singular arm had nothing to say.
+        right.push(html.keyed("open", html.txt("span", [html.class("lane-pill ok")],
+                    "\(words.fill_n(app.lang, "tills.n_lanes_open", "\(app.lanes_open)")) · \(words.fill(app.lang, "tills.n_expected", app.drawer_expected))")))
+    }
+    if app.lanes_offline > 0 {
+        right.push(html.keyed("off", html.txt("span", [html.class("lane-pill warn")],
+                    words.fill_n(app.lang, "tills.n_offline", "\(app.lanes_offline)"))))
+    }
+    if app.busy {
+        right.push(html.keyed("busy", html.txt("span", [html.class("lane-pill")],
+                    words.t(app.lang, "common.loading"))))
+    }
+
+    // English ⇄ မြန်မာ, last in the group and reachable from every screen
+    // without opening anything. The same two-button shape as the till's, so a
+    // shopkeeper who has used one knows where the other is.
+    right.push(html.keyed("lang", html.el("div", [html.class("lang")], [
+                html.keyed("en", html.txt("button", [
+                            html.class(if app.lang == i18n.Lang.En { "lang-on" } else { "lang-off" }),
+                            html.attr("type", "button"),
+                            html.attr("lang", "en"),
+                            act("lang"),
+                            html.data("id", "en"),
+                        ], "English")),
+                html.keyed("my", html.txt("button", [
+                            html.class(if app.lang == i18n.Lang.My { "lang-on" } else { "lang-off" }),
+                            html.attr("type", "button"),
+                            html.attr("lang", "my"),
+                            act("lang"),
+                            html.data("id", "my"),
+                        ], "မြန်မာ")),
+            ])))
+
+    return html.keyed("header", html.el("header", [html.class("page-head")], [
+                html.keyed("burger", html.el("button", [
+                            html.class("burger"),
+                            html.attr("type", "button"),
+                            html.attr("aria-label", words.t(app.lang, "layout.toggle_menu")),
+                            act("rail"),
+                        ], [])),
+                html.keyed("h", html.txt("h1", [html.class("page-title")],
+                        desk.title_of(app.screen, app.lang))),
+                html.keyed("gap", html.el("span", [html.class("gap")], [])),
+                html.keyed("right", html.el("div", [html.class("head-right")], right)),
+            ]))
+}
+
+// ---- the blocks ------------------------------------------------------------
+
+fn stat_card(s: desk.Stat) -> html.Node {
+    return html.keyed(s.label, html.el("div", [html.class("stat")], [
+                // A 4 px field of colour across the top, which is the whole of
+                // how a stat card carries machine state.
+                html.keyed("tone", html.el("span",
+                        [html.class(if s.tone.len() > 0 { "stat-tone \(s.tone)" } else { "stat-tone" })],
+                        [])),
+                html.keyed("k", html.txt("span", [html.class("stat-label")], s.label)),
+                html.keyed("v", html.txt("span", [html.class("stat-value")], s.value)),
+                html.keyed("m", html.txt("span", [html.class("stat-meta")], s.meta)),
+            ]))
+}
+
+fn meter_row(m: desk.Meter) -> html.Node {
+    return html.keyed(m.key, html.el("div", [html.class("meter")], [
+                html.keyed("rank", html.txt("span", [html.class("rank")], m.rank)),
+                html.keyed("body", html.el("div", [html.class("meter-body")], [
+                            html.keyed("n", html.txt("strong", [html.class("meter-name")], m.name)),
+                            html.keyed("track", html.el("div", [html.class("track")], [
+                                        html.keyed("fill", html.el("div", [
+                                                    html.class("fill"),
+                                                    // The one inline style in this
+                                                    // application: a width that is
+                                                    // data cannot be a class.
+                                                    html.attr("style", "width:\(m.width)%"),
+                                                ], [])),
+                                    ])),
+                        ])),
+                html.keyed("value", html.el("div", [html.class("meter-value")], [
+                            html.keyed("v", html.txt("span", [], m.value)),
+                            html.keyed("s", html.txt("small", [], m.sub)),
+                        ])),
+            ]))
+}
+
+/// Whether a column holds figures.
+///
+/// Decided once per table, not once per cell: a heading that sits left over a
+/// column of right-aligned amounts is a heading that belongs to no column. A
+/// column counts as numeric when every non-empty cell in it is a figure, so one
+/// blank cell does not turn the column back into prose.
+fn is_amount(cell: str) -> bool {
+    if cell.len() == 0 {
+        return false
+    }
+    let head = cell.slice(0, 1)
+    if head == "−" || head == "-" {
+        return true
+    }
+    for digit in ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"] {
+        if head == digit {
+            return true
+        }
+    }
+    return starts_with(cell, "K") && cell.len() < 16
+}
+
+fn numeric_columns(table: desk.Table) -> [bool] {
+    var out: [bool] = []
+    for i in 0..table.columns.len() {
+        var seen = false
+        var all_figures = true
+        for row in table.rows {
+            let cell = or_else(row.cells.get(i), "")
+            if cell.len() == 0 {
+                continue
+            }
+            seen = true
+            if !is_amount(cell) {
+                all_figures = false
+            }
+        }
+        out.push(seen && all_figures)
+    }
+    return out
+}
+
+fn row_of(row: desk.Row, numeric: [bool]) -> html.Node {
+    var cells: [html.Node] = []
+    for (i, cell) in enumerate(row.cells) {
+        var classes = "cell"
+        if i == 0 {
+            classes = "cell first"
+        } else if or_else(numeric.get(i), false) {
+            classes = "cell num"
+        }
+        cells.push(html.keyed("c\(i)", html.txt("td", [html.class(classes)], cell)))
+    }
+    var attrs: [html.Attr] = [html.class(if row.tone.len() > 0 { "trow \(row.tone)" } else { "trow" })]
+    if row.action.len() > 0 {
+        attrs.push(html.data("action", row.action))
+        attrs.push(html.data("id", row.id))
+    }
+    return html.keyed(row.key, html.el("tr", attrs, cells))
+}
+
+fn table_block(table: desk.Table, l: i18n.Lang) -> html.Node {
+    let numeric = numeric_columns(table)
+
+    var head: [html.Node] = []
+    for (i, column) in enumerate(table.columns) {
+        var classes = "cell"
+        if i == 0 {
+            classes = "cell first"
+        } else if or_else(numeric.get(i), false) {
+            classes = "cell num"
+        }
+        head.push(html.keyed("h\(i)", html.txt("th", [html.class(classes)], column)))
+    }
+
+    var body: [html.Node] = []
+    if table.rows.len() == 0 {
+        body.push(html.keyed("none", html.el("tr", [], [
+                        html.keyed("c", html.txt("td",
+                                [html.class("cell empty"),
+                                    html.attr("colspan", "\(max(table.columns.len(), 1))")],
+                                words.t(l, "common.nothing_here_yet"))),
+                    ])))
+    } else {
+        for row in table.rows {
+            body.push(row_of(row, numeric))
+        }
+    }
+
+    return html.keyed("t-\(table.heading)", html.el("section", [html.class("card")], [
+                card_head(table.heading, table.note, []),
+                html.keyed("wrap", html.el("div", [html.class("table-wrap")], [
+                            html.keyed("t", html.el("table", [html.class("table")], [
+                                        html.keyed("thead", html.el("thead", [], [
+                                                    html.keyed("r", html.el("tr", [], head)),
+                                                ])),
+                                        html.keyed("tbody", html.el("tbody", [], body)),
+                                    ])),
+                        ])),
+            ]))
+}
+
+/// One lane, as a card.
+///
+/// This is what "a manager reaches a till here" looks like: who is on it, what
+/// the drawer should hold, what it is in the middle of, and the two things a
+/// manager can actually do from a desk — authorise, or take the lane off them.
+fn lane_card(t: desk.LaneCard, l: i18n.Lang) -> html.Node {
+    var actions: [html.Node] = [
+        html.keyed("auth", pill(words.t(l, "tills.authorise"), "pill soft",
+                [html.data("action", "authorise"), html.data("id", t.id)])),
+        html.keyed("shift", pill(words.t(l, "tills.shift_detail"), "pill quiet",
+                [html.data("action", "shift-detail"), html.data("id", t.id)])),
+        html.keyed("gap", html.el("span", [html.class("gap")], [])),
+    ]
+    if t.closeable {
+        actions.push(html.keyed("close", pill(t.close_label, "pill danger",
+                    [html.data("action", "close-lane"), html.data("id", t.id)])))
+    }
+
+    return html.keyed(t.id, html.el("div", [html.class("lane-card \(t.tone)")], [
+                html.keyed("top", html.el("div", [html.class("lane-top")], [
+                            html.keyed("n", html.txt("h3", [html.class("card-title")], t.name)),
+                            html.keyed("gap", html.el("span", [html.class("gap")], [])),
+                            html.keyed("s", html.txt("span", [html.class("state \(t.tone)")], t.state)),
+                        ])),
+                html.keyed("who", html.el("div", [html.class("lane-who")], [
+                            html.keyed("av", avatar(t.initials, "mark small")),
+                            html.keyed("t", html.el("span", [html.class("brand-text")], [
+                                        html.keyed("n", html.txt("strong", [html.class("brand-name")],
+                                                t.operator)),
+                                        html.keyed("s", html.txt("span", [html.class("brand-sub")],
+                                                t.since)),
+                                    ])),
+                        ])),
+                html.keyed("figures", html.el("div", [html.class("lane-figures")], [
+                            html.keyed("d", html.el("div", [], [
+                                        html.keyed("k", html.txt("span", [html.class("k")],
+                                                words.t(l, "tills.drawer"))),
+                                        html.keyed("v", html.txt("strong", [html.class("v")], t.drawer)),
+                                    ])),
+                            html.keyed("s", html.el("div", [], [
+                                        html.keyed("k", html.txt("span", [html.class("k")],
+                                                words.t(l, "common.sales"))),
+                                        html.keyed("v", html.txt("strong", [html.class("v")], t.sales)),
+                                    ])),
+                            html.keyed("h", html.el("div", [], [
+                                        html.keyed("k", html.txt("span", [html.class("k")],
+                                                words.t(l, "ui.held"))),
+                                        html.keyed("v", html.txt("strong", [html.class("v")], t.held)),
+                                    ])),
+                        ])),
+                html.keyed("note", html.txt("p", [html.class("lane-note")], t.note)),
+                html.keyed("actions", html.el("div", [html.class("lane-actions")], actions)),
+            ]))
+}
+
+fn role_card(r: desk.RoleCard) -> html.Node {
+    var chips: [html.Node] = []
+    for (i, chip) in enumerate(r.chips) {
+        chips.push(html.keyed("c\(i)", html.txt("span", [html.class("chip")], chip)))
+    }
+    return html.keyed(r.role, html.el("div", [html.class("role-card")], [
+                html.keyed("r", html.txt("span", [html.class("role-name")], r.role)),
+                html.keyed("o", html.txt("strong", [html.class("role-opens")], r.opens)),
+                html.keyed("b", html.txt("p", [html.class("role-body")], r.body)),
+                html.keyed("chips", html.el("div", [html.class("chips")], chips)),
+            ]))
+}
+
+fn stats_block(items: [desk.Stat]) -> html.Node {
+    var cards: [html.Node] = []
+    for s in items {
+        cards.push(stat_card(s))
+    }
+    return html.el("div", [html.class("stats")], cards)
+}
+
+fn meters_block(heading: str, note: str, rows: [desk.Meter], l: i18n.Lang) -> html.Node {
+    var out: [html.Node] = []
+    if rows.len() == 0 {
+        out.push(html.keyed("none", html.txt("p", [html.class("empty-note")],
+                    words.t(l, "common.nothing_here_yet"))))
+    }
+    for m in rows {
+        out.push(meter_row(m))
+    }
+    return html.el("section", [html.class("card")], [
+            card_head(heading, note, []),
+            html.keyed("body", html.el("div", [html.class("meters")], out)),
+        ])
+}
+
+fn lanes_block(cards: [desk.LaneCard], l: i18n.Lang) -> html.Node {
+    var out: [html.Node] = []
+    for c in cards {
+        out.push(lane_card(c, l))
+    }
+    return html.el("div", [html.class("lane-grid")], out)
+}
+
+fn roles_block(cards: [desk.RoleCard]) -> html.Node {
+    var out: [html.Node] = []
+    for c in cards {
+        out.push(role_card(c))
+    }
+    return html.el("div", [html.class("role-grid")], out)
+}
+
+fn action_button(a: desk.Action, index: int) -> html.Node {
+    return html.keyed("a\(index)\(a.action)\(a.id)", pill(a.label, "pill \(a.tone)",
+            [html.data("action", a.action), html.data("id", a.id)]))
+}
+
+fn buttons_block(items: [desk.Action]) -> html.Node {
+    var out: [html.Node] = []
+    for (i, a) in enumerate(items) {
+        out.push(action_button(a, i))
+    }
+    return html.el("div", [html.class("buttons")], out)
+}
+
+/// The header of a drill-down.
+///
+/// A title, the handful of facts a reader wants before anything else, and what
+/// can be done from here. The facts are a grid rather than prose because they
+/// are read at a glance and compared against each other.
+fn detail_block(title: str, subtitle: str, facts: [desk.Fact], actions: [desk.Action]) -> html.Node {
+    var cells: [html.Node] = []
+    for (i, f) in enumerate(facts) {
+        cells.push(html.keyed("f\(i)", html.el("div", [html.class("fact")], [
+                        html.keyed("k", html.txt("span", [html.class("k")], f.label)),
+                        html.keyed("v", html.txt("strong",
+                                [html.class(if f.tone.len() > 0 { "v \(f.tone)" } else { "v" })],
+                                f.value)),
+                    ])))
+    }
+    var buttons: [html.Node] = []
+    for (i, a) in enumerate(actions) {
+        buttons.push(action_button(a, i))
+    }
+    return html.el("section", [html.class("card detail")], [
+            html.keyed("top", html.el("div", [html.class("detail-top")], [
+                        html.keyed("t", html.el("div", [], [
+                                    html.keyed("h", html.txt("h2", [html.class("detail-title")], title)),
+                                    html.keyed("s", html.txt("p", [html.class("detail-sub")], subtitle)),
+                                ])),
+                        html.keyed("gap", html.el("span", [html.class("gap")], [])),
+                        html.keyed("a", html.el("div", [html.class("detail-actions")], buttons)),
+                    ])),
+            html.keyed("facts", html.el("div", [html.class("facts")], cells)),
+        ])
+}
+
+/// A receipt, laid out to be printed.
+///
+/// Monospaced and narrow, because that is the shape of the paper it comes out
+/// on. `@media print` in the stylesheet drops everything else on the page, so
+/// the browser's own print dialog is the print button.
+fn receipt_block(lines: [str], head: [str], foot: [str]) -> html.Node {
+    var out: [html.Node] = []
+    for (i, l) in enumerate(head) {
+        out.push(html.keyed("h\(i)", html.txt("div", [html.class("r-head")], l)))
+    }
+    out.push(html.keyed("rule1", html.el("div", [html.class("r-rule")], [])))
+    for (i, l) in enumerate(lines) {
+        out.push(html.keyed("l\(i)", html.txt("div", [html.class("r-line")], l)))
+    }
+    out.push(html.keyed("rule2", html.el("div", [html.class("r-rule")], [])))
+    for (i, l) in enumerate(foot) {
+        out.push(html.keyed("f\(i)", html.txt("div", [html.class("r-foot")], l)))
+    }
+    return html.el("section", [html.class("card receipt-card")], [
+            html.keyed("paper", html.el("div", [html.class("receipt")], out)),
+        ])
+}
+
+fn note_block(heading: str, body: str) -> html.Node {
+    return html.el("section", [html.class("card")], [
+            card_head(heading, "", []),
+            html.keyed("body", html.txt("p", [html.class("card-body")], body)),
+        ])
+}
+
+/// One block, drawn.
+///
+/// One arm per block kind, each a single call into the function that draws it.
+///
+/// **The key carries the kind as well as the position.** Keyed on the index
+/// alone, a `Stats` block at position 3 and a `Grid` block at position 3 look
+/// like the same node to the differ, which then patches one into the other
+/// instead of replacing it — and the screen keeps the old block. That was
+/// invisible while every screen's block list was fixed; it appeared the moment
+/// the books grew sub-sheets, where switching from Summary to Trial balance
+/// swaps a `Stats` for a `Grid` at the same position and the old cards simply
+/// stayed on screen.
+fn block_of(block: desk.Block, index: int, l: i18n.Lang) -> html.Node {
+    return match block {
+        Stats(items) => html.keyed("stats\(index)", stats_block(items)),
+        Meters(heading, note, rows) =>
+            html.keyed("meters\(index)", meters_block(heading, note, rows, l)),
+        Grid(table) => html.keyed("grid\(index)", table_block(table, l)),
+        Lanes(cards) => html.keyed("lanes\(index)", lanes_block(cards, l)),
+        Roles(cards) => html.keyed("roles\(index)", roles_block(cards)),
+        Note(heading, body) => html.keyed("note\(index)", note_block(heading, body)),
+        Buttons(items) => html.keyed("buttons\(index)", buttons_block(items)),
+        Detail(title, subtitle, facts, actions) =>
+            html.keyed("detail\(index)", detail_block(title, subtitle, facts, actions)),
+        Receipt(lines, head, foot) => html.keyed("receipt\(index)", receipt_block(lines, head, foot)),
+    }
+}
+
+// ---- the form dialog -------------------------------------------------------
+
+/// One field.
+///
+/// Every input carries `id="f-<name>"`, which is the whole contract between
+/// this file and `office.kite`: the submit handler reads the fields the form
+/// declared, by name, and never has to know which screen opened it.
+fn toggle_attrs(id: str, name: str, on: bool) -> [html.Attr] {
+    var attrs: [html.Attr] = [html.id(id), html.data("field", name), html.attr("type", "checkbox")]
+    if on {
+        attrs.push(html.attr("checked", "checked"))
+    }
+    return attrs
+}
+
+fn field_of(f: desk.Field) -> html.Node {
+    let id = "f-\(f.name)"
+    var control = match f.kind {
+        Text => html.empty("input", [
+                html.id(id), html.data("field", f.name), html.class("field"), html.attr("type", "text"),
+                html.attr("value", f.value), html.attr("autocomplete", "off"),
+            ]),
+        Lines => html.txt("textarea",
+                [html.id(id), html.data("field", f.name), html.class("field lines"), html.attr("rows", "3")],
+                f.value),
+        Money => html.empty("input", [
+                html.id(id), html.data("field", f.name), html.class("field"), html.attr("type", "text"),
+                html.attr("inputmode", "decimal"), html.attr("value", f.value),
+                html.attr("autocomplete", "off"),
+            ]),
+        Whole => html.empty("input", [
+                html.id(id), html.data("field", f.name), html.class("field"), html.attr("type", "number"),
+                html.attr("step", "1"), html.attr("value", f.value),
+            ]),
+        Quantity => html.empty("input", [
+                html.id(id), html.data("field", f.name), html.class("field"), html.attr("type", "number"),
+                html.attr("step", "0.001"), html.attr("value", f.value),
+            ]),
+        Choice(options, labels) => choice_of(id, f.name, options, labels, f.value),
+        Toggle => html.el("label", [html.class("toggle")], [
+                html.keyed("box", html.empty("input", toggle_attrs(id, f.name, f.value == "1"))),
+                html.keyed("t", html.txt("span", [], f.hint)),
+            ]),
+        Password => html.empty("input", [
+                html.id(id), html.data("field", f.name), html.class("field"), html.attr("type", "password"),
+                html.attr("autocomplete", "new-password"),
+            ]),
+        Readonly => html.txt("div", [html.class("field readonly")], f.value),
+    }
+
+    var kids: [html.Node] = [
+        html.keyed("l", html.txt("label", [html.class("field-label"), html.attr("for", id)],
+                if f.required { "\(f.label) *" } else { f.label })),
+        html.keyed("c", control),
+    ]
+    if f.hint.len() > 0 && f.kind != desk.FieldKind.Toggle {
+        kids.push(html.keyed("h", html.txt("span", [html.class("field-hint")], f.hint)))
+    }
+    return html.keyed(f.name, html.el("div", [html.class("field-row")], kids))
+}
+
+fn choice_of(id: str, name: str, options: [str], labels: [str], value: str) -> html.Node {
+    var out: [html.Node] = []
+    for (i, o) in enumerate(options) {
+        var attrs: [html.Attr] = [html.attr("value", o)]
+        if o == value {
+            attrs.push(html.attr("selected", "selected"))
+        }
+        out.push(html.keyed(o, html.txt("option", attrs, or_else(labels.get(i), o))))
+    }
+    return html.el("select", [html.id(id), html.data("field", name), html.class("field")], out)
+}
+
+fn dialog(f: desk.Form, l: i18n.Lang) -> html.Node {
+    var kids: [html.Node] = [
+        html.keyed("t", html.txt("h2", [html.class("form-title")], f.title)),
+    ]
+    if f.lede.len() > 0 {
+        kids.push(html.keyed("l", html.txt("p", [html.class("form-lede")], f.lede)))
+    }
+    if f.trouble.len() > 0 {
+        kids.push(html.keyed("x", html.txt("div", [html.class("trouble-bar")], f.trouble)))
+    }
+    var rows: [html.Node] = []
+    for field in f.fields {
+        rows.push(field_of(field))
+    }
+    kids.push(html.keyed("fields", html.el("div", [html.class("fields")], rows)))
+    kids.push(html.keyed("actions", html.el("div", [html.class("form-actions")], [
+                    html.keyed("no", pill(words.t(l, "common.cancel"), "pill quiet",
+                            [act("form-cancel")])),
+                    html.keyed("yes", pill(
+                            if f.busy { words.t(l, "common.saving") } else { f.submit },
+                            "pill filled", [act("form-submit")])),
+                ])))
+    return html.keyed("dialog", html.el("div", [html.class("shade")], [
+                html.keyed("panel", html.el("div", [html.class("form-panel")], kids)),
+            ]))
+}
+
+// ---- signing in ------------------------------------------------------------
+
+fn sign_in(app: desk.App) -> [html.Node] {
+    return [
+        html.keyed("signin", html.el("main", [html.class("office-signin")], [
+                    html.keyed("card", html.el("div", [html.class("signin-card")], [
+                                html.keyed("mark", avatar("CM", "mark")),
+                                html.keyed("h", html.txt("h1", [],
+                                        words.t(app.lang, "layout.back_office"))),
+                                // Said plainly, because a cashier who lands here
+                                // by following a bookmark should be told where to
+                                // go rather than left guessing at a password.
+                                html.keyed("lede", html.txt("p", [html.class("lede")],
+                                        words.t(app.lang, "login.managers_and_owners_sign_in_here"))),
+                                html.keyed("user", html.empty("input", [
+                                            html.id("username"),
+                                            html.class("field"),
+                                            html.attr("type", "text"),
+                                            html.attr("placeholder",
+                                                words.t(app.lang, "common.username")),
+                                            html.attr("autocomplete", "username"),
+                                        ])),
+                                html.keyed("pass", html.empty("input", [
+                                            html.id("password"),
+                                            html.class("field"),
+                                            html.attr("type", "password"),
+                                            html.attr("placeholder",
+                                                words.t(app.lang, "common.password")),
+                                            html.attr("autocomplete", "current-password"),
+                                        ])),
+                                html.keyed("go", pill(
+                                        if app.signing_in {
+                                            words.t(app.lang, "login.signing_in")
+                                        } else {
+                                            words.t(app.lang, "common.sign_in")
+                                        },
+                                        "pill filled wide", [act("sign-in")])),
+                                html.keyed("trouble", html.txt("p", [html.class("trouble")], app.trouble)),
+                            ])),
+                ])),
+    ]
+}
+
+// ---- the page --------------------------------------------------------------
+
+pub fn page(app: desk.App) -> [html.Node] {
+    if app.session == nil {
+        return sign_in(app)
+    }
+
+    var main: [html.Node] = [header(app)]
+
+    var body: [html.Node] = []
+    // The greeting, which is the design's way of saying whose shop this is
+    // before it says anything about it.
+    if app.screen == desk.Screen.Overview {
+        body.push(html.keyed("greet", html.el("div", [html.class("greeting")], [
+                        html.keyed("t", html.el("div", [], [
+                                    html.keyed("h", html.txt("h2", [html.class("greet-title")],
+                                            words.fill(app.lang, "dashboard.greet_day",
+                                                desk.who_of(app)))),
+                                    html.keyed("s", html.txt("p", [html.class("greet-sub")],
+                                            desk.shop_of(app))),
+                                ])),
+                        html.keyed("gap", html.el("span", [html.class("gap")], [])),
+                        html.keyed("actions", html.el("div", [html.class("greet-actions")], [
+                                    html.keyed("r", pill(words.t(app.lang, "common.reports"),
+                                            "pill soft",
+                                            [html.data("action", "go"), html.data("id", "reports")])),
+                                    html.keyed("t", pill(words.t(app.lang, "nav.tills"),
+                                            "pill filled",
+                                            [html.data("action", "go"), html.data("id", "tills")])),
+                                ])),
+                    ])))
+    }
+
+    if app.trouble.len() > 0 {
+        body.push(html.keyed("trouble", html.txt("div", [html.class("trouble-bar")], app.trouble)))
+    }
+    for (i, block) in enumerate(app.blocks) {
+        body.push(block_of(block, i, app.lang))
+    }
+    if app.blocks.len() == 0 && app.trouble.len() == 0 {
+        body.push(html.keyed("loading", html.txt("p", [html.class("empty-note")],
+                    words.t(app.lang, "common.loading"))))
+    }
+
+    main.push(html.keyed("scroll", html.el("div", [html.class("scroll")], [
+                    html.keyed("inner", html.el("div", [html.class("inner")], body)),
+                ])))
+
+    var out: [html.Node] = [
+        html.keyed("shell", html.el("div", [html.class("office")], [
+                    rail(app),
+                    html.keyed("main", html.el("main", [html.class("page")], main)),
+                ])),
+    ]
+    let open = app.form
+    if open != nil {
+        out.push(dialog(open, app.lang))
+    }
+    return out
+}

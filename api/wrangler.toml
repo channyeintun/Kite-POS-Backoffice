@@ -1,0 +1,32 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "kite-pos-api"
+main = "src/index.ts"
+compatibility_date = "2025-01-15"
+compatibility_flags = ["nodejs_compat"]
+
+# The till and the back office are served from Pages on their own origins, so
+# every request they make is cross-origin and the allowed list has to be real.
+# Set it to the deployed Pages URLs before the shop opens; `*` is refused by
+# `cors.ts` whenever credentials are involved, which is always here.
+[vars]
+ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:4173"
+SESSION_HOURS = "14"
+
+# D1 free tier: 5 GB storage, 5 million rows read a day. A corner shop writes a
+# few thousand rows a day, so the binding cost of this project is the reads on
+# the reports — which is why every report here is a GROUP BY the database does
+# rather than rows this Worker pulls across and adds up itself.
+[[d1_databases]]
+binding = "DB"
+database_name = "kite-pos"
+database_id = "PLACEHOLDER-RUN-WRANGLER-D1-CREATE"
+migrations_dir = "migrations"
+
+# Product photos. R2's free tier has no egress charge, which is the whole
+# reason the pictures live here and not as base64 in a D1 column.
+[[r2_buckets]]
+binding = "PHOTOS"
+bucket_name = "kite-pos-photos"
+
+[observability]
+enabled = true

@@ -1,0 +1,24 @@
+{
+  "name": "kite-pos",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A point of sale for a corner shop: a Hono Worker over D1 and R2, and two Kite PWAs.",
+  "workspaces": ["api", "app"],
+  "scripts": {
+    "dev": "npm run dev --workspace=@kite-pos/api & npm run dev --workspace=@kite-pos/app",
+    "dev:api": "npm run dev --workspace=@kite-pos/api",
+    "dev:app": "npm run dev --workspace=@kite-pos/app",
+    "build": "npm run build --workspace=@kite-pos/app",
+    "check": "npm run typecheck --workspace=@kite-pos/api && npm run check --workspace=@kite-pos/app",
+    "test": "npm run test --workspace=@kite-pos/api && npm run test --workspace=@kite-pos/app",
+    "test:smoke": "node api/test/smoke.mjs",
+    "setup": "npm run db:migrate:local --workspace=@kite-pos/api",
+    "deploy:api": "npm run deploy --workspace=@kite-pos/api",
+    "deploy:app": "npm run build --workspace=@kite-pos/app && npm run deploy --workspace=@kite-pos/app"
+  },
+  "//allowScripts": "Hoisted from both workspaces. Each fetches a platform binary its tool is useless without: esbuild bundles, and workerd is the runtime `wrangler dev` runs the Worker in.",
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "workerd@1.20260801.1": true
+  }
+}

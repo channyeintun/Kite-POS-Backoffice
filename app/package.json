@@ -1,0 +1,28 @@
+{
+  "name": "@kite-pos/app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "The till and the back office: two pages, two Kite programs, one module.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "node test/check-kite.mjs src/pos.kite src/office.kite",
+    "fmt": "npx kitec fmt src/*.kite",
+    "fmt:check": "npx kitec fmt --check src/*.kite",
+    "test": "node test/run-kite.mjs test/money_test.kite",
+    "deploy": "wrangler pages deploy dist --project-name kite-pos"
+  },
+  "devDependencies": {
+    "@kite-lang/compiler-wasm": "^0.1.5",
+    "vite": "^7.0.0",
+    "vite-plugin-kite": "^0.1.5",
+    "wrangler": "^4.120.0"
+  },
+  "//allowScripts": "esbuild is Vite's bundler and workerd is what `wrangler pages dev` serves through; both fetch a platform binary their tool is useless without.",
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "workerd@1.20260801.1": true
+  }
+}

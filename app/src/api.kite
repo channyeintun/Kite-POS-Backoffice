@@ -1,0 +1,678 @@
+//! Talking to the Worker.
+//!
+//! Every call answers `(doc.Doc, error)`, so a caller cannot use a result
+//! without having said what happens when the lane was offline. What is *not*
+//! collapsed into that error is a refusal the till has to act on: a 422 asking
+//! for ID or for a price is a normal step in ringing a sale, not a failure, so
+//! it comes back as a document with `needs` in it and the caller branches.
+//!
+//! There is no client object. A [`model.Session`] carries the token and is
+//! passed in; a signed-out call takes nothing, because there is no session yet
+//! by definition.
+
+use std/http
+use std/errors
+use doc
+use model
+use browser
+
+/// Where the API lives.
+///
+/// Read from a `<meta name="api-base">` in the page, defaulting to a
+/// same-origin `/api`. In development Vite proxies that to the Worker on 8787;
+/// in production the meta names the deployed Worker, because the till is on
+/// Pages and the API is not. Putting it in the HTML means the same build
+/// artefacts deploy to a test shop and a real one.
+pub fn base() -> str {
+    let kept = browser.meta("api-base")
+    if kept.len() > 0 {
+        return kept
+    }
+    return "/api"
+}
+
+fn headers_for(token: str, body: str) -> str {
+    var lines: [str] = ["accept: application/json"]
+    if body.len() > 0 {
+        lines.push("content-type: application/json")
+    }
+    if token.len() > 0 {
+        lines.push("authorization: Bearer \(token)")
+    }
+    return join(lines, "\n")
+}
+
+/// What a status means, in words an operator can act on.
+///
+/// The number is not the cashier's business, and the difference between a 401
+/// and a 429 is the difference between "sign in again" and "wait a moment".
+fn refused(status: int, body: str) -> error {
+    let parsed = parse_message(body)
+    if parsed.len() > 0 {
+        return errors.new(parsed)
+    }
+    if status == 401 {
+        return errors.new("that session has ended — sign in again")
+    }
+    if status == 403 {
+        return errors.new("that needs a manager")
+    }
+    if status == 404 {
+        return errors.new("that is not here")
+    }
+    if status == 429 {
+        return errors.new("too many tries — wait a moment")
+    }
+    if status >= 500 {
+        return errors.new("the shop's server is having trouble (\(status))")
+    }
+    return errors.new("that did not go through (\(status))")
+}
+
+/// The sentence the server put in the body, if it put one there.
+fn parse_message(body: str) -> str {
+    let (parsed, err) = doc.parse(body)
+    if err != nil {
+        return ""
+    }
+    return doc.text(doc.field(parsed, "error"), "message", "")
+}
+
+/// The machine-readable half of a refusal, for the cases the till branches on.
+pub fn code_of(body: doc.Doc) -> str {
+    return doc.text(doc.field(body, "error"), "code", "")
+}
+
+/// One request.
+///
+/// A 422 is answered as a **document rather than an error**, because the two
+/// 422s this API sends — "this needs ID" and "this product has no shelf price"
+/// — are steps in a sale rather than failures of one. Everything else that is
+/// not a 2xx becomes an error carrying the server's own sentence.
+pub async fn send(token: str, method: str, path: str, body: str) -> (doc.Doc, error) {
+    let (response, err) = await http.send(method, "\(base())\(path)", body, headers_for(token, body))
+    check errors.wrap(err, "the lane is offline")
+
+    if response.status == 422 {
+        let (needs, perr) = doc.parse(response.body)
+        check errors.wrap(perr, "that answer was not JSON")
+        return needs, nil
+    }
+    if !http.succeeded(response) {
+        return _, refused(response.status, response.body)
+    }
+    // A 204 has no body and nothing to read; every other success does.
+    if response.body.len() == 0 {
+        return doc.object(), nil
+    }
+    let (parsed, perr) = doc.parse(response.body)
+    check errors.wrap(perr, "that answer was not JSON")
+    return parsed, nil
+}
+
+pub async fn get(token: str, path: str) -> (doc.Doc, error) {
+    return await send(token, "GET", path, "")
+}
+
+pub async fn post(token: str, path: str, body: doc.Doc) -> (doc.Doc, error) {
+    return await send(token, "POST", path, doc.write(body))
+}
+
+pub async fn patch(token: str, path: str, body: doc.Doc) -> (doc.Doc, error) {
+    return await send(token, "PATCH", path, doc.write(body))
+}
+
+pub async fn remove(token: str, path: str) -> (doc.Doc, error) {
+    return await send(token, "DELETE", path, "")
+}
+
+// ---- signing in ------------------------------------------------------------
+
+pub async fn sign_in_with_pin(pin: str, register_id: str) -> (model.Session, error) {
+    let body = doc.object()
+    doc.put_text(body, "pin", pin)
+    doc.put_text(body, "register_id", register_id)
+    let (answer, err) = await post("", "/auth/pin", body)
+    check err
+    let token = doc.text(answer, "token", "")
+    if token.len() == 0 {
+        return _, errors.new("that PIN was not recognised")
+    }
+    return model.session_of(answer, token), nil
+}
+
+pub async fn sign_in_with_password(username: str, password: str) -> (model.Session, error) {
+    let body = doc.object()
+    doc.put_text(body, "username", username)
+    doc.put_text(body, "password", password)
+    let (answer, err) = await post("", "/auth/password", body)
+    check err
+    let token = doc.text(answer, "token", "")
+    if token.len() == 0 {
+        return _, errors.new("that username and password do not match")
+    }
+    return model.session_of(answer, token), nil
+}
+
+/// Who this token belongs to — what a reloaded page asks before drawing.
+pub async fn whoami(token: str) -> (model.Session, error) {
+    let (answer, err) = await get(token, "/auth/me")
+    check err
+    return model.session_of(answer, token), nil
+}
+
+// ---- the till --------------------------------------------------------------
+
+pub async fn basket(token: str) -> (doc.Doc, error) {
+    return await get(token, "/till/basket")
+}
+
+pub async fn scan(token: str, code: str, product_id: str, qty: float, age_checked: bool,
+    price: int, ask_price: bool) -> (doc.Doc, error) {
+    let body = doc.object()
+    if code.len() > 0 {
+        doc.put_text(body, "code", code)
+    }
+    if product_id.len() > 0 {
+        doc.put_text(body, "product_id", product_id)
+    }
+    if qty > 0.0 {
+        doc.put_num(body, "qty", qty)
+    }
+    if age_checked {
+        doc.put_bool(body, "age_checked", true)
+    }
+    if ask_price {
+        doc.put_int(body, "price", price)
+    }
+    return await post(token, "/till/scan", body)
+}
+
+pub async fn set_qty(token: str, line_id: str, qty: float) -> (doc.Doc, error) {
+    let body = doc.object()
+    doc.put_num(body, "qty", qty)
+    return await patch(token, "/till/line/\(line_id)", body)
+}
+
+pub async fn void_line(token: str, line_id: str) -> (doc.Doc, error) {
+    return await remove(token, "/till/line/\(line_id)")
+}
+
+pub async fn adjust_line(token: str, line_id: str, kind: str, amount: int,
+    manager_pin: str) -> (doc.Doc, error) {
+    let body = doc.object()
+    doc.put_text(body, "kind", kind)
+    if kind == "discount" {
+        doc.put_int(body, "amount", amount)
+    }
+    if kind == "override" {
+        doc.put_int(body, "price", amount)
+    }
+    if manager_pin.len() > 0 {
+        doc.put_text(body, "manager_pin", manager_pin)
+    }
+    return await post(token, "/till/line/\(line_id)/adjust", body)
+}
+
+pub async fn hold(token: str, label: str) -> (doc.Doc, error) {
+    let body = doc.object()
+    doc.put_text(body, "label", label)
+    return await post(token, "/till/hold", body)
+}
+
+pub async fn held(token: str) -> (doc.Doc, error) {
+    return await get(token, "/till/held")
+}
+
+pub async fn recall(token: str, id: str) -> (doc.Doc, error) {
+    return await post(token, "/till/held/\(id)/recall", doc.object())
+}
+
+pub async fn void_sale(token: str, reason: str, manager_pin: str) -> (doc.Doc, error) {
+    let body = doc.object()
+    doc.put_text(body, "reason", reason)
+    if manager_pin.len() > 0 {
+        doc.put_text(body, "manager_pin", manager_pin)
+    }
+    return await post(token, "/till/void", body)
+}
+
+/// Finish the sale.
+///
+/// `client_id` is an idempotency key the server dedupes on, and it is generated
+/// once per attempt rather than per retry — which is the whole point: a lane
+/// that loses the answer and asks again lands on the same sale instead of
+/// ringing a second one.
+pub async fn pay(token: str, payments: [model.Payment], client_id: str) -> (doc.Doc, error) {
+    let body = doc.object()
+    doc.put_text(body, "client_id", client_id)
+    let list = doc.array()
+    for p in payments {
+        let entry = doc.object()
+        doc.put_text(entry, "method", model.tender_code(p.tender))
+        doc.put_int(entry, "amount", p.amount)
+        doc.put_int(entry, "tendered", p.amount)
+        if p.reference.len() > 0 {
+            doc.put_text(entry, "reference", p.reference)
+        }
+        doc.push(list, entry)
+    }
+    doc.put(body, "payments", list)
+    return await post(token, "/till/pay", body)
+}
+
+pub async fn grid(token: str) -> (doc.Doc, error) {
+    return await get(token, "/till/grid")
+}
+
+pub async fn search(token: str, q: str) -> (doc.Doc, error) {
+    return await get(token, "/till/search?q=\(browser.escaped(q))")
+}
+
+pub async fn price_check(token: str, code: str) -> (doc.Doc, error) {
+    return await get(token, "/till/price/\(browser.escaped(code))")
+}
+
+// ---- the rest of the till's command bar ------------------------------------
+
+pub async fn customers_at_till(token: str, q: str) -> (doc.Doc, error) {
+    return await get(token, "/till/customers?q=\(browser.escaped(q))")
+}
+
+pub async fn set_customer(token: str, customer_id: str) -> (doc.Doc, error) {
+    let body = doc.object()
+    doc.put_text(body, "customer_id", customer_id)
+    return await post(token, "/till/customer", body)
+}
+
+pub async fn new_customer(token: str, name: str, phone: str) -> (doc.Doc, error) {
+    let body = doc.object()
+    doc.put_text(body, "name", name)
+    doc.put_text(body, "phone", phone)
+    return await post(token, "/till/customers", body)
+}
+
+pub async fn receipts(token: str, q: str) -> (doc.Doc, error) {
+    return await get(token, "/till/receipts?q=\(browser.escaped(q))")
+}
+
+pub async fn receipt(token: str, id: str) -> (doc.Doc, error) {
+    return await get(token, "/till/receipts/\(id)")
+}
+
+pub async fn take_return(token: str, sale_id: str, lines: [model.ReturnLine],
+    reason: str, manager_pin: str) -> (doc.Doc, error) {
+    let body = doc.object()
+    doc.put_text(body, "sale_id", sale_id)
+    doc.put_text(body, "reason", reason)
+    if manager_pin.len() > 0 {
+        doc.put_text(body, "manager_pin", manager_pin)
+    }
+    let list = doc.array()
+    for l in lines {
+        if l.taking > 0.0 {
+            let entry = doc.object()
+            doc.put_text(entry, "sale_item_id", l.id)
+            doc.put_num(entry, "qty", l.taking)
+            doc.push(list, entry)
+        }
+    }
+    doc.put(body, "lines", list)
+    return await post(token, "/till/return", body)
+}
+
+pub async fn no_sale(token: str, reason: str, manager_pin: str) -> (doc.Doc, error) {
+    let body = doc.object()
+    doc.put_text(body, "reason", reason)
+    if manager_pin.len() > 0 {
+        doc.put_text(body, "manager_pin", manager_pin)
+    }
+    return await post(token, "/till/no-sale", body)
+}
+
+pub async fn close_lane(token: str, counted: int, manager_pin: str) -> (doc.Doc, error) {
+    let body = doc.object()
+    doc.put_int(body, "counted_total", counted)
+    if manager_pin.len() > 0 {
+        doc.put_text(body, "manager_pin", manager_pin)
+    }
+    return await post(token, "/till/close-lane", body)
+}
+
+pub async fn sign_out(token: str) -> (doc.Doc, error) {
+    return await post(token, "/auth/sign-out", doc.object())
+}
+
+// ---- the back office -------------------------------------------------------
+
+pub async fn overview(token: str) -> (doc.Doc, error) {
+    return await get(token, "/reports/overview")
+}
+
+pub async fn lanes(token: str) -> (doc.Doc, error) {
+    return await get(token, "/tills")
+}
+
+pub async fn products(token: str, q: str) -> (doc.Doc, error) {
+    return await get(token, "/catalog/products?q=\(browser.escaped(q))")
+}
+
+pub async fn inventory(token: str) -> (doc.Doc, error) {
+    return await get(token, "/inventory")
+}
+
+pub async fn sales_history(token: str, from: int, to: int) -> (doc.Doc, error) {
+    return await get(token, "/sales?from=\(from)&to=\(to)")
+}
+
+pub async fn shifts(token: str) -> (doc.Doc, error) {
+    return await get(token, "/shifts")
+}
+
+pub async fn staff(token: str) -> (doc.Doc, error) {
+    return await get(token, "/staff")
+}
+
+pub async fn audit(token: str, from: int) -> (doc.Doc, error) {
+    return await get(token, "/sales/audit/log?from=\(from)")
+}
+
+pub async fn product_report(token: str, from: int, to: int) -> (doc.Doc, error) {
+    return await get(token, "/reports/products?from=\(from)&to=\(to)")
+}
+
+pub async fn sales_report(token: str, from: int, to: int) -> (doc.Doc, error) {
+    return await get(token, "/reports/sales?from=\(from)&to=\(to)")
+}
+
+pub async fn worksheet(token: str, days: int) -> (doc.Doc, error) {
+    return await get(token, "/purchasing/worksheet?days=\(days)")
+}
+
+pub async fn purchase_orders(token: str) -> (doc.Doc, error) {
+    return await get(token, "/purchasing/orders")
+}
+
+pub async fn suppliers(token: str) -> (doc.Doc, error) {
+    return await get(token, "/catalog/suppliers")
+}
+
+pub async fn categories(token: str) -> (doc.Doc, error) {
+    return await get(token, "/catalog/categories")
+}
+
+pub async fn customers(token: str) -> (doc.Doc, error) {
+    return await get(token, "/customers")
+}
+
+pub async fn promotions(token: str) -> (doc.Doc, error) {
+    return await get(token, "/promotions")
+}
+
+pub async fn promotion_performance(token: str, from: int) -> (doc.Doc, error) {
+    return await get(token, "/promotions/performance?from=\(from)")
+}
+
+pub async fn accounting_summary(token: str) -> (doc.Doc, error) {
+    return await get(token, "/accounting/summary")
+}
+
+pub async fn profit_and_loss(token: str, from: int, to: int) -> (doc.Doc, error) {
+    return await get(token, "/accounting/profit-and-loss?from=\(from)&to=\(to)")
+}
+
+pub async fn balance_sheet(token: str, as_at: int) -> (doc.Doc, error) {
+    return await get(token, "/accounting/balance-sheet?as_at=\(as_at)")
+}
+
+pub async fn trial_balance(token: str, from: int, to: int) -> (doc.Doc, error) {
+    return await get(token, "/accounting/trial-balance?from=\(from)&to=\(to)")
+}
+
+pub async fn journal(token: str, from: int, to: int) -> (doc.Doc, error) {
+    return await get(token, "/accounting/journal?from=\(from)&to=\(to)")
+}
+
+pub async fn expenses(token: str, from: int, to: int) -> (doc.Doc, error) {
+    return await get(token, "/accounting/expenses?from=\(from)&to=\(to)")
+}
+
+pub async fn settings(token: str) -> (doc.Doc, error) {
+    return await get(token, "/settings")
+}
+
+pub async fn shrinkage(token: str, from: int, to: int) -> (doc.Doc, error) {
+    return await get(token, "/reports/shrinkage?from=\(from)&to=\(to)")
+}
+
+// ---- the back office's writes ----------------------------------------------
+//
+// One function per endpoint, each taking a `doc.Doc` the caller built from the
+// form's own fields. The form system in `desk.kite` decides *what* is asked
+// for; these decide only where it is sent.
+
+pub async fn save_product(token: str, id: str, body: doc.Doc) -> (doc.Doc, error) {
+    if id.len() > 0 {
+        return await patch(token, "/catalog/products/\(id)", body)
+    }
+    return await post(token, "/catalog/products", body)
+}
+
+pub async fn retire_product(token: str, id: str) -> (doc.Doc, error) {
+    return await remove(token, "/catalog/products/\(id)")
+}
+
+pub async fn product(token: str, id: str) -> (doc.Doc, error) {
+    return await get(token, "/catalog/products/\(id)")
+}
+
+pub async fn add_barcode(token: str, product_id: str, body: doc.Doc) -> (doc.Doc, error) {
+    return await post(token, "/catalog/products/\(product_id)/barcodes", body)
+}
+
+pub async fn drop_barcode(token: str, barcode: str) -> (doc.Doc, error) {
+    return await remove(token, "/catalog/barcodes/\(browser.escaped(barcode))")
+}
+
+pub async fn save_category(token: str, id: str, body: doc.Doc) -> (doc.Doc, error) {
+    if id.len() > 0 {
+        return await patch(token, "/catalog/categories/\(id)", body)
+    }
+    return await post(token, "/catalog/categories", body)
+}
+
+pub async fn save_supplier(token: str, id: str, body: doc.Doc) -> (doc.Doc, error) {
+    if id.len() > 0 {
+        return await patch(token, "/catalog/suppliers/\(id)", body)
+    }
+    return await post(token, "/catalog/suppliers", body)
+}
+
+pub async fn set_quick_keys(token: str, ids: [str]) -> (doc.Doc, error) {
+    let body = doc.object()
+    let list = doc.array()
+    for id in ids {
+        doc.push_text(list, id)
+    }
+    doc.put(body, "product_ids", list)
+    return await post(token, "/catalog/quick-keys", body)
+}
+
+pub async fn save_promotion(token: str, id: str, body: doc.Doc) -> (doc.Doc, error) {
+    if id.len() > 0 {
+        return await patch(token, "/promotions/\(id)", body)
+    }
+    return await post(token, "/promotions", body)
+}
+
+pub async fn end_promotion(token: str, id: str) -> (doc.Doc, error) {
+    return await remove(token, "/promotions/\(id)")
+}
+
+pub async fn save_customer(token: str, id: str, body: doc.Doc) -> (doc.Doc, error) {
+    if id.len() > 0 {
+        return await patch(token, "/customers/\(id)", body)
+    }
+    return await post(token, "/customers", body)
+}
+
+pub async fn raise_order(token: str, body: doc.Doc) -> (doc.Doc, error) {
+    return await post(token, "/purchasing/orders", body)
+}
+
+pub async fn order(token: str, id: str) -> (doc.Doc, error) {
+    return await get(token, "/purchasing/orders/\(id)")
+}
+
+pub async fn send_order(token: str, id: str) -> (doc.Doc, error) {
+    return await post(token, "/purchasing/orders/\(id)/send", doc.object())
+}
+
+pub async fn receive_order(token: str, id: str, body: doc.Doc) -> (doc.Doc, error) {
+    return await post(token, "/purchasing/orders/\(id)/receive", body)
+}
+
+pub async fn add_invoice(token: str, body: doc.Doc) -> (doc.Doc, error) {
+    return await post(token, "/purchasing/invoices", body)
+}
+
+pub async fn pay_invoice(token: str, id: str, body: doc.Doc) -> (doc.Doc, error) {
+    return await post(token, "/purchasing/invoices/\(id)/pay", body)
+}
+
+pub async fn add_expense(token: str, body: doc.Doc) -> (doc.Doc, error) {
+    return await post(token, "/accounting/expenses", body)
+}
+
+pub async fn close_period(token: str, body: doc.Doc) -> (doc.Doc, error) {
+    return await post(token, "/accounting/periods/close", body)
+}
+
+pub async fn save_staff(token: str, id: str, body: doc.Doc) -> (doc.Doc, error) {
+    if id.len() > 0 {
+        return await patch(token, "/staff/\(id)", body)
+    }
+    return await post(token, "/staff", body)
+}
+
+pub async fn set_staff_pin(token: str, id: str, pin: str) -> (doc.Doc, error) {
+    let body = doc.object()
+    doc.put_text(body, "pin", pin)
+    return await post(token, "/staff/\(id)/pin", body)
+}
+
+pub async fn set_staff_password(token: str, id: str, password: str) -> (doc.Doc, error) {
+    let body = doc.object()
+    doc.put_text(body, "password", password)
+    return await post(token, "/staff/\(id)/password", body)
+}
+
+pub async fn save_settings(token: str, body: doc.Doc) -> (doc.Doc, error) {
+    return await patch(token, "/settings", body)
+}
+
+pub async fn adjust_stock(token: str, body: doc.Doc) -> (doc.Doc, error) {
+    return await post(token, "/inventory/adjust", body)
+}
+
+pub async fn movements(token: str, from: int, product_id: str) -> (doc.Doc, error) {
+    return await get(token, "/inventory/movements?from=\(from)&product_id=\(browser.escaped(product_id))")
+}
+
+pub async fn shift(token: str, id: str) -> (doc.Doc, error) {
+    return await get(token, "/shifts/\(id)")
+}
+
+pub async fn shift_movement(token: str, id: str, body: doc.Doc) -> (doc.Doc, error) {
+    return await post(token, "/shifts/\(id)/movement", body)
+}
+
+pub async fn close_shift(token: str, id: str, counted: int, note: str) -> (doc.Doc, error) {
+    let body = doc.object()
+    doc.put_int(body, "counted_total", counted)
+    doc.put_text(body, "note", note)
+    return await post(token, "/shifts/\(id)/close", body)
+}
+
+pub async fn sale(token: str, id: str) -> (doc.Doc, error) {
+    return await get(token, "/sales/\(id)")
+}
+
+pub async fn refund_sale(token: str, id: str, body: doc.Doc) -> (doc.Doc, error) {
+    return await post(token, "/sales/\(id)/refund", body)
+}
+
+pub async fn add_register(token: str, body: doc.Doc) -> (doc.Doc, error) {
+    return await post(token, "/tills", body)
+}
+
+pub async fn retire_register(token: str, id: str) -> (doc.Doc, error) {
+    return await remove(token, "/tills/\(id)")
+}
+
+pub async fn open_shift(token: str, register_id: str, float_amount: int) -> (doc.Doc, error) {
+    let body = doc.object()
+    doc.put_text(body, "register_id", register_id)
+    doc.put_int(body, "opening_float", float_amount)
+    return await post(token, "/shifts/open", body)
+}
+
+/// Close a lane from the back office, which needs the lane named.
+pub async fn force_close_lane(token: str, register_id: str, counted: int) -> (doc.Doc, error) {
+    let body = doc.object()
+    doc.put_int(body, "counted_total", counted)
+    return await post(token, "/tills/\(register_id)/close", body)
+}
+
+/// A response read as text rather than as a document.
+///
+/// For the exports, which answer with a CSV. Everything else in this file
+/// parses JSON and would refuse a comma-separated file as malformed.
+pub async fn fetch_text(token: str, path: str) -> (str, error) {
+    let (response, err) = await http.send("GET", "\(base())\(path)", "", headers_for(token, ""))
+    check errors.wrap(err, "the lane is offline")
+    if !http.succeeded(response) {
+        return _, refused(response.status, response.body)
+    }
+    return response.body, nil
+}
+
+// ---- the books -------------------------------------------------------------
+
+pub async fn books_health(token: str) -> (doc.Doc, error) {
+    return await get(token, "/accounting/health")
+}
+
+pub async fn accounts(token: str) -> (doc.Doc, error) {
+    return await get(token, "/accounting/accounts")
+}
+
+pub async fn expense_accounts(token: str) -> (doc.Doc, error) {
+    return await get(token, "/accounting/expense-accounts")
+}
+
+pub async fn general_ledger(token: str, code: str, from: int, to: int) -> (doc.Doc, error) {
+    return await get(token, "/accounting/ledger?account_code=\(code)&from=\(from)&to=\(to)")
+}
+
+pub async fn journal_filtered(token: str, from: int, to: int, ref_type: str,
+    code: str, q: str) -> (doc.Doc, error) {
+    return await get(token,
+        "/accounting/journal?from=\(from)&to=\(to)&ref_type=\(ref_type)&account_code=\(code)&q=\(q)")
+}
+
+pub async fn reverse_entry(token: str, id: str, body: doc.Doc) -> (doc.Doc, error) {
+    return await post(token, "/accounting/entries/\(id)/reverse", body)
+}
+
+pub async fn reopen_period(token: str, id: str) -> (doc.Doc, error) {
+    return await post(token, "/accounting/periods/\(id)/reopen", doc.object())
+}
+
+pub async fn tax_report(token: str, from: int, to: int) -> (doc.Doc, error) {
+    return await get(token, "/reports/tax?from=\(from)&to=\(to)")
+}
+
+pub async fn payables(token: str) -> (doc.Doc, error) {
+    return await get(token, "/purchasing/payables")
+}

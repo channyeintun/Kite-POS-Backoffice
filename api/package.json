@@ -1,0 +1,33 @@
+{
+  "name": "@kite-pos/api",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "The Kite POS backend: one Hono app on a Cloudflare Worker, over D1 and R2.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "types": "wrangler types",
+    "db:migrate:local": "wrangler d1 migrations apply kite-pos --local",
+    "db:migrate": "wrangler d1 migrations apply kite-pos --remote",
+    "db:seed:local": "wrangler d1 execute kite-pos --local --file=./seed/demo.sql",
+    "db:seed": "wrangler d1 execute kite-pos --remote --file=./seed/demo.sql",
+    "db:console:local": "wrangler d1 execute kite-pos --local --command",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "hono": "^4.13.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260801.1",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0",
+    "wrangler": "^4.120.0"
+  },
+  "//allowScripts": "This npm refuses postinstall scripts unless they are named. Both of these fetch a platform binary that the tool is useless without: esbuild is wrangler's bundler and workerd is the runtime `wrangler dev` runs the Worker in.",
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "workerd@1.20260801.1": true
+  }
+}

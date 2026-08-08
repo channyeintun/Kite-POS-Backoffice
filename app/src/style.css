@@ -1,0 +1,898 @@
+/* The till.
+ *
+ * Sizes are given in px *and* in millimetres at the reference density, because
+ * the published touch minima are physical and a pixel is meaningless until you
+ * name a device. The reference here is a 10.1" counter tablet at 1280 × 800,
+ * roughly 150 ppi, where 1 mm ≈ 5.9 px.
+ *
+ *   commit button   118 px = 20 mm   the kiosk minimum (Colle & Hiszem 2004)
+ *   keypad key      118 px = 20 mm   sufficient; 25 mm tested no better
+ *   ledger row       72 px = 12.2 mm
+ *   command button   64 px = 10.8 mm
+ *   tile            179 × 168 px = 30 × 28 mm
+ *   gaps              8 px           spacing had no measurable effect, so the
+ *                                    screen budget goes into target size
+ *
+ * Nothing interactive is below 9.5 mm. Colour carries machine state and only
+ * machine state: green is open/valid/complete, red is closed/error/void, amber
+ * is pending or attention, and everything else is neutral. There is no category
+ * or brand colour in the transaction path — category colour is fine on a tile,
+ * where it aids recognition, and nowhere else.
+ */
+
+:root {
+  --bg: #0b0d0f;
+  --panel: #12161a;
+  --raised: #171c21;
+  --line: #1e262b;
+  --edge: #2e3841;
+  --ink: #e8edf0;
+  --ink-dim: #8b979f;
+  --ink-faint: #5c6870;
+
+  --go: #12a35c;
+  --go-deep: #0d7f45;
+  --warn: #c98a00;
+  --stop: #d0342c;
+  --info: #4da3ff;
+
+  --gap: 8px;
+  --row: 72px;
+  --commit: 118px;
+  --key: 118px;
+  --command: 64px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: Roboto, ui-sans-serif, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  /* A till is touched, not selected. A long press that highlights a product
+   * name is a distraction with a queue waiting. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Burmese needs a taller line box than Roboto: 1.6–1.7 against 1.2–1.3. Keyed
+ * off the document's own `lang`, so one attribute changes every string rather
+ * than a class per element. */
+html[lang="my"] body { font-family: "Noto Sans Myanmar", Roboto, sans-serif; }
+html[lang="my"] { --row: 76px; }
+html[lang="my"] .name,
+html[lang="my"] .command,
+html[lang="my"] .tab { line-height: 1.65; }
+
+button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
+input { font: inherit; }
+
+/* `dvh` after `vh`, in that order: the old unit is the fallback for anything
+ * that does not know the new one. In a tablet browser tab with a collapsing
+ * toolbar `100vh` is taller than what is visible, which puts the bottom of the
+ * column — the command strip, and in portrait the commit bar — below the fold.
+ * The commit is pinned and never scrolls; this is the unit that decides it. */
+#app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; min-height: 0; }
+
+/* ---- status: lane health only ------------------------------------------- */
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex: none;
+  /* `viewport-fit=cover` is declared in index.html and the status bar style is
+   * `black-translucent`, so on an inset device this bar is drawn *under* the
+   * system bar unless it grows by the inset and pads itself down. */
+  height: calc(56px + env(safe-area-inset-top));
+  padding: 0 20px;
+  padding-top: env(safe-area-inset-top);
+  padding-left: max(20px, env(safe-area-inset-left));
+  padding-right: max(20px, env(safe-area-inset-right));
+  background: #14181c;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+/* The mode signal that can be read at arm's length without reading any text: a
+ * 3 px band of the mode's own colour across the whole bar. The pill says which
+ * mode; this says it again, bigger, to somebody looking up from the goods.
+ * Keyed off the pill rather than a class on the bar, so no markup change is
+ * needed to carry it. */
+.status:has(.mode.sale) { border-bottom: 3px solid var(--go); }
+.status:has(.mode.tender) { border-bottom: 3px solid var(--info); }
+.status .gap { flex: 1; }
+.status-right { display: flex; align-items: center; gap: 20px; flex: none; }
+/* Everything in this bar keeps its size. A flex child defaults to shrinking,
+ * and a status bar whose contents squeeze as the mode name gets longer is one
+ * that reads differently in tender than in sale — which is exactly what it must
+ * not do. The two that may lose room instead truncate. */
+.status > * { flex: none; }
+.status .shop, .status .shift { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Mode is a flat field of colour, readable at arm's length without reading the
+ * text — which is the point of it. */
+/* `inline-flex`, and it is not cosmetic: a plain inline `<span>` takes vertical
+ * padding without growing its line box, so the painted pill spills past the bar
+ * and is clipped — which is what "TENDER" did while "SALE" was short enough to
+ * hide it. */
+.mode {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font: 700 11px/1 ui-monospace, monospace;
+  letter-spacing: 0.14em;
+  white-space: nowrap;
+}
+.mode.sale { background: rgba(18, 163, 92, 0.18); color: #35d489; }
+.mode.tender { background: rgba(77, 163, 255, 0.18); color: var(--info); }
+
+.shop { color: var(--ink); font-weight: 500; }
+.shift.shut { color: var(--warn); }
+
+.dot { display: inline-flex; align-items: center; gap: 6px; }
+.dot::before { content: ""; width: 8px; height: 8px; border-radius: 50%; }
+.dot.online::before { background: var(--go); }
+.dot.offline::before { background: var(--stop); }
+.dot.offline { color: var(--stop); }
+
+/* 44 px = 7.5 mm: reachable, but below the transaction target scale and
+ * deliberately not on the way to anything.
+ *
+ * 44 is the *height*, and height is the limiting dimension for a thumb — this
+ * rule used to set 32 px (5.4 mm) while the comment claimed 7.5 mm, so the one
+ * control whose smallness is argued for was half again smaller than the
+ * argument allowed. */
+.lang { display: flex; gap: 2px; flex: none; }
+.lang button {
+  min-width: 52px;
+  height: 44px;
+  padding: 0 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  /* Sized for the longer of the two labels, so nothing reflows when the
+   * language changes — and never clipped, which is what a fixed height does to
+   * a Burmese label with its taller line box. */
+  line-height: 1.6;
+  white-space: nowrap;
+  flex: none;
+}
+/* The Burmese label is the longer of the two and is drawn wider, so the pair
+ * keeps its shape rather than the switch changing width with the language. */
+.lang button:last-child { min-width: 66px; }
+/* A Burmese string inside an English page. The switch's own မြန်မာ button is
+ * the permanent example, and there is no document `lang` to key off at that
+ * moment — the page is in English. Without this the label falls to Roboto over
+ * a 1.3 line box and the stacked diacritics collide into a smudge, which is
+ * exactly what the switch looked like. Scoped past `.lang button`'s `font`
+ * shorthand, which resets the family. */
+[lang="my"] { font-family: "Noto Sans Myanmar", Roboto, sans-serif; }
+.lang button[lang="my"] {
+  font-family: "Noto Sans Myanmar", Roboto, sans-serif;
+  line-height: 1.65;
+}
+.lang-on { background: var(--edge); color: var(--ink); }
+.lang-off { color: var(--ink-dim); }
+
+/* ---- the lane: ledger + work -------------------------------------------- */
+
+/* Scoped to the element that is actually the region container. `status_bar()`
+ * also puts `class="lane"` on the span carrying the register ID, and an
+ * unscoped `.lane { flex: 1 }` won that span the bar's free space — the one
+ * thing the rule at the top of this bar says must never happen. */
+main.lane { display: flex; flex: 1; min-width: 0; min-height: 0; }
+
+.ledger {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  width: 480px;              /* 37% of 1280 */
+  min-height: 0;
+  /* The leading edge of the screen in landscape, so on an inset device the
+   * ledger's own left padding is not what the notch eats. */
+  padding-left: env(safe-area-inset-left);
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+}
+.ledger-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex: none;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.region {
+  font: 500 11px/1 ui-monospace, monospace;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--go);
+}
+.ledger-head .count { font-size: 12px; color: var(--ink-dim); }
+.ledger-head .customer { margin-left: auto; font-size: 12px; color: var(--info); }
+
+/* The lines scroll; the totals and the commit button never do. */
+.ledger-body { flex: 1; min-height: 0; overflow-y: auto; }
+.rows { margin: 0; padding: 0; list-style: none; }
+
+.row {
+  display: grid;
+  grid-template-columns: 44px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--row);
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.row .qty {
+  font: 700 20px/1 Roboto, sans-serif;
+  color: var(--ink);
+  text-align: center;
+}
+.line-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.name { font-size: 15px; font-weight: 500; }
+.detail { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--ink-dim); }
+.promo { color: var(--go); }
+.override { color: var(--warn); }
+.age { color: var(--warn); }
+.age.ok { color: var(--go); }
+
+.amount { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.was { font-size: 12px; color: var(--ink-faint); text-decoration: line-through; }
+.now { font: 500 16px/1 Roboto, sans-serif; }
+
+.empty { padding: 32px 16px; color: var(--ink-faint); text-align: center; }
+
+.ledger-foot { flex: none; padding: 12px 16px 16px; border-top: 1px solid var(--line); }
+.totals { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.tot { display: flex; justify-content: space-between; font-size: 13px; color: var(--ink-dim); }
+.tot.saved { color: var(--go); }
+
+.grand { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
+.grand-label {
+  font: 500 11px/1 ui-monospace, monospace;
+  letter-spacing: 0.18em;
+  color: var(--ink-dim);
+}
+/* The largest type on the screen, in every viewport and every mode. */
+.grand-value { font: 900 40px/1 Roboto, sans-serif; letter-spacing: -0.02em; }
+
+.commit {
+  /* Flex, so the word and the amount are two things the layout can place —
+   * centred together in landscape, pushed to opposite edges on the portrait
+   * bar. As one concatenated string neither was possible. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  height: var(--commit);
+  border-radius: 10px;
+  background: var(--go);
+  color: #04170d;
+  font: 700 20px/1 Roboto, sans-serif;
+}
+.commit:active { background: var(--go-deep); }
+.commit.off { background: var(--raised); color: var(--ink-faint); cursor: default; }
+.commit.wide { height: 72px; font-size: 17px; }
+.commit.danger { background: var(--stop); color: #fff; }
+
+/* ---- the work area ------------------------------------------------------- */
+
+/* No padding and no gap of its own: each sub-region below carries its own
+ * height and its own inset, because the design gives them separately — an 88 px
+ * input row, a 56 px category strip, then the grid — and a shared gap here
+ * would add to all three and make none of them the drawn height. */
+.work {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  gap: 0;
+}
+
+.scan { display: flex; align-items: center; gap: 12px; flex: none; height: 88px; padding: 16px 20px; }
+/* Search and Keypad are drawn at fixed widths so the scan field's edge does not
+ * move when a label's translation changes length. They are the last two
+ * children of the row; there is no class to tell them apart. */
+.scan .chip:nth-last-child(2) { width: 132px; }
+.scan .chip:last-child { width: 110px; }
+.scan-field {
+  flex: 1;
+  /* An `<input>` has an intrinsic width of about twenty characters, and a flex
+   * item will not shrink below its own minimum. Without this the scan row is
+   * wider than the screen on a phone the moment the chips beside it are given
+   * fixed widths. */
+  min-width: 0;
+  height: 56px;
+  padding: 0 14px;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  background: var(--raised);
+  color: var(--ink);
+  font-size: 17px;
+  outline: none;
+}
+.scan-field:focus { border-color: var(--go); }
+.chip {
+  height: 56px;
+  padding: 0 16px;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  background: var(--raised);
+  font-size: 13px;
+  color: var(--ink-dim);
+}
+
+.tabs { display: flex; align-items: center; gap: var(--gap); flex: none; height: 56px; padding: 0 18px; overflow-x: auto; }
+.tab {
+  flex: none;
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 999px;
+  background: var(--raised);
+  font-size: 13px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.tab.on { background: var(--edge); color: var(--ink); }
+
+/* Four fixed columns, not `auto-fill`. `auto-fill` on a 179 px minimum was not
+ * monotonic here: at 1024 landscape the work area is 544 px and yields two
+ * columns, while a *narrower* 1000 px screen yields three, because the ledger
+ * only steps down to 400 px at exactly 1000. A drawn column count does not do
+ * that. Landscape is 4; portrait is 3, in the block near the bottom. */
+.grid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  grid-auto-rows: 168px;
+  gap: 12px;
+  padding: 8px 20px 0;
+  align-content: start;
+}
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  text-align: left;
+}
+.tile:active { border-color: var(--go); }
+.tile-photo { flex: 1; border-radius: 6px; background: var(--raised); }
+.tile-name { font: 500 15px/1.25 Roboto, sans-serif; }
+.tile-price { font: 700 16px/1 Roboto, sans-serif; }
+.tile-marks { display: flex; gap: 6px; font: 700 10px/1 ui-monospace, monospace; }
+.tile-age { color: var(--warn); }
+.tile-ask { color: var(--info); }
+.tile-out { color: var(--stop); }
+
+/* ---- tender -------------------------------------------------------------- */
+
+/* `.work` gives its padding away to its sub-regions (see above); tender has no
+ * sub-regions of its own, so it takes the landscape 20 px inset back here. */
+.tender-work { flex-direction: row; gap: 16px; padding: 20px; }
+.tender-summary { display: flex; flex-direction: column; gap: 12px; width: 300px; flex: none; }
+
+/* The pad scrolls; the commit button does not.
+ *
+ * Four rows of 20 mm keys, a tender chooser and a quick-cash row do not fit
+ * under 800 px of tablet, and the answer is not to shrink the keys — 20 mm is
+ * the figure the whole layout is built on. So the pad scrolls and `Add tender`
+ * is sticky at the bottom of it, which keeps the rule the design will not trade
+ * away: the commit is pinned and never scrolls out of view.
+ */
+.tender-pad {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 2px;
+}
+.tender-pad .commit.wide {
+  position: sticky;
+  bottom: 0;
+  flex: none;
+  margin-top: auto;
+  box-shadow: 0 -12px 16px -8px var(--bg);
+}
+
+/* …and the summary stacks above the pad rather than beside it, wherever beside
+ * it would take the keys under 20 mm.
+ *
+ * The numeric surface needs 4 × 118 + 3 × 8 = 496 px. Beside a 300 px summary,
+ * inside 20 px of padding and a 16 px gap, and to the right of a 480 px ledger,
+ * that wants a 1332 px viewport — wider than any tablet. Below that the choice
+ * is narrow keys or a stacked column, and the design does not trade the key
+ * size: 20 mm is the figure the whole layout is built on, and the pad already
+ * scrolls with `Add tender` sticky to it.
+ *
+ * The real answer is the design's own: the tender rows, the balance due and the
+ * Back to sale / Finish pair belong in the *ledger* in tender mode, which frees
+ * the whole work area for the numeric surface. That needs `work_tender()` to
+ * move them, so this rule holds the line until it does. */
+@media (max-width: 1331px) {
+  .tender-work { flex-direction: column; }
+  .tender-summary { width: auto; }
+}
+
+.takens { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.taken {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 14px;
+}
+.due {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 14px;
+  border-radius: 10px;
+  background: var(--raised);
+}
+.due-value { font: 900 30px/1 Roboto, sans-serif; }
+.tender-actions { display: flex; gap: var(--gap); margin-top: auto; }
+.tender-actions .commit { flex: 1; height: 72px; font-size: 17px; }
+.ghost {
+  flex: 1;
+  height: 72px;
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  color: var(--ink-dim);
+  font-size: 15px;
+}
+
+.tenders { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--gap); }
+.tender {
+  height: 64px;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  background: var(--raised);
+  font-size: 14px;
+}
+.tender.on { background: rgba(77, 163, 255, 0.16); border-color: var(--info); color: #cfe6ff; }
+.rule { margin: 0; font-size: 12px; line-height: 1.5; color: var(--ink-faint); }
+
+.entry {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--panel);
+}
+.entry-label { font-size: 12px; color: var(--ink-dim); }
+.entry-value { font: 900 32px/1.2 Roboto, sans-serif; text-align: right; }
+
+.quicks { display: flex; gap: var(--gap); flex-wrap: wrap; }
+.quick {
+  height: 56px;
+  min-width: 96px;
+  padding: 0 14px;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  background: var(--raised);
+  font: 500 16px/1 Roboto, sans-serif;
+}
+
+/* Four columns: three of digits and a utility column beside them, so Clear and
+ * 000 do not steal a row from the keys.
+ *
+ * The columns are `1fr`, not `var(--key)`. A hard `repeat(3, 118px)` is a
+ * 370 px block that cannot shrink, and in tender the work area also carries the
+ * summary column — which put the whole pad past the right edge of every
+ * viewport between 561 and 1193 px. `.tender-pad` scrolls in y, so `overflow-x`
+ * computed to `auto` and the operator got a numeric keypad that scrolled
+ * sideways on an iPad. The keys stay at least 20 mm tall via `min-height`;
+ * width is what gives.
+ *
+ * `.pin-pad` opts back out below — signing in is a 3-column PIN pad. */
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: var(--key);
+  gap: var(--gap);
+}
+/* Four keys and three gaps is the width the design's numeric surface happens to
+ * be. Ours is wider in portrait — nearly the whole 800 px — and without a
+ * ceiling the columns stretch to 240 px, giving a key twice as wide as it is
+ * tall. Capped and centred, the keys stay square at the drawn size; below the
+ * cap the `minmax(0, 1fr)` tracks shrink rather than overflowing.
+ * `.pin-pad` is excluded: it sizes itself to its own three fixed columns. */
+.keypad:not(.pin-pad) {
+  width: 100%;
+  max-width: calc(var(--key) * 4 + var(--gap) * 3);
+  margin-inline: auto;
+}
+.key {
+  height: auto;
+  min-height: var(--key);
+  border-radius: 10px;
+  background: var(--raised);
+  font: 500 26px/1 Roboto, sans-serif;
+}
+/* The wide `0`. The design's fourth row is a single zero under the three digit
+ * columns, which in a row-major emission — 1 2 3 ⌫ · 4 5 6 Clear · 7 8 9 000 ·
+ * 0 — is the thirteenth and last key. */
+.keypad > .key:nth-child(13):last-child { grid-column: 1 / span 3; }
+.key:active { background: var(--edge); }
+.key.util { background: var(--panel); color: var(--ink-dim); font-size: 20px; }
+.key.go { background: var(--go); color: #04170d; }
+
+/* ---- commands ------------------------------------------------------------ */
+
+.commands {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  flex: none;
+  /* Grown by the bottom inset rather than padded into: at 96 px flat, the home
+   * indicator would eat 21 px of a strip that has to hold a 64 px button. */
+  height: calc(96px + env(safe-area-inset-bottom));
+  padding: 0 20px;
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: max(20px, env(safe-area-inset-left));
+  padding-right: max(20px, env(safe-area-inset-right));
+  background: #14181c;
+  /* The commands region's own colour, 3 px of it. `html, body` are
+   * `overflow: hidden`, so without `overflow-x` here a long enough command list
+   * — the set is per-role data — puts its last commands past the edge with no
+   * way to reach them at all. */
+  border-top: 3px solid var(--warn);
+  overflow-x: auto;
+}
+.commands .gap { flex: 1; }
+.command-group { display: flex; gap: var(--gap); }
+/* Destructive commands sit in their own pinned group, never adjacent to a
+ * high-frequency target. */
+.command-group.restricted { padding-left: 14px; border-left: 1px solid var(--line); }
+
+.command {
+  height: var(--command);
+  min-width: 104px;
+  padding: 0 16px;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  background: var(--raised);
+  font-size: 14px;
+}
+.command.danger { color: #ff9a94; border-color: rgba(208, 52, 44, 0.4); }
+/* A command the operator lacks rights to is shown locked, never hidden — it is
+ * how a cashier learns to call a manager. */
+.command.locked { color: var(--ink-faint); border-color: var(--line); background: var(--panel); }
+
+/* ---- overlays ------------------------------------------------------------ */
+
+.shade {
+  position: fixed;
+  inset: 0;
+  /* Above the portrait commit bar, which is `position: fixed` with a z-index of
+   * its own. Without this the pinned PAY button paints on top of the dialog
+   * that is supposed to be blocking it. */
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(4, 6, 8, 0.72);
+}
+.panel {
+  width: min(560px, 100%);
+  max-height: 90vh;
+  max-height: 90dvh;
+  overflow-y: auto;
+  padding: 22px;
+  border: 1px solid var(--edge);
+  border-radius: 14px;
+  background: var(--panel);
+}
+.panel h2 { margin: 0 0 14px; font: 700 20px/1.2 Roboto, sans-serif; }
+.panel .lede { margin: 0 0 12px; font-size: 16px; color: var(--ink); }
+.panel .detail { margin: 0 0 12px; }
+.panel-actions { display: flex; gap: var(--gap); margin-top: 16px; }
+.panel-actions .commit, .panel-actions .ghost { flex: 1; height: 64px; font-size: 16px; }
+.panel .keypad { justify-content: center; margin: 12px 0; }
+
+.age-figures { display: flex; gap: 24px; margin: 16px 0; }
+.age-figures .k { display: block; font-size: 12px; color: var(--ink-dim); }
+.age-figures .big { font: 900 26px/1.2 Roboto, sans-serif; color: var(--warn); }
+
+.held-list, .found { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.held-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--raised);
+}
+.held-row .chip { height: 44px; padding: 0 14px; }
+
+/* ---- signing in ---------------------------------------------------------- */
+
+.signin {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  height: 100vh;
+  height: 100dvh;
+  padding: 24px;
+}
+.signin h1 { margin: 0; font: 500 20px/1 Roboto, sans-serif; color: var(--ink-dim); }
+/* The dots show progress without ever displaying the PIN. */
+.pin-dots { min-height: 34px; font-size: 30px; letter-spacing: 12px; color: var(--go); }
+.pin-pad { grid-template-columns: repeat(3, var(--key)); }
+.trouble { min-height: 20px; margin: 0; font-size: 14px; color: var(--stop); }
+
+/* ---- what just happened -------------------------------------------------- */
+
+.notice-bar, .trouble-bar {
+  flex: none;
+  padding: 10px 16px;
+  font-size: 14px;
+  text-align: center;
+}
+.notice-bar { background: rgba(18, 163, 92, 0.16); color: #7fe3b0; }
+.trouble-bar { background: rgba(208, 52, 44, 0.18); color: #ffb4ae; }
+
+/* ---- what gives way, in order -------------------------------------------- */
+/*
+ * A rule rather than a set of breakpoint hacks: at each step down, the next
+ * thing on the list is what is allowed to go. Nothing below the line is ever
+ * traded away — the running total, the pinned commit, the focused scan field,
+ * a locked command shown as locked, and the connection dot.
+ */
+
+/* 1 · the status bar loses its labels. */
+@media (max-width: 1100px) {
+  .status .shop, .status .shift, .status .when { display: none; }
+}
+
+/* 2–3 · the customer panel collapses; command labels shrink. */
+@media (max-width: 1000px) {
+  .ledger { width: 400px; }
+  .ledger-head .customer { display: none; }
+  .command { min-width: 88px; padding: 0 12px; font-size: 13px; }
+}
+
+/* Tablet portrait: every region survives. The ledger takes a fixed band at the
+ * top where it stays legible over the counter, the work area grows into what is
+ * left, and the commit runs the full width at the bottom edge — closest to the
+ * hands, carrying the amount, so the operator never commits blind.
+ *
+ * No width ceiling. This used to be gated to `max-width: 860px`, which is under
+ * every portrait tablet a shop would buy: at 1024 portrait the ledger stayed a
+ * 480 px *side* column — 47% of the screen — and the work area never got the
+ * height the band is meant to give it. Orientation is the whole condition; the
+ * phone-portrait block below layers on top of this one. */
+@media (orientation: portrait) {
+  /* 1 · the status bar tightens but keeps its height — mode colour is read at
+   * arm's length in portrait too. */
+  .status {
+    gap: 14px;
+    padding: 0 16px;
+    padding-top: env(safe-area-inset-top);
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+  .status-right { gap: 14px; }
+  .lang button { height: 40px; min-width: 46px; font-size: 12px; }
+  .lang button:last-child { min-width: 60px; }
+
+  /* The regions rotate: ledger above, work below. Never the other way round —
+   * the ledger is never stacked below the input surface on a tablet. */
+  main.lane { flex-direction: column; }
+  .ledger {
+    width: auto;
+    height: 420px;
+    flex: none;
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .work { flex: 1; }
+
+  /* Everything in the ledger steps down a notch so four rows and the totals fit
+   * inside the 420 px band instead of scrolling out of it. */
+  :root { --row: 68px; }
+  .ledger-head { align-items: center; height: 44px; padding: 0 16px; }
+  /* The band is 800 px wide — there is room for the loyalty chip here, which
+   * the ≤1000 rule above hides on width alone. */
+  .ledger-head .customer { display: block; }
+  .row { grid-template-columns: 32px 1fr auto; gap: 12px; padding: 8px 16px; }
+  .ledger-foot { padding: 12px 16px; }
+  /* The four-line totals stack becomes one summary line: it is the band's
+   * scarcest dimension, and the only number that has to be large is TOTAL. */
+  .totals {
+    flex-direction: row;
+    flex-wrap: wrap;
+    column-gap: 14px;
+    row-gap: 4px;
+    margin-bottom: 4px;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .tot { gap: 6px; }
+  .tot:not(:last-child)::after { content: "·"; color: var(--ink-faint); }
+  .grand { margin-bottom: 0; }
+  .grand-label { font-size: 15px; }
+  .grand-value { font-size: 34px; }
+
+  /* 3 · the work area's own regions. */
+  .scan { height: 80px; gap: 10px; padding: 14px 16px; }
+  .scan-field { font-size: 16px; }
+  .scan .chip:nth-last-child(2), .scan .chip:last-child { width: auto; min-width: 96px; }
+  .tabs { height: 52px; padding: 0 16px; }
+  .tab { height: 38px; }
+  .grid { grid-template-columns: repeat(3, 1fr); grid-auto-rows: 156px; gap: 10px; padding: 8px 16px 0; }
+  .tile { padding: 10px; }
+  .tile-name { font-size: 14px; }
+  .tile-price { font-size: 15px; }
+
+  /* The strip runs the full width here, so the buttons divide it rather than
+   * sitting at a minimum width with dead space after them. The restricted group
+   * stays separated — a cash-drawer command does not go next to a
+   * high-frequency target just because the mock draws it inline. */
+  .commands {
+    padding: 0 16px;
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+  .commands .gap { flex: none; }
+  /* No `min-width: 0` on the groups: their automatic minimum is what stops them
+   * shrinking past their buttons and letting the buttons spill out of the group
+   * box, where `.commands` clips them without ever offering a scrollbar. */
+  .commands .command-group { flex: 1 1 auto; }
+  /* Grows to fill, but stops shrinking at 88 px. The design draws six buttons
+   * here and lets them divide the width; the set is per-role data and this lane
+   * has eleven, at which point `flex: 1` alone gives each 58 px and clips
+   * "Customer" mid-word. Past that the strip scrolls, which is the answer the
+   * design already gives for a command row that will not fit. */
+  .command { flex: 1 1 auto; min-width: 88px; padding: 0 8px; font-size: 14px; }
+
+  /* Commit leaves the ledger and becomes its own bar at the bottom edge —
+   * closest to the hands. In landscape it stays with the total, because the
+   * total is directly above it; here the total is 800 px up the screen, which is
+   * why the amount travels with the button. */
+  .ledger-foot .commit {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: calc(112px + env(safe-area-inset-bottom));
+    padding: 0 28px;
+    padding-bottom: env(safe-area-inset-bottom);
+    border-radius: 0;
+    font: 700 26px/1 Roboto, sans-serif;
+  }
+  /* Only when there is a bar to make room for: in tender the ledger is locked
+   * and emits no commit, and an unconditional inset would leave a dead band. */
+  #app:has(.ledger-foot .commit) { padding-bottom: calc(112px + env(safe-area-inset-bottom)); }
+}
+
+/* 5–6 · phone portrait — the only viewport where a region becomes a tab.
+ * The running total stays pinned *outside* the tab, so the operator never loses
+ * the number they are responsible for. */
+@media (max-width: 560px) {
+  .row .detail .unit, .row .was { display: none; }
+  .ledger { height: 300px; }
+  /* 2 · the customer panel collapses. The portrait block above gives it back at
+   * tablet width; at 390 px there is no room for it. */
+  .ledger-head .customer { display: none; }
+  .grand-value { font-size: 32px; }
+  .lang button { height: 30px; min-width: 34px; font-size: 11px; }
+  .lang button:last-child { min-width: 44px; }
+  /* Content-sized again: a fixed 96 px on both chips plus the scan field does
+   * not fit across 390 px. */
+  .scan .chip:nth-last-child(2), .scan .chip:last-child { width: auto; min-width: 0; padding: 0 12px; }
+  .tile { padding: 8px; }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); grid-auto-rows: 132px; }
+  /* Scrolls horizontally rather than wrapping: a wrapped row changes height and
+   * moves the commit button. */
+  .commands { height: calc(84px + env(safe-area-inset-bottom)); overflow-x: auto; }
+  .command { min-width: 76px; font-size: 12px; }
+  /* The pinned bar from the portrait block, at the phone's height. 112 px is a
+   * seventh of an 844 px screen. */
+  .ledger-foot .commit { height: calc(72px + env(safe-area-inset-bottom)); padding: 0 16px; font-size: 18px; }
+  #app:has(.ledger-foot .commit) { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
+  .tender-work { flex-direction: column; }
+  .tender-summary { width: auto; }
+  :root { --key: 84px; }
+}
+
+/* 7 · phone landscape. Below ~420 px of height a stacked layout leaves nothing
+ * for the ledger, so the regions rotate: commands become a left thumb rail,
+ * the ledger narrows to name and amount, and commit becomes a full-height
+ * column under the right thumb. Status collapses to two dots — mode and
+ * connection — because that is all that fits and all that is urgent. */
+@media (max-height: 430px) and (orientation: landscape) {
+  .status { height: calc(34px + env(safe-area-inset-top)); font-size: 11px; }
+  /* `.register` is the status bar's register ID. `.lane` is kept here for the
+   * same span until `status_bar()` is renamed — the class collides with the
+   * `<main class="lane">` region container. */
+  .status .shop, .status .shift, .status .when, .status .who,
+  .status .register, .status .lane { display: none; }
+  .lang button { height: 44px; min-width: 46px; }
+  main.lane { flex-direction: row; }
+  .ledger { width: 260px; height: auto; border-bottom: 0; border-right: 1px solid var(--line); }
+  .ledger-body .detail { display: none; }
+  .grand-value { font-size: 24px; }
+  .commit { height: 64px; font-size: 16px; }
+  .commands {
+    order: -1;
+    flex-direction: column;
+    height: auto;
+    width: 92px;
+    padding: 8px;
+    padding-left: max(8px, env(safe-area-inset-left));
+    border-top: 0;
+    border-right: 3px solid var(--warn);
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+  #app { flex-direction: row; }
+  .command { min-width: 0; width: 100%; height: 52px; font-size: 11px; }
+  .command-group { flex-direction: column; width: 100%; }
+  .command-group.restricted { padding-left: 0; padding-top: 8px; border-left: 0; border-top: 1px solid var(--line); }
+  /* 132 and 110 px for Search and Keypad are tablet numbers. With a 260 px
+   * ledger and a 92 px thumb rail the work column is 176 px wide, and the two
+   * chips alone are wider than the row. */
+  .scan { height: 72px; padding: 8px; gap: 8px; }
+  .scan .region { display: none; }
+  .scan .chip:nth-last-child(2), .scan .chip:last-child { width: auto; min-width: 0; padding: 0 10px; }
+  .tabs { height: 48px; padding: 0 8px; }
+  .grid { grid-auto-rows: 108px; padding: 8px 8px 0; }
+  :root { --key: 68px; }
+}
+
+/* ---- returns and customers ----------------------------------------------- */
+
+/* A return is counted out one unit at a time rather than typed: the customer is
+ * standing there with the goods and the operator is looking at them, not at a
+ * keypad. The steppers are 56 px = 9.5 mm, the floor for a single tap. */
+.return-row {
+  display: grid;
+  grid-template-columns: 1fr 56px 56px 56px;
+  align-items: center;
+  gap: var(--gap);
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--raised);
+}
+.return-row .qty { font: 700 20px/1 Roboto, sans-serif; text-align: center; }
+.step {
+  height: 56px;
+  border-radius: 8px;
+  background: var(--edge);
+  font: 500 24px/1 Roboto, sans-serif;
+}
+.step:active { background: var(--go); color: #04170d; }

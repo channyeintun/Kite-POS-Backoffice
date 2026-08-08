@@ -1,0 +1,408 @@
+//! What the till is holding.
+//!
+//! One struct and the functions that write to it. Every field a handler changes
+//! is written by one of the small functions at the bottom, and that is the
+//! language showing through rather than a filing decision: **a closure may not
+//! capture a `var`**, so the click handler is created where `app` is a `let`
+//! and calls an ordinary function that takes it as `var`. Mutation is spelled
+//! out in a signature.
+//!
+//! The store holds no `html.Node` and knows nothing about the document. What is
+//! on screen is a pure function of this value, computed in `till.kite`, so two
+//! parts of the till cannot disagree about the total — neither of them holds a
+//! copy of it.
+
+use std/dom
+use std/html
+use model
+use i18n
+use money
+
+/// Which surface the work area is showing.
+///
+/// Named states rather than a boolean, because the business rules differ:
+/// sale mode takes scans and tender mode does not, and the ledger is locked in
+/// the second. Emerald documents the same two as named modes for the same
+/// reason.
+pub enum Mode {
+    Sale
+    Tender
+}
+
+/// What is in front of everything else.
+///
+/// One value rather than a flag per dialog, so two cannot be open at once —
+/// which on a till is not a cosmetic problem: a scan landing behind an age
+/// check is an item nobody checked ID for.
+pub enum Overlay {
+    None
+    /// Scanning tobacco or alcohol stops the sale and asks for ID first.
+    AgeCheck(name: str, min_age: int, born_before: int, code: str, product_id: str)
+    /// The shelf price is not in the system, so the operator is asked for it.
+    AskPrice(name: str, product_id: str)
+    Held
+    Search
+    /// The one numeric surface: quantity, a price, a discount, a tender.
+    Keypad(purpose: str, line_id: str, title: str)
+    /// A manager, proving it at the lane.
+    ManagerPin(purpose: str, line_id: str, amount: int)
+    Confirm(purpose: str, message: str)
+    PriceCheck(name: str, detail: str, price: str)
+    /// Attaching somebody to the basket, or signing them up at the counter.
+    Customers
+    /// Picking the receipt a return is against, then the lines coming back.
+    Receipts
+    Returning(sale_id: str, number: int)
+}
+
+pub struct App {
+    pub root: dom.Element
+    pub view: html.Mounted
+
+    pub var session: Option<model.Session>
+    pub var lang: i18n.Lang
+    pub var mode: Mode
+    pub var overlay: Overlay
+
+    pub var basket: model.Basket
+    pub var held: [model.Held]
+    pub var products: [model.Product]
+    pub var categories: [model.Category]
+    pub var found: [model.Product]
+    /// Customers matching what was typed, and the receipts a return can be
+    /// taken against. Held as values rather than documents because the till
+    /// draws them and never fills a form from them.
+    pub var customers: [model.Customer]
+    pub var receipts: [model.Receipt]
+    pub var returning: [model.ReturnLine]
+
+    /// Which category tab the grid is showing; "" is Favourites.
+    pub var tab: str
+
+    /// What the operator is typing on the numeric surface, as digits.
+    pub var entry: str
+    /// Tenders taken so far in this transaction.
+    pub var taken: [model.Payment]
+    pub var tender: model.Tender
+
+    /// The idempotency key for the basket being paid, and which basket it is
+    /// for. Both, because a key that outlives its basket is worse than none:
+    /// the server would answer the *next* sale with the previous one.
+    pub var pay_key: str
+    pub var pay_key_for: str
+
+    /// The PIN pad, before anybody is signed in.
+    pub var pin: str
+
+    /// What just happened, for the status line. Cleared by the next action.
+    pub var notice: str
+    pub var trouble: str
+
+    /// Whether the last request to the Worker succeeded.
+    ///
+    /// `navigator.onLine` says true for a device attached to a router with no
+    /// internet behind it, so this — did the last call actually work — is what
+    /// the connection dot reports.
+    pub var online: bool
+    pub var busy: bool
+    pub var signing_in: bool
+}
+
+pub fn holding(root: dom.Element, view: html.Mounted, lang: i18n.Lang) -> App {
+    return App{
+        root: root,
+        view: view,
+        session: nil,
+        lang: lang,
+        mode: Mode.Sale,
+        overlay: Overlay.None,
+        basket: model.empty_basket(),
+        held: [],
+        products: [],
+        categories: [],
+        found: [],
+        customers: [],
+        receipts: [],
+        returning: [],
+        tab: "",
+        entry: "",
+        taken: [],
+        tender: model.Tender.Cash,
+        pay_key: "",
+        pay_key_for: "",
+        pin: "",
+        notice: "",
+        trouble: "",
+        online: true,
+        busy: false,
+        signing_in: false,
+    }
+}
+
+pub fn currency_of(app: App) -> money.Currency {
+    let session = app.session
+    if session == nil {
+        return money.kyat()
+    }
+    return session.currency
+}
+
+pub fn token_of(app: App) -> str {
+    let session = app.session
+    if session == nil {
+        return ""
+    }
+    return session.token
+}
+
+/// What is still owed on this transaction.
+pub fn balance_due(app: App) -> int {
+    var paid = 0
+    for p in app.taken {
+        paid = paid + p.amount
+    }
+    return app.basket.totals.total - paid
+}
+
+pub fn change_due(app: App) -> int {
+    let due = balance_due(app)
+    if due < 0 {
+        return -due
+    }
+    return 0
+}
+
+/// A line the operator is pointing at.
+pub fn line_of(app: App, id: str) -> Option<model.Line> {
+    return find(app.basket.lines, |l: model.Line| l.id == id)
+}
+
+/// The tiles the grid is showing.
+///
+/// Favourites is the pinned set in the order a manager arranged it; a category
+/// tab is everything in that category. The whole catalogue is already here, so
+/// changing tabs is arithmetic rather than a request.
+pub fn tiles(app: App) -> [model.Product] {
+    if app.tab.len() == 0 {
+        let pinned = filter(app.products, |p: model.Product| p.quick_key > 0)
+        return sorted(pinned, |a: model.Product, b: model.Product| a.quick_key < b.quick_key)
+    }
+    return filter(app.products, |p: model.Product| p.category_id == app.tab)
+}
+
+pub fn product_of(app: App, id: str) -> Option<model.Product> {
+    return find(app.products, |p: model.Product| p.id == id)
+}
+
+/// A product's name in the interface language.
+///
+/// The catalogue does not translate — this is the one field a shop may keep a
+/// second name in on purpose, and it falls back to the stored name.
+pub fn product_label(p: model.Product, l: i18n.Lang) -> str {
+    return match l {
+        En => p.name,
+        My => if p.name_my.len() > 0 { p.name_my } else { p.name },
+    }
+}
+
+// ---- the writes ------------------------------------------------------------
+//
+// Each of these is a line long, and each exists because a handler cannot write
+// a `var` it captured. They are the complete list of ways this value changes.
+
+pub fn signed_in(var app: App, session: model.Session) {
+    app.session = session
+    app.pin = ""
+    app.signing_in = false
+    app.trouble = ""
+}
+
+pub fn signed_out(var app: App) {
+    app.session = nil
+    app.basket = model.empty_basket()
+    app.taken = []
+    app.pay_key = ""
+    app.pay_key_for = ""
+    app.mode = Mode.Sale
+    app.overlay = Overlay.None
+    app.pin = ""
+}
+
+pub fn took_basket(var app: App, basket: model.Basket) {
+    app.basket = basket
+    app.online = true
+    app.busy = false
+}
+
+pub fn took_catalogue(var app: App, products: [model.Product], categories: [model.Category]) {
+    app.products = products
+    app.categories = categories
+}
+
+pub fn took_held(var app: App, held: [model.Held]) {
+    app.held = held
+}
+
+pub fn found_products(var app: App, found: [model.Product]) {
+    app.found = found
+}
+
+pub fn took_customers(var app: App, customers: [model.Customer]) {
+    app.customers = customers
+}
+
+pub fn took_receipts(var app: App, receipts: [model.Receipt]) {
+    app.receipts = receipts
+}
+
+pub fn took_return_lines(var app: App, lines: [model.ReturnLine]) {
+    app.returning = lines
+}
+
+/// How much of one line is coming back, as the operator taps it up and down.
+pub fn set_return_qty(var app: App, line_id: str, qty: float) {
+    var next: [model.ReturnLine] = []
+    for l in app.returning {
+        if l.id == line_id {
+            next.push(model.ReturnLine{ ..l, taking: clampf(qty, 0.0, l.returnable) })
+        } else {
+            next.push(l)
+        }
+    }
+    app.returning = next
+}
+
+pub fn show(var app: App, overlay: Overlay) {
+    app.overlay = overlay
+    app.entry = ""
+}
+
+pub fn dismiss(var app: App) {
+    app.overlay = Overlay.None
+    app.entry = ""
+    app.found = []
+}
+
+pub fn go_to_mode(var app: App, mode: Mode) {
+    app.mode = mode
+    app.overlay = Overlay.None
+    app.entry = ""
+}
+
+pub fn set_tab(var app: App, tab: str) {
+    app.tab = tab
+}
+
+pub fn set_lang(var app: App, lang: i18n.Lang) {
+    app.lang = lang
+}
+
+/// One more digit on whichever numeric surface is open.
+///
+/// Bounded, because a cashier leaning on the 9 key should not be able to make
+/// an amount that overflows the arithmetic behind it.
+pub fn press_key(var app: App, key: str) {
+    if key == "clear" {
+        app.entry = ""
+        return
+    }
+    if key == "back" {
+        if app.entry.len() > 0 {
+            app.entry = app.entry.slice(0, app.entry.len() - 1)
+        }
+        return
+    }
+    if app.entry.len() >= 9 {
+        return
+    }
+    if app.entry.len() == 0 && key == "000" {
+        return
+    }
+    app.entry = app.entry + key
+}
+
+pub fn press_pin(var app: App, key: str) {
+    if key == "clear" {
+        app.pin = ""
+        return
+    }
+    if key == "back" {
+        if app.pin.len() > 0 {
+            app.pin = app.pin.slice(0, app.pin.len() - 1)
+        }
+        return
+    }
+    if app.pin.len() >= 8 {
+        return
+    }
+    app.pin = app.pin + key
+}
+
+pub fn set_entry(var app: App, entry: str) {
+    app.entry = entry
+}
+
+pub fn choose_tender(var app: App, tender: model.Tender) {
+    app.tender = tender
+    app.entry = ""
+}
+
+pub fn add_payment(var app: App, payment: model.Payment) {
+    // Through a local first: this compiler cannot mutate a slice reached
+    // through a field, and `push` on a `var` binding is the supported spelling.
+    var list = app.taken
+    list.push(payment)
+    app.taken = list
+    app.entry = ""
+}
+
+pub fn clear_payments(var app: App) {
+    app.taken = []
+    app.entry = ""
+    app.pay_key = ""
+    app.pay_key_for = ""
+}
+
+/// The idempotency key for the basket on screen, minted once and kept.
+///
+/// **A key made fresh on every attempt is not an idempotency key.** `do_pay`
+/// called `browser.nonce()` at the call site, so the retry after a lost answer
+/// carried a key the server had never seen — and the server, which by then had
+/// completed the sale, could not match it to anything. The lane was told there
+/// was nothing to pay for, the cashier rang the basket again, and the shop
+/// finished the day with two sales for one basket of goods and a drawer short
+/// by the difference.
+///
+/// `minted` is passed in because this module knows nothing about the browser.
+/// It is used only when there is no key yet for this basket; the moment the
+/// basket changes, so does the key.
+pub fn pay_key_of(var app: App, minted: str) -> str {
+    if app.pay_key.len() == 0 || app.pay_key_for != app.basket.sale_id {
+        app.pay_key = minted
+        app.pay_key_for = app.basket.sale_id
+    }
+    return app.pay_key
+}
+
+pub fn say(var app: App, notice: str) {
+    app.notice = notice
+    app.trouble = ""
+}
+
+pub fn went_wrong(var app: App, trouble: str) {
+    app.trouble = trouble
+    app.busy = false
+}
+
+pub fn working(var app: App, busy: bool) {
+    app.busy = busy
+}
+
+pub fn signing_in(var app: App, on: bool) {
+    app.signing_in = on
+}
+
+/// The connection dot, set by whether the last call actually worked.
+pub fn reachable(var app: App, online: bool) {
+    app.online = online
+}

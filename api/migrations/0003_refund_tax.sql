@@ -1,0 +1,26 @@
+-- The tax a refund actually gave back, stored rather than guessed again.
+--
+-- `refund_items.amount` was already persisted, and the refund that closes a
+-- line out is paid the *remainder* of what the line was charged — so however
+-- many refunds a line is split across, the amounts sum to exactly the line
+-- total. The tax had no such column: every call re-derived it as a proportion,
+-- `round(line.tax * qty / line.qty)`, and a proportion rounded per part with
+-- nowhere to put the residual either mints or destroys tax relief.
+--
+-- A 3-unit line carrying 100 of inclusive VAT, returned one unit at a time,
+-- reversed 33 + 33 + 33 = 99 against the 100 that was collected: one kyat of
+-- output tax still owed on goods that came back, and one kyat of revenue
+-- reversed that was never earned. In the other direction a 4-unit line carrying
+-- 10 reversed 3 + 3 + 3 + 2 = 11 and reclaimed tax the shop never charged. Both
+-- entries balance, so the trial balance stayed at zero and only the VAT return
+-- was wrong — and `refund_items` held no tax figure, so no report could explain
+-- the difference.
+--
+-- With the column, the closing refund takes `line.tax - refunded_tax` exactly
+-- as it already takes `line.total - refunded_amount`, the parts sum to the
+-- line's tax by construction, and the residual lands on a refund that can be
+-- pointed at.
+--
+-- Existing rows get 0. A shop that refunded anything before this migration has
+-- its old rows read as "no tax recorded", which is what was true of them.
+ALTER TABLE refund_items ADD COLUMN tax INTEGER NOT NULL DEFAULT 0;

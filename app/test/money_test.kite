@@ -1,0 +1,56 @@
+//! What `money.kite` and `i18n.kite` must say.
+//!
+//! Run with `npm test`. There is no DOM in here and none is needed: these two
+//! modules are pure functions over values, which is what makes the formatting
+//! of every price in the shop checkable without a browser.
+//!
+//! Kite has no module-level mutable state, so the tally is a value threaded
+//! through `main` rather than a global a helper reaches up and touches.
+
+use money
+use i18n
+
+/// Whether it matched, having said so.
+fn ok(what: str, got: str, want: str) -> bool {
+    if got == want {
+        io.print("  ok   \(what) = \(got)")
+        return true
+    }
+    io.print(" FAIL  \(what): got \(got), want \(want)")
+    return false
+}
+
+pub fn main() {
+    let mmk = money.kyat()
+    let usd = money.Currency{ code: "USD", symbol: "$", minor_units: 2, symbol_first: true }
+    let ks = money.Currency{ code: "MMK", symbol: "Ks", minor_units: 0, symbol_first: false }
+
+    let results = [
+        ok("31700 MMK", money.show(31700, mmk), "K31,700"),
+        ok("zero", money.show(0, mmk), "K0"),
+        ok("under a thousand", money.show(900, mmk), "K900"),
+        ok("exactly a thousand", money.show(1000, mmk), "K1,000"),
+        ok("millions", money.show(1234567, mmk), "K1,234,567"),
+        ok("the sign goes outside the symbol", money.show(-300, mmk), "-K300"),
+        ok("symbol last", money.show(31700, ks), "31,700 Ks"),
+        ok("cents", money.show(1299, usd), "$12.99"),
+        ok("padded, so it is not $12.5", money.show(1250, usd), "$12.50"),
+        ok("under a unit", money.show(5, usd), "$0.05"),
+        ok("grouped with cents", money.show(123456, usd), "$1,234.56"),
+        ok("a count is not a decimal", money.quantity(3.0), "3"),
+        ok("a weighed quantity is", money.quantity(0.35), "0.35"),
+        ok("half", money.quantity(2.5), "2.5"),
+        ok("three decimals", money.quantity(1.125), "1.125"),
+        ok("english", i18n.t(i18n.Lang.En, "total"), "TOTAL"),
+        ok("burmese", i18n.t(i18n.Lang.My, "total"), "စုစုပေါင်း"),
+        ok("a key with no phrase falls through", i18n.t(i18n.Lang.En, "nope"), "nope"),
+        ok("the switch goes both ways", i18n.code_of(i18n.other(i18n.Lang.En)), "my"),
+    ]
+
+    let failures = count(results, |passed: bool| !passed)
+    if failures == 0 {
+        io.print("\nall \(results.len()) checks passed")
+    } else {
+        io.print("\n\(failures) CHECK(S) FAILED")
+    }
+}

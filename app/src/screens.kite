@@ -1,0 +1,1967 @@
+//! Every screen, as a function from one API answer to `[desk.Block]`.
+//!
+//! Split out of `office.kite` because that file is the wiring — mount, listen,
+//! dispatch — and this is the reading. Nothing here starts a request or touches
+//! a document: each function is handed the documents it needs and returns what
+//! the view knows how to draw.
+//!
+//! Sixteen screens and four drill-downs, and the whole vocabulary is five
+//! shapes: stat cards, a ranked list with meters, a table, lane cards, and the
+//! detail header. That is what keeps this a long file rather than a hard one.
+
+use desk
+use doc
+use browser
+use i18n
+use money
+use words
+
+// ---- small helpers ---------------------------------------------------------
+
+pub fn cash(d: doc.Doc, name: str, c: money.Currency) -> str {
+    return money.show(doc.int_of(d, name, 0), c)
+}
+
+pub fn qty(d: doc.Doc, name: str) -> str {
+    return money.quantity(doc.num_of(d, name, 0.0))
+}
+
+pub fn row(key: str, cells: [str], tone: str) -> desk.Row {
+    return desk.Row{ key: key, cells: cells, tone: tone, action: "", id: "" }
+}
+
+pub fn touchable(key: str, cells: [str], tone: str, what: str, id: str) -> desk.Row {
+    return desk.Row{ key: key, cells: cells, tone: tone, action: what, id: id }
+}
+
+pub fn table(heading: str, note: str, columns: [str], rows: [desk.Row]) -> desk.Block {
+    return desk.Block.Grid(table: desk.Table{
+            heading: heading, note: note, columns: columns, rows: rows })
+}
+
+/// Meter widths against the biggest in the set.
+pub fn meters(items: [doc.Doc], name_key: str, value_key: str, sub: [str],
+    c: money.Currency) -> [desk.Meter] {
+    var largest = 0
+    for d in items {
+        largest = max(largest, doc.int_of(d, value_key, 0))
+    }
+    var out: [desk.Meter] = []
+    for (i, d) in enumerate(items) {
+        let value = doc.int_of(d, value_key, 0)
+        out.push(desk.Meter{
+                key: "m\(i)",
+                rank: "\(i + 1)",
+                name: doc.text(d, name_key, ""),
+                value: money.show(value, c),
+                sub: or_else(sub.get(i), ""),
+                width: desk.width_of(value, largest),
+            })
+    }
+    return out
+}
+
+/// One line of a receipt's foot: a label on the left, the amount on the right.
+///
+/// Padded by counting characters rather than written with a run of spaces,
+/// because the မြန်မာ word for a subtotal is not eight letters long and a
+/// hard-coded gap put the amounts in a different place in each language.
+fn foot_line(label: str, amount: str) -> str {
+    return label + pad_start(amount, max(32 - label.len(), 1), " ")
+}
+
+fn when(epoch: int) -> str {
+    if epoch <= 0 {
+        return "—"
+    }
+    return "\(browser.day_of(epoch)) \(browser.clock_of(epoch))"
+}
+
+// ---- codes, said in words ---------------------------------------------------
+//
+// The database stores machine words — `part_received`, `safe_drop`, `n_for_x` —
+// and this file used to print them with the underscores swapped for spaces. That
+// reads as English to nobody and as မြန်မာ to nobody at all, so every code a
+// screen shows goes through one of these. An unknown code falls back to the code
+// itself for the same reason a missing key does: findable, and obviously wrong.
+
+/// The window a books sheet is showing.
+///
+/// `desk.window_label` answers this in English only. The books' notes are the
+/// one place a window is read as prose rather than pressed as a chip, so it is
+/// said here in the reader's own language.
+fn window_of(l: i18n.Lang, name: str) -> str {
+    if name == "today" { return words.t(l, "common.today") }
+    if name == "7" { return words.t(l, "common.7_days") }
+    if name == "month" { return words.t(l, "common.this_month") }
+    if name == "all" { return words.t(l, "common.all_time") }
+    return words.t(l, "common.30_days")
+}
+
+/// What a movement of stock was for — `stock_movements.reason`.
+fn stock_reason_of(l: i18n.Lang, code: str) -> str {
+    if code == "sale" { return words.t(l, "movements.reason_sale") }
+    if code == "refund" { return words.t(l, "sales.refund") }
+    if code == "receive" { return words.t(l, "inventory.delivery_received") }
+    if code == "adjust" { return words.t(l, "inventory.manual_correction") }
+    if code == "waste" { return words.t(l, "movements.reason_waste") }
+    if code == "count" { return words.t(l, "movements.reason_count") }
+    if code == "open" { return words.t(l, "products.opening_stock") }
+    return code
+}
+
+/// Whether a lane is being worked, shut, or has gone quiet.
+fn lane_state_of(l: i18n.Lang, code: str) -> str {
+    if code == "open" { return words.t(l, "common.open_state") }
+    if code == "closed" { return words.t(l, "common.closed") }
+    if code == "offline" { return words.t(l, "tills.offline") }
+    return code
+}
+
+/// What moved the cash in a drawer — `cash_movements.kind`.
+fn drawer_kind_of(l: i18n.Lang, code: str) -> str {
+    if code == "paid_in" { return words.t(l, "shift_detail.cash_paid_in") }
+    if code == "paid_out" { return words.t(l, "shift_detail.cash_paid_out") }
+    if code == "safe_drop" { return words.t(l, "shifts.safe_drop") }
+    return code
+}
+
+/// How money changed hands — a tender, a refund or an expense.
+fn method_of(l: i18n.Lang, code: str) -> str {
+    if code == "cash" { return words.t(l, "common.cash") }
+    if code == "card" { return words.t(l, "common.card") }
+    if code == "wallet" { return words.t(l, "common.wallet") }
+    if code == "store_credit" { return words.t(l, "common.store_credit") }
+    if code == "on_account" { return words.t(l, "expenses.on_account") }
+    return code
+}
+
+/// What a person may open and how far they may reach — `users.role`.
+fn role_of(l: i18n.Lang, code: str) -> str {
+    if code == "sale_staff" { return words.t(l, "staff.sale_staff") }
+    if code == "manager" { return words.t(l, "staff.manager") }
+    if code == "owner" { return words.t(l, "staff.owner") }
+    return code
+}
+
+/// Where a purchase order has got to — `purchase_orders.status`.
+fn order_status_of(l: i18n.Lang, code: str) -> str {
+    if code == "draft" { return words.t(l, "ui.draft") }
+    if code == "sent" { return words.t(l, "purchasing.sent") }
+    if code == "part_received" { return words.t(l, "ui.part_received") }
+    if code == "received" { return words.t(l, "common.received") }
+    if code == "cancelled" { return words.t(l, "common.cancelled") }
+    return code
+}
+
+/// Where a sale has got to — `sales.status`.
+fn sale_status_of(l: i18n.Lang, code: str) -> str {
+    if code == "held" { return words.t(l, "ui.held") }
+    if code == "completed" { return words.t(l, "common.completed") }
+    if code == "voided" { return words.t(l, "common.voided") }
+    return code
+}
+
+/// The shape of an offer — `promotions.kind`.
+fn offer_kind_of(l: i18n.Lang, code: str) -> str {
+    if code == "percent_off" { return words.t(l, "promotions.percentage_off") }
+    if code == "amount_off" { return words.t(l, "promotions.amount_off") }
+    if code == "fixed_price" { return words.t(l, "promotions.fixed_price") }
+    if code == "n_for_x" { return words.t(l, "promotions.multibuy") }
+    return code
+}
+
+/// How wide an offer casts — `promotions.scope`.
+fn offer_scope_of(l: i18n.Lang, code: str) -> str {
+    if code == "product" { return words.t(l, "common.product") }
+    if code == "category" { return words.t(l, "common.category") }
+    if code == "all" { return words.t(l, "common.all") }
+    return code
+}
+
+/// Which side of the sheet an account sits on — `accounts.kind`.
+fn account_kind_of(l: i18n.Lang, code: str) -> str {
+    if code == "asset" { return words.t(l, "accounting.asset") }
+    if code == "liability" { return words.t(l, "accounting.liability") }
+    if code == "equity" { return words.t(l, "accounting.equity") }
+    if code == "income" { return words.t(l, "accounting.income") }
+    if code == "expense" { return words.t(l, "accounting.expense") }
+    return code
+}
+
+/// Which way an account normally moves — `accounts.normal`.
+fn normal_of(l: i18n.Lang, code: str) -> str {
+    if code == "debit" { return words.t(l, "accounting.debit") }
+    if code == "credit" { return words.t(l, "accounting.credit") }
+    return code
+}
+
+/// What caused a journal entry — `journal_entries.ref_type`.
+fn caused_by_of(l: i18n.Lang, code: str) -> str {
+    if code == "sale" { return words.t(l, "movements.reason_sale") }
+    if code == "refund" { return words.t(l, "sales.refund") }
+    if code == "shift" { return words.t(l, "nav.shift") }
+    if code == "cash_movement" { return words.t(l, "movements.cash_movement") }
+    if code == "expense" { return words.t(l, "accounting.expense") }
+    if code == "stock_movement" { return words.t(l, "movements.stock_movement") }
+    if code == "supplier_invoice" { return words.t(l, "payables.supplier_invoice") }
+    if code == "supplier_payment" { return words.t(l, "payables.supplier_payment") }
+    if code == "purchase_order" { return words.t(l, "nav.purchase_order") }
+    if code == "opening" { return words.t(l, "accounting.opening_balance") }
+    return code
+}
+
+/// What somebody had to be authorised for — `audit_log.action`.
+fn authorised_of(l: i18n.Lang, code: str) -> str {
+    if code == "void_sale" { return words.t(l, "tills.void_sale") }
+    if code == "no_sale" { return words.t(l, "tills.no_sale") }
+    if code == "return" { return words.t(l, "tills.return") }
+    if code == "refund" { return words.t(l, "sales.refund") }
+    if code == "price_override" { return words.t(l, "tills.price_override") }
+    if code == "line_discount" { return words.t(l, "tills.line_discount") }
+    if code == "basket_discount" { return words.t(l, "register.basket_discount") }
+    if code == "close_lane" { return words.t(l, "tills.close_lane") }
+    if code == "expense" { return words.t(l, "accounting.expense") }
+    if code == "close_period" { return words.t(l, "accounting.close_the_month") }
+    if code == "reverse_entry" { return words.t(l, "accounting.entry_reversed") }
+    return code
+}
+
+/// One of the till's own command words.
+///
+/// The API sends the command bar's English labels rather than its ids, so this
+/// maps back to the id and then into the shop's vocabulary. A label nobody
+/// recognises comes through untouched, which is what a new command would do
+/// until somebody adds a line here.
+fn command_of(l: i18n.Lang, label: str) -> str {
+    if label == "Hold" { return words.t(l, "tills.hold") }
+    if label == "Held" { return words.t(l, "tills.held") }
+    if label == "Customer" { return words.t(l, "common.customer") }
+    if label == "Price check" { return words.t(l, "tills.price_check") }
+    if label == "Void line" { return words.t(l, "tills.void_line") }
+    if label == "Discount" { return words.t(l, "common.discount") }
+    if label == "Price override" { return words.t(l, "tills.price_override") }
+    if label == "Return" { return words.t(l, "tills.return") }
+    if label == "Void sale" { return words.t(l, "tills.void_sale") }
+    if label == "No sale" { return words.t(l, "tills.no_sale") }
+    if label == "Close lane" { return words.t(l, "tills.close_lane") }
+    return label
+}
+
+/// Whether a role may reach a command, and what it costs them.
+fn allowance_of(l: i18n.Lang, code: str) -> str {
+    if code == "yes" { return words.t(l, "accounting.yes") }
+    if code == "pin" { return words.t(l, "tills.manager_pin") }
+    if code == "no" { return words.t(l, "error.not_allowed") }
+    return code
+}
+
+/// What the till asks for before it runs a command.
+fn confirm_of(l: i18n.Lang, code: str) -> str {
+    if code == "none" { return words.t(l, "common.none") }
+    if code == "explicit" { return words.t(l, "tills.confirm") }
+    if code == "reason" { return words.t(l, "common.reason") }
+    return code
+}
+
+// ---- the day ---------------------------------------------------------------
+
+pub fn overview(answer: doc.Doc, l: i18n.Lang, c: money.Currency, who: str) -> [desk.Block] {
+    let today = doc.field(answer, "today")
+    let margin = doc.field(answer, "margin")
+    let stock = doc.field(answer, "stock")
+
+    let sales = doc.int_of(today, "sales", 0)
+    let takings = doc.int_of(today, "takings", 0)
+    let net = doc.int_of(margin, "net", 0)
+    let cost = doc.int_of(margin, "cost", 0)
+    let low = doc.int_of(stock, "low", 0)
+
+    let stats: [desk.Stat] = [
+        desk.Stat{ label: words.t(l, "dashboard.takings_today"), value: money.show(takings, c),
+            meta: "\(words.fill_n(l, "shifts.n_sales", "\(sales)")) · \(words.fill(l, "sales.avg_n", money.show(if sales > 0 { takings / sales } else { 0 }, c)))",
+            tone: "ok" },
+        desk.Stat{ label: words.t(l, "dashboard.margin_today"), value: money.show(net - cost, c),
+            meta: words.fill(l, "dashboard.on_n_net_of_tax", money.show(net, c)), tone: "info" },
+        desk.Stat{ label: words.t(l, "common.stock_at_cost"), value: cash(stock, "at_cost", c),
+            meta: "\(words.fill_n(l, "dashboard.n_skus", "\(doc.int_of(stock, "skus", 0))")) · \(words.fill_n(l, "dashboard.n_low", "\(low)"))",
+            tone: if low > 0 { "warn" } else { "" } },
+        desk.Stat{ label: words.t(l, "dashboard.given_away"), value: cash(today, "given_away", c),
+            meta: words.t(l, "promotions.offers_and_discounts"), tone: "" },
+    ]
+
+    let sellers = doc.items(doc.field(answer, "top_sellers"))
+    var sold: [str] = []
+    for s in sellers {
+        sold.push(words.fill(l, "dashboard.n_sold", qty(s, "sold")))
+    }
+
+    var lanes: [desk.Row] = []
+    for lane in doc.items(doc.field(answer, "lanes")) {
+        let open = doc.text(lane, "shift_id", "").len() > 0
+        lanes.push(row(doc.text(lane, "id", ""), [
+                    doc.text(lane, "name", ""),
+                    if open { words.t(l, "common.open_state") } else { words.t(l, "common.closed") },
+                    doc.text(lane, "operator", "—"),
+                    "\(doc.int_of(lane, "sales", 0))",
+                    cash(lane, "takings", c),
+                ], if open { "ok" } else { "" }))
+    }
+
+    var days: [desk.Row] = []
+    for d in doc.items(doc.field(answer, "fortnight")) {
+        days.push(row(doc.text(d, "day", ""), [
+                    doc.text(d, "day", ""),
+                    "\(doc.int_of(d, "sales", 0))",
+                    cash(d, "takings", c),
+                ], ""))
+    }
+
+    return [
+        desk.Block.Stats(items: stats),
+        desk.Block.Meters(heading: words.t(l, "dashboard.top_sellers"),
+            note: words.t(l, "dashboard.last_7_days"),
+            rows: meters(sellers, "name", "revenue", sold, c)),
+        table(words.t(l, "dashboard.lanes_today"), "",
+            [words.t(l, "common.lane"), words.t(l, "common.state"),
+                words.t(l, "shifts.operator"), words.t(l, "common.sales"),
+                words.t(l, "common.takings")], lanes),
+        table(words.t(l, "dashboard.the_fortnight"), "",
+            [words.t(l, "common.day"), words.t(l, "common.sales"),
+                words.t(l, "common.takings")], days),
+    ]
+}
+
+pub fn tills(answer: doc.Doc, audit: doc.Doc, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    var cards: [desk.LaneCard] = []
+    for lane in doc.items(doc.field(answer, "lanes")) {
+        let state = doc.text(lane, "state", "closed")
+        let operator = doc.text(lane, "operator", "")
+        let open = state != "closed"
+        let items = doc.int_of(lane, "active_items", 0)
+        var note = words.t(l, "tills.ready_for_a_float")
+        if open && items > 0 {
+            note = "\(words.t(l, "tills.a_sale_is_in_progress")) · \(words.fill(l, "register.n_items", "\(items)")) · \(cash(lane, "active_total", c))"
+        } else if open {
+            note = words.t(l, "tills.signed_in_and_waiting")
+        }
+        if state == "offline" {
+            note = words.t(l, "tills.lane_has_not_spoken")
+        }
+        cards.push(desk.LaneCard{
+                id: doc.text(lane, "id", ""),
+                name: doc.text(lane, "name", ""),
+                state: lane_state_of(l, state),
+                tone: if state == "open" { "ok" } else if state == "offline" { "warn" } else { "" },
+                initials: if operator.len() > 0 { desk.initials_of(operator) } else { "—" },
+                operator: if operator.len() > 0 { operator } else { words.t(l, "tills.unattended") },
+                since: if open {
+                    "\(words.fill(l, "tills.since_n", browser.clock_of(doc.int_of(lane, "opened_at", 0)))) · \(words.fill(l, "tills.float_n", cash(lane, "opening_float", c)))"
+                } else {
+                    words.fill(l, "tills.closed_n", browser.day_of(doc.int_of(lane, "last_close", 0)))
+                },
+                drawer: cash(lane, "drawer_expected", c),
+                sales: "\(doc.int_of(lane, "sales", 0))",
+                held: "\(doc.int_of(lane, "held", 0))",
+                note: note,
+                close_label: if open {
+                    words.t(l, "tills.force_close")
+                } else {
+                    words.t(l, "tills.retire_device")
+                },
+                closeable: true,
+            })
+    }
+
+    var auths: [desk.Row] = []
+    for a in doc.items(doc.field(audit, "entries")) {
+        let what = doc.text(a, "action", "")
+        auths.push(row(doc.text(a, "id", ""), [
+                    browser.clock_of(doc.int_of(a, "at", 0)),
+                    doc.text(a, "register_name", "—"),
+                    authorised_of(l, what),
+                    doc.text(a, "asked_by_name", "—"),
+                    doc.text(a, "approved_by_name", "—"),
+                    money.show(doc.int_of(a, "amount", 0), c),
+                ], if what == "void_sale" || what == "no_sale" { "stop" } else { "" }))
+    }
+
+    return [
+        desk.Block.Note(heading: words.t(l, "nav.tills"),
+            body: words.t(l, "tills.every_lane_running_the_pos_app")),
+        desk.Block.Buttons(items: [
+                desk.action(words.t(l, "tills.add_a_lane"), "form-register", "", "soft"),
+            ]),
+        desk.Block.Lanes(cards: cards),
+        table(words.t(l, "tills.authorisations_at_the_till"), words.t(l, "common.today"),
+            [words.t(l, "shift_detail.time"), words.t(l, "common.lane"),
+                words.t(l, "tills.command"), words.t(l, "tills.asked_by"),
+                words.t(l, "tills.approved_by"), words.t(l, "common.amount")], auths),
+    ]
+}
+
+// ---- selling ---------------------------------------------------------------
+
+pub fn sales(answer: doc.Doc, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    var rows: [desk.Row] = []
+    var total = 0
+    var refunds = 0
+    for s in doc.items(doc.field(answer, "sales")) {
+        let refunded = doc.int_of(s, "refunded", 0)
+        total = total + doc.int_of(s, "total", 0)
+        refunds = refunds + refunded
+        rows.push(touchable(doc.text(s, "id", ""), [
+                    "#\(doc.int_of(s, "number", 0))",
+                    when(doc.int_of(s, "completed_at", 0)),
+                    doc.text(s, "cashier", ""),
+                    doc.text(s, "customer", "—"),
+                    "\(doc.int_of(s, "items", 0))",
+                    cash(s, "total", c),
+                    if refunded > 0 { "−\(money.show(refunded, c))" } else { "" },
+                ], if refunded > 0 { "warn" } else { "" }, "open-sale", doc.text(s, "id", "")))
+    }
+    return [
+        desk.Block.Stats(items: [
+                desk.Stat{ label: words.t(l, "common.takings"), value: money.show(total, c),
+                    meta: words.fill(l, "sales.n_sales_in_seven_days", "\(rows.len())"), tone: "ok" },
+                desk.Stat{ label: words.t(l, "common.refunded"), value: money.show(refunds, c),
+                    meta: words.t(l, "sales.returned_to_customers"),
+                    tone: if refunds > 0 { "warn" } else { "" } },
+            ]),
+        table(words.t(l, "common.sales"), words.t(l, "sales.seven_days_touch_a_row"),
+            ["#", words.t(l, "common.when"), words.t(l, "common.cashier"),
+                words.t(l, "common.customer"), words.t(l, "register.items"),
+                words.t(l, "common.total"), words.t(l, "common.refunded")], rows),
+    ]
+}
+
+pub fn sale_detail(answer: doc.Doc, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    let sale = doc.field(answer, "sale")
+    let shop = doc.field(answer, "shop")
+    let lines = doc.items(doc.field(answer, "lines"))
+    let number = doc.int_of(sale, "number", 0)
+
+    var facts: [desk.Fact] = [
+        desk.Fact{ label: words.t(l, "common.total"), value: cash(sale, "total", c), tone: "" },
+        desk.Fact{ label: words.t(l, "common.when"),
+            value: when(doc.int_of(sale, "completed_at", 0)), tone: "" },
+        desk.Fact{ label: words.t(l, "common.cashier"),
+            value: doc.text(sale, "cashier", ""), tone: "" },
+        desk.Fact{ label: words.t(l, "common.lane"),
+            value: doc.text(sale, "register_name", "—"), tone: "" },
+    ]
+    let customer = doc.text(sale, "customer", "")
+    if customer.len() > 0 {
+        facts.push(desk.Fact{ label: words.t(l, "common.customer"), value: customer, tone: "" })
+    }
+
+    var refunded = 0
+    for r in doc.items(doc.field(answer, "refunds")) {
+        refunded = refunded + doc.int_of(r, "total", 0)
+    }
+    if refunded > 0 {
+        facts.push(desk.Fact{ label: words.t(l, "common.refunded"),
+                value: money.show(refunded, c), tone: "warn" })
+    }
+
+    var actions: [desk.Action] = [
+        desk.action(words.t(l, "common.print"), "print", "", "soft"),
+    ]
+    if doc.text(sale, "status", "") == "completed" {
+        actions.push(desk.action(words.t(l, "sales.refund"), "form-refund",
+                doc.text(sale, "id", ""), "danger"))
+    }
+
+    // The receipt, exactly as it prints. Every line is a snapshot from the sale
+    // itself — the name, the price and the offer as they were on the day — so a
+    // reprint years later reads as it did at the counter.
+    var head: [str] = [doc.text(shop, "name", "")]
+    let address = doc.text(shop, "address", "")
+    if address.len() > 0 {
+        head.push(address)
+    }
+    let phone = doc.text(shop, "phone", "")
+    if phone.len() > 0 {
+        head.push(phone)
+    }
+    let tax_id = doc.text(shop, "tax_id", "")
+    if tax_id.len() > 0 {
+        head.push("\(words.t(l, "common.tax_id")) \(tax_id)")
+    }
+    head.push("\(words.fill(l, "title.receipt", "#\(number)")) · \(when(doc.int_of(sale, "completed_at", 0)))")
+    head.push("\(words.t(l, "receipt.served_by")) \(doc.text(sale, "cashier", ""))")
+
+    var body: [str] = []
+    var table_rows: [desk.Row] = []
+    // `line` rather than `l`, which is the language everywhere else in this file.
+    for line in lines {
+        let name = doc.text(line, "name", "")
+        let q = doc.num_of(line, "qty", 0.0)
+        body.push("\(money.quantity(q)) × \(name)")
+        body.push("      \(money.show(doc.int_of(line, "unit_price", 0), c)) \(words.t(l, "receipt.each"))      \(money.show(doc.int_of(line, "total", 0), c))")
+        let promo = doc.text(line, "promo_name", "")
+        if promo.len() > 0 {
+            body.push("      \(promo) − \(money.show(doc.int_of(line, "promo_saved", 0), c))")
+        }
+        let back = doc.num_of(line, "refunded_qty", 0.0)
+        table_rows.push(row(doc.text(line, "id", ""), [
+                    name,
+                    doc.text(line, "sku", ""),
+                    money.quantity(q),
+                    cash(line, "unit_price", c),
+                    if promo.len() > 0 { promo } else { "" },
+                    cash(line, "total", c),
+                    if back > 0.0 { money.quantity(back) } else { "" },
+                ], if back > 0.0 { "warn" } else { "" }))
+    }
+
+    var foot: [str] = [
+        foot_line(words.t(l, "common.subtotal"), cash(sale, "subtotal", c)),
+    ]
+    let saved = doc.int_of(sale, "promo_saved", 0) + doc.int_of(sale, "discount", 0)
+    if saved > 0 {
+        foot.push(foot_line(words.t(l, "receipt.you_saved_label"), money.show(saved, c)))
+    }
+    if doc.int_of(sale, "tax", 0) > 0 {
+        foot.push(foot_line(words.t(l, "common.tax_included"), cash(sale, "tax", c)))
+    }
+    foot.push(foot_line(words.t(l, "receipt.total"), cash(sale, "total", c)))
+    for p in doc.items(doc.field(answer, "payments")) {
+        foot.push(foot_line(method_of(l, doc.text(p, "method", "")), cash(p, "amount", c)))
+        if doc.int_of(p, "change", 0) > 0 {
+            foot.push(foot_line(words.t(l, "common.change"), cash(p, "change", c)))
+        }
+    }
+    let footer = doc.text(shop, "footer", "")
+    if footer.len() > 0 {
+        foot.push("")
+        foot.push(footer)
+    }
+
+    var refunds: [desk.Row] = []
+    for r in doc.items(doc.field(answer, "refunds")) {
+        refunds.push(row(doc.text(r, "id", ""), [
+                    when(doc.int_of(r, "created_at", 0)),
+                    doc.text(r, "by_name", ""),
+                    doc.text(r, "reason", ""),
+                    method_of(l, doc.text(r, "method", "")),
+                    cash(r, "total", c),
+                ], "warn"))
+    }
+
+    var out: [desk.Block] = [
+        desk.Block.Detail(title: words.fill(l, "title.receipt", "#\(number)"),
+            subtitle: sale_status_of(l, doc.text(sale, "status", "")),
+            facts: facts, actions: actions),
+        table(words.t(l, "common.lines"), "",
+            [words.t(l, "common.product"), words.t(l, "products.sku"),
+                words.t(l, "sales.qty"), words.t(l, "common.each"),
+                words.t(l, "promotions.offer"), words.t(l, "common.total"),
+                words.t(l, "sales.returned")], table_rows),
+        desk.Block.Receipt(lines: body, head: head, foot: foot),
+    ]
+    if refunds.len() > 0 {
+        out.push(table(words.t(l, "reports.refunds"), "",
+                [words.t(l, "common.when"), words.t(l, "movements.by"),
+                    words.t(l, "common.reason"), words.t(l, "sales.refund_to"),
+                    words.t(l, "common.amount")], refunds))
+    }
+    return out
+}
+
+// ---- drawers ---------------------------------------------------------------
+
+pub fn shifts(answer: doc.Doc, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    var rows: [desk.Row] = []
+    var variance = 0
+    var open_id = ""
+    for s in doc.items(doc.field(answer, "shifts")) {
+        let closed = doc.int_of(s, "closed_at", 0)
+        let v = doc.int_of(s, "variance", 0)
+        variance = variance + v
+        if closed == 0 {
+            open_id = doc.text(s, "id", "")
+        }
+        rows.push(touchable(doc.text(s, "id", ""), [
+                    doc.text(s, "register_name", ""),
+                    doc.text(s, "user_name", ""),
+                    when(doc.int_of(s, "opened_at", 0)),
+                    if closed > 0 { browser.clock_of(closed) } else { words.t(l, "common.open_state") },
+                    "\(doc.int_of(s, "sales", 0))",
+                    cash(s, "takings", c),
+                    if closed > 0 { money.show(v, c) } else { "" },
+                ], if closed == 0 { "ok" } else if v != 0 { "warn" } else { "" },
+                "open-shift-detail", doc.text(s, "id", "")))
+    }
+    var buttons: [desk.Action] = [
+        desk.action(words.t(l, "shifts.open_a_drawer"), "form-open-shift", "", "filled"),
+    ]
+    if open_id.len() > 0 {
+        buttons.push(desk.action(words.t(l, "shifts.count_and_close"),
+                "form-close-shift", open_id, "soft"))
+    }
+    return [
+        desk.Block.Stats(items: [
+                desk.Stat{ label: words.t(l, "common.over_short"), value: money.show(variance, c),
+                    meta: words.t(l, "shifts.across_every_closed_drawer"),
+                    tone: if variance == 0 { "ok" } else { "warn" } },
+            ]),
+        desk.Block.Buttons(items: buttons),
+        table(words.t(l, "shifts.shifts"), words.t(l, "shifts.expected_is_derived"),
+            [words.t(l, "common.lane"), words.t(l, "shifts.operator"),
+                words.t(l, "common.opened"), words.t(l, "common.closed"),
+                words.t(l, "common.sales"), words.t(l, "common.takings"),
+                words.t(l, "common.over_short")], rows),
+    ]
+}
+
+pub fn shift_detail(answer: doc.Doc, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    let shift = doc.field(answer, "shift")
+    let drawer = doc.field(answer, "drawer")
+    let closed = doc.int_of(shift, "closed_at", 0)
+    let id = doc.text(shift, "id", "")
+
+    let facts: [desk.Fact] = [
+        desk.Fact{ label: words.t(l, "common.expected_in_drawer"),
+            value: cash(drawer, "expected", c), tone: "" },
+        desk.Fact{ label: words.t(l, "common.counted"),
+            value: if closed > 0 {
+                cash(shift, "counted_total", c)
+            } else {
+                words.t(l, "shift_detail.not_counted_yet")
+            }, tone: "" },
+        desk.Fact{ label: words.t(l, "common.over_short"),
+            value: if closed > 0 { cash(shift, "variance", c) } else { "—" },
+            tone: if closed > 0 && doc.int_of(shift, "variance", 0) != 0 { "warn" } else { "" } },
+        desk.Fact{ label: words.t(l, "common.opened"),
+            value: when(doc.int_of(shift, "opened_at", 0)), tone: "" },
+    ]
+    var actions: [desk.Action] = []
+    if closed == 0 {
+        actions.push(desk.action(words.t(l, "shifts.cash_in_or_out"), "form-movement", id, "soft"))
+        actions.push(desk.action(words.t(l, "shifts.count_and_close"),
+                "form-close-shift", id, "filled"))
+    }
+
+    // The derivation, spelled out. This is the screen that answers "why does it
+    // think there should be that much in the drawer", and the answer is every
+    // term that went into it.
+    let workings: [desk.Row] = [
+        row("float", [words.t(l, "shifts.opening_float"), cash(drawer, "opening_float", c)], ""),
+        row("taken", [words.t(l, "shifts.cash_taken"), cash(drawer, "cash_taken", c)], ""),
+        row("change", [words.t(l, "shift_detail.change_given"),
+                "−\(cash(drawer, "change_given", c))"], ""),
+        row("in", [words.t(l, "shifts.paid_in"), cash(drawer, "cash_in", c)], ""),
+        row("out", [words.t(l, "shifts.paid_out_and_safe_drops"),
+                "−\(cash(drawer, "cash_out", c))"], ""),
+        row("refunds", [words.t(l, "shifts.cash_refunds"),
+                "−\(cash(drawer, "cash_refunds", c))"], ""),
+        row("expected", [words.t(l, "common.expected"), cash(drawer, "expected", c)], "ok"),
+    ]
+
+    var movements: [desk.Row] = []
+    for m in doc.items(doc.field(answer, "movements")) {
+        movements.push(row(doc.text(m, "id", ""), [
+                    browser.clock_of(doc.int_of(m, "created_at", 0)),
+                    drawer_kind_of(l, doc.text(m, "kind", "")),
+                    doc.text(m, "reason", ""),
+                    doc.text(m, "user_name", ""),
+                    cash(m, "amount", c),
+                ], ""))
+    }
+    var tenders: [desk.Row] = []
+    for t in doc.items(doc.field(answer, "tenders")) {
+        tenders.push(row(doc.text(t, "method", ""), [
+                    method_of(l, doc.text(t, "method", "")),
+                    "\(doc.int_of(t, "count", 0))",
+                    cash(t, "amount", c),
+                ], ""))
+    }
+    var sales_rows: [desk.Row] = []
+    for s in doc.items(doc.field(answer, "sales")) {
+        sales_rows.push(touchable(doc.text(s, "id", ""), [
+                    "#\(doc.int_of(s, "number", 0))",
+                    browser.clock_of(doc.int_of(s, "completed_at", 0)),
+                    cash(s, "total", c),
+                ], "", "open-sale", doc.text(s, "id", "")))
+    }
+
+    return [
+        desk.Block.Detail(
+            title: "\(doc.text(shift, "register_name", "")) · \(doc.text(shift, "user_name", ""))",
+            subtitle: if closed > 0 {
+                words.fill(l, "tills.closed_n", when(closed))
+            } else {
+                words.t(l, "common.open_state")
+            },
+            facts: facts, actions: actions),
+        table(words.t(l, "shift_detail.how_the_expected_figure_is_reached"),
+            words.t(l, "shift_detail.derived_never_typed"),
+            ["", words.t(l, "common.amount")], workings),
+        table(words.t(l, "shifts.cash_in_and_out"), "",
+            [words.t(l, "shift_detail.time"), words.t(l, "common.kind"),
+                words.t(l, "common.why"), words.t(l, "settings.who"),
+                words.t(l, "common.amount")], movements),
+        table(words.t(l, "shift_detail.how_they_paid"), "",
+            [words.t(l, "common.tender"), words.t(l, "common.count"),
+                words.t(l, "common.amount")], tenders),
+        table(words.t(l, "common.sales"), "",
+            ["#", words.t(l, "shift_detail.time"), words.t(l, "common.total")], sales_rows),
+    ]
+}
+
+// ---- the catalogue ---------------------------------------------------------
+
+pub fn products(answer: doc.Doc, l: i18n.Lang, c: money.Currency, query: str) -> [desk.Block] {
+    var rows: [desk.Row] = []
+    for p in doc.items(doc.field(answer, "products")) {
+        let stock = doc.num_of(p, "stock", 0.0)
+        let reorder = doc.num_of(p, "reorder_point", 0.0)
+        let age = doc.int_of(p, "min_age", 0)
+        rows.push(touchable(doc.text(p, "id", ""), [
+                    doc.text(p, "name", ""),
+                    doc.text(p, "sku", ""),
+                    doc.text(p, "category_name", "—"),
+                    cash(p, "price", c),
+                    cash(p, "cost", c),
+                    money.quantity(stock),
+                    if age > 0 { "\(age)+" } else { "" },
+                ], if stock <= 0.0 { "stop" } else if reorder > 0.0 && stock <= reorder { "warn" } else { "" },
+                "open-product", doc.text(p, "id", "")))
+    }
+    return [
+        desk.Block.Buttons(items: [
+                desk.action(words.t(l, "products.add_a_product"), "form-product", "", "filled"),
+                desk.action(words.t(l, "common.categories"), "go", "categories", "quiet"),
+            ]),
+        table(words.t(l, "common.products"),
+            if query.len() > 0 {
+                words.fill(l, "products.matching_n", query)
+            } else {
+                words.fill_n(l, "products.n_in_the_catalogue_touch_a_row", "\(rows.len())")
+            },
+            [words.t(l, "common.name"), words.t(l, "products.sku"),
+                words.t(l, "common.category"), words.t(l, "common.price"),
+                words.t(l, "common.cost"), words.t(l, "products.stock"),
+                words.t(l, "products.age")], rows),
+    ]
+}
+
+pub fn product_detail(answer: doc.Doc, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    let p = doc.field(answer, "product")
+    let id = doc.text(p, "id", "")
+    let stock = doc.num_of(p, "stock", 0.0)
+    let price = doc.int_of(p, "price", 0)
+    let cost = doc.int_of(p, "cost", 0)
+    let margin = price - cost
+
+    let facts: [desk.Fact] = [
+        desk.Fact{ label: words.t(l, "products.shelf_price"),
+            value: money.show(price, c), tone: "" },
+        desk.Fact{ label: words.t(l, "common.cost"), value: money.show(cost, c), tone: "" },
+        desk.Fact{ label: words.t(l, "common.margin_2"),
+            value: "\(money.show(margin, c))\(if price > 0 { " · \((margin * 100) / price)%" } else { "" })",
+            tone: if margin <= 0 { "stop" } else { "" } },
+        desk.Fact{ label: words.t(l, "products.on_the_shelf"), value: money.quantity(stock),
+            tone: if stock <= 0.0 { "stop" } else { "" } },
+        desk.Fact{ label: words.t(l, "common.reorder_at"),
+            value: qty(p, "reorder_point"), tone: "" },
+        desk.Fact{ label: words.t(l, "common.supplier"),
+            value: doc.text(p, "supplier_name", "—"), tone: "" },
+    ]
+    let actions: [desk.Action] = [
+        desk.action(words.t(l, "common.edit"), "form-product", id, "soft"),
+        desk.action(words.t(l, "inventory.adjust_stock"), "form-adjust", id, "soft"),
+        desk.action(words.t(l, "products.add_a_barcode"), "form-barcode", id, "quiet"),
+        desk.action(words.t(l, "products.retire"), "retire-product", id, "danger"),
+    ]
+
+    var barcodes: [desk.Row] = []
+    for b in doc.items(doc.field(answer, "barcodes")) {
+        barcodes.push(touchable(doc.text(b, "barcode", ""), [
+                    doc.text(b, "barcode", ""),
+                    qty(b, "pack_size"),
+                    doc.text(b, "label", ""),
+                ], "", "drop-barcode", doc.text(b, "barcode", "")))
+    }
+    var movements: [desk.Row] = []
+    for m in doc.items(doc.field(answer, "movements")) {
+        let delta = doc.num_of(m, "qty_delta", 0.0)
+        movements.push(row(doc.text(m, "id", ""), [
+                    when(doc.int_of(m, "created_at", 0)),
+                    stock_reason_of(l, doc.text(m, "reason", "")),
+                    money.quantity(delta),
+                    cash(m, "unit_cost", c),
+                    doc.text(m, "note", ""),
+                ], if delta < 0.0 { "" } else { "ok" }))
+    }
+    var sold: [desk.Row] = []
+    for s in doc.items(doc.field(answer, "sold")) {
+        sold.push(row(doc.text(s, "day", ""), [
+                    doc.text(s, "day", ""),
+                    qty(s, "qty"),
+                    cash(s, "revenue", c),
+                ], ""))
+    }
+
+    return [
+        desk.Block.Detail(title: doc.text(p, "name", ""),
+            subtitle: "\(doc.text(p, "sku", "")) · \(doc.text(p, "category_name", words.t(l, "products.uncategorised")))",
+            facts: facts, actions: actions),
+        table(words.t(l, "products.barcodes"), words.t(l, "products.touch_one_to_remove_it"),
+            [words.t(l, "common.barcode"), words.t(l, "products.units_per_scan"),
+                words.t(l, "common.label")], barcodes),
+        table(words.t(l, "sales.sold"), words.t(l, "common.30_days"),
+            [words.t(l, "common.day"), words.t(l, "common.quantity"),
+                words.t(l, "common.revenue")], sold),
+        table(words.t(l, "common.stock_movements"),
+            words.t(l, "movements.every_change_to_the_level"),
+            [words.t(l, "common.when"), words.t(l, "common.because"),
+                words.t(l, "movements.change"), words.t(l, "purchasing.at_cost"),
+                words.t(l, "common.note")], movements),
+    ]
+}
+
+pub fn categories(answer: doc.Doc, l: i18n.Lang) -> [desk.Block] {
+    var rows: [desk.Row] = []
+    for cat in doc.items(doc.field(answer, "categories")) {
+        rows.push(touchable(doc.text(cat, "id", ""), [
+                    doc.text(cat, "name", ""),
+                    doc.text(cat, "name_my", ""),
+                    "\(doc.int_of(cat, "products", 0))",
+                    "\(doc.int_of(cat, "sort", 0))",
+                ], "", "form-category", doc.text(cat, "id", "")))
+    }
+    return [
+        desk.Block.Buttons(items: [
+                desk.action(words.t(l, "categories.add_a_category"), "form-category", "", "filled"),
+                desk.action(words.t(l, "categories.back_to_products"), "go", "products", "quiet"),
+            ]),
+        // "မြန်မာ" names its own column in both languages, the way "English"
+        // would: it is the header of the field the till reads a Burmese name from.
+        table(words.t(l, "common.categories"), words.t(l, "common.touch_a_row_to_edit"),
+            [words.t(l, "common.name"), "မြန်မာ", words.t(l, "common.products"),
+                words.t(l, "categories.position")], rows),
+    ]
+}
+
+pub fn suppliers(answer: doc.Doc, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    var rows: [desk.Row] = []
+    for s in doc.items(doc.field(answer, "suppliers")) {
+        let owed = doc.int_of(s, "owed", 0)
+        rows.push(touchable(doc.text(s, "id", ""), [
+                    doc.text(s, "name", ""),
+                    doc.text(s, "phone", "—"),
+                    words.fill(l, "replenishment.n_days", "\(doc.int_of(s, "lead_days", 0))"),
+                    "\(doc.int_of(s, "products", 0))",
+                    money.show(owed, c),
+                ], if owed > 0 { "warn" } else { "" }, "form-supplier", doc.text(s, "id", "")))
+    }
+    return [
+        desk.Block.Buttons(items: [
+                desk.action(words.t(l, "suppliers.add_a_supplier"), "form-supplier", "", "filled"),
+            ]),
+        table(words.t(l, "common.suppliers"), words.t(l, "common.touch_a_row_to_edit"),
+            [words.t(l, "common.name"), words.t(l, "common.phone"),
+                words.t(l, "suppliers.lead_time"), words.t(l, "common.products"),
+                words.t(l, "payables.owed")], rows),
+    ]
+}
+
+pub fn inventory(answer: doc.Doc, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    let totals = doc.field(answer, "totals")
+    let low = doc.int_of(totals, "low", 0)
+    let out = doc.int_of(totals, "out", 0)
+
+    let stats: [desk.Stat] = [
+        desk.Stat{ label: words.t(l, "purchasing.at_cost"), value: cash(totals, "at_cost", c),
+            meta: words.fill_n(l, "dashboard.n_skus", "\(doc.int_of(totals, "skus", 0))"),
+            tone: "info" },
+        desk.Stat{ label: words.t(l, "inventory.at_retail"), value: cash(totals, "at_retail", c),
+            meta: words.t(l, "inventory.if_it_all_sold_at_the_shelf_price"), tone: "" },
+        desk.Stat{ label: words.t(l, "inventory.low"), value: "\(low)",
+            meta: words.t(l, "inventory.at_or_below_the_reorder_point"),
+            tone: if low > 0 { "warn" } else { "ok" } },
+        desk.Stat{ label: words.t(l, "inventory.out"), value: "\(out)",
+            meta: words.t(l, "inventory.nothing_on_the_shelf"),
+            tone: if out > 0 { "stop" } else { "ok" } },
+    ]
+
+    var attention: [desk.Row] = []
+    for p in doc.items(doc.field(answer, "attention")) {
+        let stock = doc.num_of(p, "stock", 0.0)
+        attention.push(touchable(doc.text(p, "id", ""), [
+                    doc.text(p, "name", ""),
+                    doc.text(p, "sku", ""),
+                    money.quantity(stock),
+                    qty(p, "reorder_point"),
+                    qty(p, "reorder_qty"),
+                    doc.text(p, "supplier_name", "—"),
+                ], if stock <= 0.0 { "stop" } else { "warn" }, "open-product", doc.text(p, "id", "")))
+    }
+
+    let by_category = doc.items(doc.field(answer, "by_category"))
+    var skus: [str] = []
+    for cat in by_category {
+        skus.push(words.fill_n(l, "dashboard.n_skus", "\(doc.int_of(cat, "skus", 0))"))
+    }
+
+    return [
+        desk.Block.Stats(items: stats),
+        desk.Block.Buttons(items: [
+                desk.action(words.t(l, "common.stock_movements"), "go", "movements", "quiet"),
+            ]),
+        table(words.t(l, "accounting.needs_attention"),
+            words.t(l, "inventory.low_or_out_touch_a_row"),
+            [words.t(l, "common.product"), words.t(l, "products.sku"),
+                words.t(l, "products.stock"), words.t(l, "common.reorder_at"),
+                words.t(l, "products.reorder_qty"), words.t(l, "common.supplier")], attention),
+        desk.Block.Meters(heading: words.t(l, "reports.by_category"),
+            note: words.t(l, "purchasing.at_cost"),
+            rows: meters(by_category, "category", "at_cost", skus, c)),
+    ]
+}
+
+pub fn movements(answer: doc.Doc, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    var rows: [desk.Row] = []
+    for m in doc.items(doc.field(answer, "movements")) {
+        let delta = doc.num_of(m, "qty_delta", 0.0)
+        let reason = doc.text(m, "reason", "")
+        rows.push(touchable(doc.text(m, "id", ""), [
+                    when(doc.int_of(m, "created_at", 0)),
+                    doc.text(m, "product_name", ""),
+                    doc.text(m, "sku", ""),
+                    stock_reason_of(l, reason),
+                    money.quantity(delta),
+                    cash(m, "unit_cost", c),
+                    doc.text(m, "user_name", "—"),
+                ], if reason == "waste" { "stop" } else if delta < 0.0 { "" } else { "ok" },
+                "open-product", doc.text(m, "product_id", "")))
+    }
+    return [
+        desk.Block.Note(heading: words.t(l, "common.stock_movements"),
+            body: words.t(l, "movements.every_change_to_every_level")),
+        table(words.t(l, "movements.the_last_seven_days"), "",
+            [words.t(l, "common.when"), words.t(l, "common.product"),
+                words.t(l, "products.sku"), words.t(l, "common.because"),
+                words.t(l, "movements.change"), words.t(l, "purchasing.at_cost"),
+                words.t(l, "settings.who")], rows),
+    ]
+}
+
+// ---- buying ----------------------------------------------------------------
+
+pub fn purchasing(sheet: doc.Doc, orders: doc.Doc, payables: doc.Doc,
+    l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    var lines: [desk.Row] = []
+    var value = 0
+    for line in doc.items(doc.field(sheet, "lines")) {
+        let suggested = doc.num_of(line, "suggested", 0.0)
+        value = value + doc.int_of(line, "value", 0)
+        let left = doc.num_of(line, "days_left", -1.0)
+        lines.push(touchable(doc.text(line, "id", ""), [
+                    doc.text(line, "name", ""),
+                    doc.text(line, "supplier_name", "—"),
+                    qty(line, "stock"),
+                    words.fill(l, "replenishment.n_per_day",
+                        money.quantity(doc.num_of(line, "per_day", 0.0))),
+                    if left >= 0.0 {
+                        words.fill(l, "replenishment.n_days", money.quantity(left))
+                    } else { "—" },
+                    qty(line, "on_order"),
+                    money.quantity(suggested),
+                    cash(line, "value", c),
+                ], if suggested > 0.0 { "warn" } else { "" },
+                "open-product", doc.text(line, "id", "")))
+    }
+
+    var order_rows: [desk.Row] = []
+    for o in doc.items(doc.field(orders, "orders")) {
+        let status = doc.text(o, "status", "")
+        order_rows.push(touchable(doc.text(o, "id", ""), [
+                    "#\(doc.int_of(o, "number", 0))",
+                    doc.text(o, "supplier_name", ""),
+                    order_status_of(l, status),
+                    "\(doc.int_of(o, "lines", 0))",
+                    cash(o, "total", c),
+                    browser.day_of(doc.int_of(o, "created_at", 0)),
+                ], if status == "received" { "ok" } else if status == "draft" { "" } else { "warn" },
+                "open-order", doc.text(o, "id", "")))
+    }
+
+    let totals = doc.field(payables, "totals")
+    let outstanding = doc.int_of(totals, "outstanding", 0)
+    let overdue = doc.int_of(totals, "overdue", 0)
+    var owing: [desk.Row] = []
+    for i in doc.items(doc.field(payables, "invoices")) {
+        let left = doc.int_of(i, "outstanding", 0)
+        let due = doc.int_of(i, "due_at", 0)
+        owing.push(touchable(doc.text(i, "id", ""), [
+                    doc.text(i, "supplier_name", ""),
+                    doc.text(i, "reference", "—"),
+                    browser.day_of(doc.int_of(i, "issued_at", 0)),
+                    if due > 0 { browser.day_of(due) } else { "—" },
+                    cash(i, "total", c),
+                    money.show(left, c),
+                ], if left > 0 && due > 0 && due < browser.now() { "stop" }
+                   else if left > 0 { "warn" } else { "ok" },
+                if left > 0 { "form-pay-invoice" } else { "" }, doc.text(i, "id", "")))
+    }
+
+    return [
+        desk.Block.Stats(items: [
+                desk.Stat{ label: words.t(l, "purchasing.to_order"), value: money.show(value, c),
+                    meta: words.fill_n(l, "replenishment.n_lines_on_the_worksheet",
+                        "\(lines.len())"),
+                    tone: if value > 0 { "warn" } else { "ok" } },
+                desk.Stat{ label: words.t(l, "accounting.owed_to_suppliers"),
+                    value: money.show(outstanding, c),
+                    meta: words.t(l, "payables.across_every_open_invoice"), tone: "info" },
+                desk.Stat{ label: words.t(l, "purchasing.overdue"), value: money.show(overdue, c),
+                    meta: words.t(l, "payables.past_the_due_date"),
+                    tone: if overdue > 0 { "stop" } else { "ok" } },
+            ]),
+        desk.Block.Buttons(items: [
+                desk.action(words.t(l, "purchasing.raise_orders_from_the_worksheet"),
+                    "raise-orders", "", "filled"),
+                desk.action(words.t(l, "payables.record_an_invoice"), "form-invoice", "", "soft"),
+                desk.action(words.t(l, "common.suppliers"), "go", "suppliers", "quiet"),
+            ]),
+        table(words.t(l, "replenishment.reorder_worksheet"),
+            words.t(l, "replenishment.what_to_buy_over_28_days"),
+            [words.t(l, "common.product"), words.t(l, "common.supplier"),
+                words.t(l, "products.stock"), words.t(l, "common.rate"),
+                words.t(l, "replenishment.cover"), words.t(l, "replenishment.on_order"),
+                words.t(l, "purchasing.suggested"), words.t(l, "common.value")], lines),
+        table(words.t(l, "purchasing.purchase_orders"),
+            words.t(l, "purchasing.touch_a_row_to_receive"),
+            ["#", words.t(l, "common.supplier"), words.t(l, "common.status"),
+                words.t(l, "common.lines"), words.t(l, "common.total"),
+                words.t(l, "purchasing.raised")], order_rows),
+        table(words.t(l, "common.payables"), words.t(l, "payables.touch_a_row_to_pay_it"),
+            [words.t(l, "common.supplier"), words.t(l, "common.reference"),
+                words.t(l, "payables.issued"), words.t(l, "payables.due"),
+                words.t(l, "common.total"), words.t(l, "common.outstanding")], owing),
+    ]
+}
+
+pub fn order_detail(answer: doc.Doc, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    let order = doc.field(answer, "order")
+    let id = doc.text(order, "id", "")
+    let status = doc.text(order, "status", "")
+
+    let facts: [desk.Fact] = [
+        desk.Fact{ label: words.t(l, "common.supplier"),
+            value: doc.text(order, "supplier_name", ""), tone: "" },
+        desk.Fact{ label: words.t(l, "common.status"), value: order_status_of(l, status),
+            tone: if status == "received" { "ok" } else if status == "draft" { "" } else { "warn" } },
+        desk.Fact{ label: words.t(l, "common.total"), value: cash(order, "total", c), tone: "" },
+        desk.Fact{ label: words.t(l, "purchasing.raised"),
+            value: browser.day_of(doc.int_of(order, "created_at", 0)), tone: "" },
+    ]
+    var actions: [desk.Action] = []
+    if status == "draft" {
+        actions.push(desk.action(words.t(l, "purchasing.send_to_supplier"),
+                "send-order", id, "filled"))
+    }
+    if status == "sent" || status == "part_received" {
+        actions.push(desk.action(words.t(l, "purchasing.receive_everything_outstanding"),
+                "receive-all", id, "filled"))
+    }
+    if status != "draft" {
+        actions.push(desk.action(words.t(l, "payables.record_an_invoice"),
+                "form-invoice", id, "soft"))
+    }
+
+    var lines: [desk.Row] = []
+    for line in doc.items(doc.field(answer, "lines")) {
+        let ordered = doc.num_of(line, "qty", 0.0)
+        let received = doc.num_of(line, "qty_received", 0.0)
+        let left = ordered - received
+        lines.push(touchable(doc.text(line, "id", ""), [
+                    doc.text(line, "product_name", ""),
+                    doc.text(line, "sku", ""),
+                    money.quantity(ordered),
+                    money.quantity(received),
+                    money.quantity(left),
+                    cash(line, "unit_cost", c),
+                ], if left <= 0.0 { "ok" } else { "warn" },
+                if left > 0.0 { "form-receive" } else { "" }, doc.text(line, "id", "")))
+    }
+
+    return [
+        desk.Block.Detail(
+            title: words.fill(l, "purchase_order.order_n", "#\(doc.int_of(order, "number", 0))"),
+            subtitle: doc.text(order, "supplier_name", ""), facts: facts, actions: actions),
+        table(words.t(l, "common.lines"), words.t(l, "purchase_order.touch_a_line_to_receive"),
+            [words.t(l, "common.product"), words.t(l, "products.sku"),
+                words.t(l, "common.ordered"), words.t(l, "common.received"),
+                words.t(l, "common.outstanding"), words.t(l, "purchase_order.cost_each")], lines),
+    ]
+}
+
+// ---- people ----------------------------------------------------------------
+
+pub fn customers(answer: doc.Doc, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    let people = doc.items(doc.field(answer, "customers"))
+    var rows: [desk.Row] = []
+    var credit = 0
+    for cu in people {
+        credit = credit + doc.int_of(cu, "credit", 0)
+        let seen = doc.int_of(cu, "last_seen", 0)
+        rows.push(touchable(doc.text(cu, "id", ""), [
+                    doc.text(cu, "name", ""),
+                    doc.text(cu, "phone", "—"),
+                    "\(doc.int_of(cu, "visits", 0))",
+                    cash(cu, "spent", c),
+                    "\(doc.int_of(cu, "points", 0))",
+                    cash(cu, "credit", c),
+                    if seen > 0 { browser.day_of(seen) } else { words.t(l, "common.never") },
+                ], "", "form-customer", doc.text(cu, "id", "")))
+    }
+    let best = take(sorted(people, |a: doc.Doc, b: doc.Doc|
+            doc.int_of(a, "spent", 0) > doc.int_of(b, "spent", 0)), 8)
+    var visits: [str] = []
+    for cu in best {
+        visits.push(words.fill_n(l, "register.n_visits", "\(doc.int_of(cu, "visits", 0))"))
+    }
+    return [
+        desk.Block.Stats(items: [
+                desk.Stat{ label: words.t(l, "customers.customers"), value: "\(rows.len())",
+                    meta: words.t(l, "customers.on_the_loyalty_list"), tone: "info" },
+                desk.Stat{ label: words.t(l, "customers.store_credit_owed"),
+                    value: money.show(credit, c),
+                    meta: words.t(l, "customers.a_liability_not_a_takings_figure"),
+                    tone: if credit > 0 { "warn" } else { "ok" } },
+            ]),
+        desk.Block.Buttons(items: [
+                desk.action(words.t(l, "customers.add_a_customer"), "form-customer", "", "filled"),
+            ]),
+        desk.Block.Meters(heading: words.t(l, "customers.best_customers"),
+            note: words.t(l, "customers.by_what_they_have_spent"),
+            rows: meters(best, "name", "spent", visits, c)),
+        table(words.t(l, "customers.customers"), words.t(l, "common.touch_a_row_to_edit"),
+            [words.t(l, "common.name"), words.t(l, "common.phone"),
+                words.t(l, "customers.visits"), words.t(l, "customers.spent"),
+                words.t(l, "customers.points"), words.t(l, "customers.credit"),
+                words.t(l, "customers.last_seen")], rows),
+    ]
+}
+
+pub fn staff(answer: doc.Doc, l: i18n.Lang) -> [desk.Block] {
+    var people: [desk.Row] = []
+    var active = 0
+    for u in doc.items(doc.field(answer, "staff")) {
+        let on = doc.int_of(u, "active", 1) == 1
+        if on {
+            active = active + 1
+        }
+        people.push(touchable(doc.text(u, "id", ""), [
+                    doc.text(u, "name", ""),
+                    role_of(l, doc.text(u, "role", "")),
+                    if doc.text(u, "app", "") == "pos" {
+                        words.t(l, "staff.the_till")
+                    } else {
+                        words.t(l, "layout.back_office")
+                    },
+                    if doc.text(u, "signs_in_with", "") == "pin" {
+                        words.t(l, "staff.pin_at_the_lane")
+                    } else {
+                        words.t(l, "staff.username_password")
+                    },
+                    doc.text(u, "at_lane", "—"),
+                ], if on { "" } else { "stop" }, "staff-menu", doc.text(u, "id", "")))
+    }
+    var matrix: [desk.Row] = []
+    for (i, m) in enumerate(doc.items(doc.field(answer, "matrix"))) {
+        let may = doc.text(m, "sale_staff", "")
+        matrix.push(row("m\(i)", [
+                    command_of(l, doc.text(m, "command", "")),
+                    allowance_of(l, may),
+                    allowance_of(l, doc.text(m, "manager", "")),
+                    confirm_of(l, doc.text(m, "confirm", "")),
+                ], if may == "no" { "stop" } else if may == "pin" { "warn" } else { "ok" }))
+    }
+    return [
+        desk.Block.Note(heading: words.t(l, "nav.staff_access"),
+            body: words.t(l, "staff.a_role_decides_which_app")),
+        desk.Block.Buttons(items: [
+                desk.action(words.t(l, "staff.add_staff"), "form-staff", "", "filled"),
+            ]),
+        desk.Block.Roles(cards: [
+                desk.RoleCard{
+                    role: words.t(l, "staff.sale_staff"),
+                    opens: words.t(l, "staff.opens_the_pos_app"),
+                    body: words.t(l, "staff.sale_staff_body"),
+                    chips: [words.t(l, "staff.chip_sell"), words.t(l, "staff.chip_hold_and_recall"),
+                        words.t(l, "tills.price_check"), words.t(l, "staff.chip_discounts_locked")],
+                },
+                desk.RoleCard{
+                    role: words.t(l, "staff.manager_owner"),
+                    opens: words.t(l, "staff.opens_the_back_office"),
+                    body: words.t(l, "staff.manager_owner_body"),
+                    chips: [words.t(l, "staff.chip_approve_at_any_lane"),
+                        words.t(l, "staff.chip_voids_and_returns"), words.t(l, "tills.close_lane")],
+                },
+            ]),
+        table(words.t(l, "common.staff"),
+            words.fill_n(l, "staff.n_active_touch_a_row", "\(active)"),
+            [words.t(l, "common.name"), words.t(l, "staff.role"),
+                words.t(l, "staff.signs_in_to"), words.t(l, "staff.sign_in_method"),
+                words.t(l, "customers.last_seen")], people),
+        table(words.t(l, "tills.till_commands_by_role"),
+            words.t(l, "tills.the_pos_command_bar_is_built_from_this"),
+            [words.t(l, "tills.command"), words.t(l, "staff.sale_staff"),
+                words.t(l, "staff.manager"), words.t(l, "tills.confirm")], matrix),
+    ]
+}
+
+// ---- insight ---------------------------------------------------------------
+
+pub fn promotions(answer: doc.Doc, perf: doc.Doc, l: i18n.Lang,
+    c: money.Currency) -> [desk.Block] {
+    let at = doc.int_of(answer, "now", browser.now())
+    var rows: [desk.Row] = []
+    var live = 0
+    for p in doc.items(doc.field(answer, "promotions")) {
+        let active = doc.int_of(p, "active", 0) == 1
+        let starts = doc.int_of(p, "starts_at", 0)
+        let ends = doc.int_of(p, "ends_at", 0)
+        let running = active && (starts == 0 || starts <= at) && (ends == 0 || ends >= at)
+        if running {
+            live = live + 1
+        }
+        let kind = doc.text(p, "kind", "")
+        var value = cash(p, "value", c)
+        if kind == "percent_off" {
+            value = "\(doc.int_of(p, "value", 0) / 100)%"
+        }
+        if kind == "n_for_x" {
+            value = "\(words.fill(l, "promotions.n_for", "\(doc.int_of(p, "n", 0))")) \(cash(p, "value", c))"
+        }
+        var applies = doc.text(p, "product_name", "")
+        if applies.len() == 0 {
+            applies = doc.text(p, "category_name", "")
+        }
+        rows.push(touchable(doc.text(p, "id", ""), [
+                    doc.text(p, "name", ""),
+                    offer_kind_of(l, kind),
+                    value,
+                    offer_scope_of(l, doc.text(p, "scope", "")),
+                    if applies.len() > 0 { applies } else { "—" },
+                    if running {
+                        words.t(l, "promotions.running")
+                    } else if active {
+                        words.t(l, "promotions.scheduled")
+                    } else {
+                        words.t(l, "promotions.ended")
+                    },
+                ], if running { "ok" } else if active { "warn" } else { "" },
+                "form-promotion", doc.text(p, "id", "")))
+    }
+
+    var performance: [desk.Row] = []
+    for p in doc.items(doc.field(perf, "performance")) {
+        performance.push(row(doc.text(p, "promo_id", ""), [
+                    doc.text(p, "promo_name", ""),
+                    "\(doc.int_of(p, "lines", 0))",
+                    qty(p, "units"),
+                    cash(p, "revenue", c),
+                    cash(p, "saved", c),
+                ], ""))
+    }
+
+    return [
+        desk.Block.Stats(items: [
+                desk.Stat{ label: words.t(l, "promotions.live_offers"), value: "\(live)",
+                    meta: words.t(l, "promotions.running_at_this_moment"),
+                    tone: if live > 0 { "ok" } else { "" } },
+            ]),
+        desk.Block.Buttons(items: [
+                desk.action(words.t(l, "promotions.add_an_offer"),
+                    "form-promotion", "", "filled"),
+            ]),
+        // The note is the whole sentence and nothing after it: the "touch a row"
+        // hint the other tables carry is lower case, and reads as a typo when it
+        // follows a full stop rather than standing on its own.
+        table(words.t(l, "promotions.offers"), words.t(l, "promotions.offers_do_not_stack"),
+            [words.t(l, "common.name"), words.t(l, "common.kind"), words.t(l, "common.value"),
+                words.t(l, "promotions.scope"), words.t(l, "promotions.applies_to"),
+                words.t(l, "common.state")], rows),
+        table(words.t(l, "promotions.what_they_cost"), words.t(l, "common.30_days"),
+            [words.t(l, "promotions.offer"), words.t(l, "common.lines"),
+                words.t(l, "common.units"), words.t(l, "common.revenue"),
+                words.t(l, "dashboard.given_away")], performance),
+    ]
+}
+
+pub fn reports(products_answer: doc.Doc, daily: doc.Doc, shrink: doc.Doc,
+    l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    var products_rows: [desk.Row] = []
+    for p in doc.items(doc.field(products_answer, "products")) {
+        let margin = doc.int_of(p, "margin", 0)
+        products_rows.push(touchable(doc.text(p, "product_id", ""), [
+                    doc.text(p, "name", ""),
+                    doc.text(p, "sku", ""),
+                    qty(p, "sold"),
+                    cash(p, "revenue", c),
+                    cash(p, "cost", c),
+                    money.show(margin, c),
+                ], if margin < 0 { "stop" } else { "" }, "open-product", doc.text(p, "product_id", "")))
+    }
+    var categories_rows: [desk.Row] = []
+    for cat in doc.items(doc.field(products_answer, "categories")) {
+        categories_rows.push(row(doc.text(cat, "category", ""), [
+                    doc.text(cat, "category", ""),
+                    qty(cat, "sold"),
+                    cash(cat, "revenue", c),
+                    cash(cat, "margin", c),
+                ], ""))
+    }
+
+    let by_hour = doc.items(doc.field(daily, "hourly"))
+    var hour_names: [doc.Doc] = []
+    var hour_sub: [str] = []
+    for h in by_hour {
+        hour_sub.push(words.fill_n(l, "shifts.n_sales", "\(doc.int_of(h, "sales", 0))"))
+        hour_names.push(h)
+    }
+    var hours: [desk.Meter] = []
+    var largest = 0
+    for h in by_hour {
+        largest = max(largest, doc.int_of(h, "takings", 0))
+    }
+    for (i, h) in enumerate(by_hour) {
+        let takings = doc.int_of(h, "takings", 0)
+        hours.push(desk.Meter{
+                key: "h\(i)",
+                rank: "\(doc.int_of(h, "hour", 0))",
+                name: "\(pad_start("\(doc.int_of(h, "hour", 0))", 2, "0")):00",
+                value: money.show(takings, c),
+                sub: or_else(hour_sub.get(i), ""),
+                width: desk.width_of(takings, largest),
+            })
+    }
+
+    var tenders: [desk.Row] = []
+    for t in doc.items(doc.field(daily, "tenders")) {
+        tenders.push(row(doc.text(t, "method", ""), [
+                    method_of(l, doc.text(t, "method", "")),
+                    "\(doc.int_of(t, "count", 0))",
+                    cash(t, "amount", c),
+                ], ""))
+    }
+    var by_staff: [desk.Row] = []
+    for s in doc.items(doc.field(daily, "staff")) {
+        by_staff.push(row(doc.text(s, "name", ""), [
+                    doc.text(s, "name", ""),
+                    "\(doc.int_of(s, "sales", 0))",
+                    cash(s, "takings", c),
+                ], ""))
+    }
+    var shrinkage: [desk.Row] = []
+    for s in doc.items(doc.field(shrink, "by_reason")) {
+        shrinkage.push(row(doc.text(s, "reason", ""), [
+                    stock_reason_of(l, doc.text(s, "reason", "")),
+                    "\(doc.int_of(s, "movements", 0))",
+                    qty(s, "units"),
+                    cash(s, "value", c),
+                ], "warn"))
+    }
+    var worst: [desk.Row] = []
+    for w in doc.items(doc.field(shrink, "worst")) {
+        worst.push(row(doc.text(w, "sku", ""), [
+                    doc.text(w, "name", ""),
+                    doc.text(w, "sku", ""),
+                    qty(w, "units"),
+                    cash(w, "value", c),
+                ], "stop"))
+    }
+
+    return [
+        desk.Block.Meters(heading: words.t(l, "reports.the_trading_day"),
+            note: words.t(l, "reports.thirty_days_by_hour"), rows: hours),
+        table(words.t(l, "common.products"), words.t(l, "reports.ranked_by_revenue"),
+            [words.t(l, "common.product"), words.t(l, "products.sku"),
+                words.t(l, "sales.sold"), words.t(l, "common.revenue"),
+                words.t(l, "common.cost"), words.t(l, "common.margin_2")], products_rows),
+        table(words.t(l, "common.categories"), "",
+            [words.t(l, "common.category"), words.t(l, "sales.sold"),
+                words.t(l, "common.revenue"), words.t(l, "common.margin_2")], categories_rows),
+        table(words.t(l, "shift_detail.how_they_paid"), "",
+            [words.t(l, "common.tender"), words.t(l, "common.count"),
+                words.t(l, "common.amount")], tenders),
+        table(words.t(l, "reports.by_cashier"), "",
+            [words.t(l, "common.name"), words.t(l, "common.sales"),
+                words.t(l, "common.takings")], by_staff),
+        table(words.t(l, "reports.shrinkage"), words.t(l, "reports.waste_counts_and_corrections"),
+            [words.t(l, "common.because"), words.t(l, "common.movements"),
+                words.t(l, "common.units"), words.t(l, "common.value")], shrinkage),
+        table(words.t(l, "reports.worst_affected"), "",
+            [words.t(l, "common.product"), words.t(l, "products.sku"),
+                words.t(l, "common.units"), words.t(l, "common.value")], worst),
+    ]
+}
+
+pub fn expenses(answer: doc.Doc, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    var rows: [desk.Row] = []
+    for e in doc.items(doc.field(answer, "expenses")) {
+        rows.push(row(doc.text(e, "id", ""), [
+                    browser.day_of(doc.int_of(e, "spent_at", 0)),
+                    doc.text(e, "account_name", doc.text(e, "account_code", "")),
+                    doc.text(e, "category", ""),
+                    doc.text(e, "payee", "—"),
+                    doc.text(e, "reference", ""),
+                    method_of(l, doc.text(e, "method", "")),
+                    cash(e, "tax", c),
+                    cash(e, "amount", c),
+                ], ""))
+    }
+
+    let totals = doc.field(answer, "totals")
+    let spent = doc.int_of(totals, "amount", 0)
+    let tax = doc.int_of(totals, "tax", 0)
+
+    // One card per account, so "what is rent costing us" is a figure on the
+    // screen rather than an addition somebody does in their head.
+    var cards: [desk.Stat] = [
+        desk.Stat{ label: words.t(l, "expenses.spent"), value: money.show(spent, c),
+            meta: "\(words.fill_n(l, "accounting.n_entries", "\(doc.int_of(totals, "count", 0))")) · \(words.fill(l, "accounting.n_net_of_tax", money.show(spent - tax, c)))",
+            tone: "warn" },
+    ]
+    for a in doc.items(doc.field(answer, "by_account")) {
+        cards.push(desk.Stat{
+                label: doc.text(a, "account_name", ""),
+                value: cash(a, "amount", c),
+                meta: words.fill_n(l, "accounting.n_entries", "\(doc.int_of(a, "count", 0))"),
+                tone: "info" })
+    }
+
+    let by_category = doc.items(doc.field(answer, "by_category"))
+    var counts: [str] = []
+    for cat in by_category {
+        counts.push(words.fill_n(l, "expenses.n_times", "\(doc.int_of(cat, "count", 0))"))
+    }
+    return [
+        desk.Block.Stats(items: cards),
+        desk.Block.Buttons(items: [
+                desk.action(words.t(l, "expenses.record_an_expense"),
+                    "form-expense", "", "filled"),
+            ]),
+        desk.Block.Meters(heading: words.t(l, "expenses.where_it_went"),
+            note: words.t(l, "reports.by_category"),
+            rows: meters(by_category, "category", "amount", counts, c)),
+        table(words.t(l, "common.expenses"), words.t(l, "common.90_days"),
+            [words.t(l, "common.date"), words.t(l, "common.account"),
+                words.t(l, "expenses.what_for"), words.t(l, "expenses.paid_to"),
+                words.t(l, "common.reference"), words.t(l, "common.how"),
+                words.t(l, "common.tax"), words.t(l, "common.amount")], rows),
+    ]
+}
+
+pub fn accounting_off(l: i18n.Lang) -> [desk.Block] {
+    return [
+        desk.Block.Note(heading: words.t(l, "accounting.the_books_are_off"),
+            body: words.t(l, "accounting.the_books_are_off_body")),
+        desk.Block.Buttons(items: [
+                desk.action(words.t(l, "common.settings"), "go", "settings", "filled"),
+            ]),
+    ]
+}
+
+/// The tab strip, the window picker, and the way out to a file.
+///
+/// A row of chips rather than a menu, because there are eight sheets and a
+/// shopkeeper moves between them constantly — and because the selected one has
+/// to be visible at a glance from across a back-office desk.
+fn books_chrome(view: str, win: str, l: i18n.Lang) -> [desk.Block] {
+    var sheets: [desk.Action] = []
+    // The second half of each pair is a phrase key rather than the phrase, so a
+    // chip is named the same way the sheet under it is.
+    for pair in [
+        ["summary", "accounting.summary"], ["pl", "accounting.profit_and_loss"],
+        ["balance", "accounting.balance_sheet"], ["trial", "accounting.trial_balance"],
+        ["ledger", "accounting.general_ledger"], ["journal", "accounting.journal"],
+        ["accounts", "accounting.chart_of_accounts"], ["periods", "accounting.periods"],
+    ] {
+        sheets.push(desk.action(words.t(l, pair[1]), "books-view", pair[0],
+                if view == pair[0] { "filled" } else { "quiet" }))
+    }
+    var windows: [desk.Action] = []
+    for pair in [
+        ["today", "common.today"], ["7", "common.7_days"], ["30", "common.30_days"],
+        ["month", "common.month"], ["all", "common.all_time"],
+    ] {
+        windows.push(desk.action(words.t(l, pair[1]), "books-window", pair[0],
+                if win == pair[0] { "filled" } else { "quiet" }))
+    }
+    return [
+        desk.Block.Buttons(items: sheets),
+        desk.Block.Buttons(items: windows),
+        desk.Block.Buttons(items: [
+                desk.action(words.t(l, "expenses.record_an_expense"), "form-expense", "", "soft"),
+                desk.action(words.t(l, "accounting.close_a_month"),
+                    "form-close-period", "", "soft"),
+                desk.action(words.t(l, "accounting.export_this_sheet"),
+                    "books-export", view, "filled"),
+            ]),
+    ]
+}
+
+/// The sweep, as the shopkeeper sees it.
+///
+/// The last row is deliberately not a failure. The shelves are valued at what
+/// each product costs **today** and account 1200 carries what that stock cost
+/// **when it was bought** — a supplier raising their price revalues the shelf
+/// and must not rewrite history. Shown side by side with the reason, rather
+/// than raised as an alarm nobody can act on.
+fn books_health(health: doc.Doc, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    let sides = doc.bool_of(health, "sides_agree", false)
+    let unbalanced = doc.items(doc.field(health, "unbalanced")).len()
+    let orphans = doc.int_of(health, "orphan_lines", 0)
+    let holds = doc.bool_of(health, "equation_holds", false)
+    let drift = doc.items(doc.field(health, "stock_drift"))
+
+    let checks: [desk.Row] = [
+        row("debits", [words.t(l, "accounting.debits_equal_credits"),
+                cash(health, "total_debit", c)],
+            if sides { "ok" } else { "stop" }),
+        row("entries", [words.t(l, "accounting.journal_entries"),
+                "\(doc.int_of(health, "entries", 0))"], ""),
+        row("unbal", [words.t(l, "accounting.unbalanced_entries"), "\(unbalanced)"],
+            if unbalanced == 0 { "ok" } else { "stop" }),
+        row("orphans", [words.t(l, "accounting.lines_with_no_entry"), "\(orphans)"],
+            if orphans == 0 { "ok" } else { "stop" }),
+        row("equation", [words.t(l, "accounting.accounting_equation"),
+                if holds {
+                    words.t(l, "accounting.holds")
+                } else {
+                    words.fill(l, "accounting.out_by_n", cash(health, "out_by", c))
+                }],
+            if holds { "ok" } else { "stop" }),
+        row("stock", [words.t(l, "accounting.stock_matches_its_movements"),
+                if drift.len() == 0 {
+                    words.t(l, "accounting.yes")
+                } else {
+                    words.fill_n(l, "accounting.n_adrift", "\(drift.len())")
+                }],
+            if drift.len() == 0 { "ok" } else { "stop" }),
+    ]
+
+    var blocks: [desk.Block] = [
+        table(words.t(l, "accounting.ledger_health"),
+            words.t(l, "accounting.rechecked_every_time_this_page_is_opened"),
+            [words.t(l, "accounting.check"), words.t(l, "accounting.reading")], checks),
+    ]
+
+    if drift.len() > 0 {
+        var rows: [desk.Row] = []
+        for d in drift {
+            let stock = doc.num_of(d, "stock", 0.0)
+            let moved = doc.num_of(d, "moved", 0.0)
+            rows.push(row(doc.text(d, "sku", ""), [
+                        doc.text(d, "name", ""), doc.text(d, "sku", ""),
+                        money.quantity(stock), money.quantity(moved),
+                        money.quantity(stock - moved),
+                    ], "stop"))
+        }
+        blocks.push(table(words.t(l, "accounting.stock_adrift_from_its_movements"),
+                words.t(l, "accounting.the_level_against_what_moved_it"),
+                [words.t(l, "common.product"), words.t(l, "products.sku"),
+                    words.t(l, "accounting.on_the_product"),
+                    words.t(l, "accounting.in_the_movements"),
+                    words.t(l, "accounting.adrift_by")], rows))
+    }
+
+    let shelf = doc.int_of(health, "stock_at_cost", 0)
+    let booked = doc.int_of(health, "stock_in_ledger", 0)
+    blocks.push(table(words.t(l, "accounting.stock_valuation"),
+            words.t(l, "accounting.a_gap_here_is_normal"),
+            ["", words.t(l, "common.amount")], [
+                row("shelf", [words.t(l, "accounting.the_shelves_at_todays_cost"),
+                        money.show(shelf, c)], ""),
+                row("booked", [words.t(l, "accounting.the_ledger_stock_on_hand"),
+                        money.show(booked, c)], ""),
+                row("gap", [words.t(l, "accounting.difference"),
+                        money.show(shelf - booked, c)], ""),
+            ]))
+    return blocks
+}
+
+fn books_summary(summary: doc.Doc, pl: doc.Doc, sheet: doc.Doc, health: doc.Doc,
+    payables: doc.Doc, win: str, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    let revenue = doc.int_of(pl, "revenue", 0)
+    let gross = doc.int_of(pl, "gross_profit", 0)
+    let net = doc.int_of(pl, "net_profit", 0)
+    let out_by = doc.int_of(sheet, "out_by", 0)
+    let owed = doc.int_of(doc.field(payables, "totals"), "outstanding", 0)
+    let overdue = doc.int_of(doc.field(payables, "totals"), "overdue", 0)
+    let margin = if revenue > 0 { (gross * 100) / revenue } else { 0 }
+
+    var blocks: [desk.Block] = [
+        desk.Block.Stats(items: [
+                desk.Stat{ label: words.t(l, "common.revenue"), value: money.show(revenue, c),
+                    meta: "\(window_of(l, win)) · \(words.t(l, "accounting.net_of_discounts_and_tax"))",
+                    tone: "ok" },
+                desk.Stat{ label: words.t(l, "common.gross_profit"), value: money.show(gross, c),
+                    meta: words.fill(l, "common.n_margin", "\(margin)%"),
+                    tone: if gross < 0 { "stop" } else { "ok" } },
+                desk.Stat{ label: words.t(l, "accounting.net_profit"), value: money.show(net, c),
+                    meta: words.fill(l, "accounting.after_running_costs",
+                        cash(pl, "operating_expenses", c)),
+                    tone: if net < 0 { "stop" } else { "ok" } },
+                desk.Stat{ label: words.t(l, "accounting.owed_to_suppliers"),
+                    value: money.show(owed, c),
+                    meta: words.fill(l, "accounting.n_overdue", money.show(overdue, c)),
+                    tone: if overdue > 0 { "warn" } else { "info" } },
+            ]),
+    ]
+    for b in books_health(health, l, c) {
+        blocks.push(b)
+    }
+    blocks.push(table(words.t(l, "accounting.profit_and_loss_2"), window_of(l, win),
+            ["", words.t(l, "common.amount")], [
+                row("rev", [words.t(l, "common.revenue"), money.show(revenue, c)], ""),
+                row("cogs", [words.t(l, "accounting.cost_of_sales"),
+                        cash(pl, "cost_of_sales", c)], ""),
+                row("gross", [words.t(l, "common.gross_profit"), money.show(gross, c)], "ok"),
+                row("opex", [words.t(l, "accounting.running_costs"),
+                        cash(pl, "operating_expenses", c)], ""),
+                row("net", [words.t(l, "accounting.net_profit"), money.show(net, c)],
+                    if net < 0 { "stop" } else { "ok" }),
+            ]))
+    blocks.push(table(words.t(l, "accounting.balance_sheet"),
+            words.t(l, "accounting.as_at_today"), ["", words.t(l, "common.amount")], [
+                row("as", [words.t(l, "accounting.assets"), cash(sheet, "total_assets", c)], ""),
+                row("li", [words.t(l, "accounting.liabilities"),
+                        cash(sheet, "total_liabilities", c)], ""),
+                row("eq", [words.t(l, "accounting.equity"), cash(sheet, "total_equity", c)], ""),
+                row("re", [words.t(l, "accounting.retained_profit"),
+                        cash(sheet, "retained_earnings", c)], ""),
+                row("ck", [words.t(l, "accounting.balances"),
+                        if out_by == 0 {
+                            words.t(l, "accounting.yes")
+                        } else {
+                            money.show(out_by, c)
+                        }],
+                    if out_by == 0 { "ok" } else { "stop" }),
+            ]))
+    return blocks
+}
+
+/// Profit and loss, **account by account**.
+///
+/// The five aggregate rows were all this ever showed, while the API had been
+/// returning every account underneath them all along. Discounts are kept
+/// visible rather than netted away: revenue is booked at the shelf price and
+/// what was given away sits against it, so "how much did we discount this
+/// month" is a number that can be read rather than reconstructed.
+fn books_pl(pl: doc.Doc, win: str, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    var rows: [desk.Row] = []
+    for a in doc.items(doc.field(pl, "income")) {
+        rows.push(touchable("i\(doc.text(a, "code", ""))", [
+                    words.t(l, "common.revenue"), doc.text(a, "code", ""), doc.text(a, "name", ""),
+                    cash(a, "amount", c),
+                ], "", "books-account", doc.text(a, "code", "")))
+    }
+    rows.push(row("revenue", ["", "", words.t(l, "common.revenue"), cash(pl, "revenue", c)], "ok"))
+    for e in doc.items(doc.field(pl, "expenses")) {
+        let code = doc.text(e, "code", "")
+        let section = if code == "5000" || code == "5100" {
+            words.t(l, "accounting.cost_of_sales")
+        } else {
+            words.t(l, "accounting.running_costs")
+        }
+        rows.push(touchable("e\(code)", [section, code, doc.text(e, "name", ""),
+                    cash(e, "amount", c)], "", "books-account", code))
+    }
+    rows.push(row("cogs", ["", "", words.t(l, "accounting.cost_of_sales"),
+                cash(pl, "cost_of_sales", c)], ""))
+    rows.push(row("gross", ["", "", words.t(l, "common.gross_profit"),
+                cash(pl, "gross_profit", c)], "ok"))
+    rows.push(row("opex", ["", "", words.t(l, "accounting.running_costs"),
+                cash(pl, "operating_expenses", c)], ""))
+    let net = doc.int_of(pl, "net_profit", 0)
+    rows.push(row("net", ["", "", words.t(l, "accounting.net_profit"), money.show(net, c)],
+            if net < 0 { "stop" } else { "ok" }))
+    return [table(words.t(l, "accounting.profit_and_loss_2"),
+            "\(window_of(l, win)) · \(words.t(l, "accounting.touch_an_account_for_its_ledger"))",
+            [words.t(l, "accounting.section"), words.t(l, "common.code"),
+                words.t(l, "common.account"), words.t(l, "common.amount")], rows)]
+}
+
+fn books_balance(sheet: doc.Doc, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    var rows: [desk.Row] = []
+    // The second half of each pair names the section a phrase key, so the
+    // heading in the cell and the field it was read from stay one line apart.
+    for pair in [["assets", "accounting.asset"], ["liabilities", "accounting.liability"],
+        ["equity", "accounting.equity"]] {
+        for a in doc.items(doc.field(sheet, pair[0])) {
+            rows.push(touchable("\(pair[0])\(doc.text(a, "code", ""))", [
+                        words.t(l, pair[1]), doc.text(a, "code", ""), doc.text(a, "name", ""),
+                        cash(a, "amount", c),
+                    ], "", "books-account", doc.text(a, "code", "")))
+        }
+    }
+    rows.push(row("re", [words.t(l, "accounting.equity"), "",
+                "\(words.t(l, "accounting.retained_profit")), \(words.t(l, "accounting.not_yet_moved_to_equity"))",
+                cash(sheet, "retained_earnings", c)], ""))
+    let out_by = doc.int_of(sheet, "out_by", 0)
+    rows.push(row("ta", ["", "", words.t(l, "accounting.total_assets"),
+                cash(sheet, "total_assets", c)], ""))
+    rows.push(row("tl", ["", "", words.t(l, "accounting.total_liabilities"),
+                cash(sheet, "total_liabilities", c)], ""))
+    rows.push(row("te", ["", "", words.t(l, "accounting.total_equity"),
+                cash(sheet, "total_equity", c)], ""))
+    rows.push(row("ck", ["", "", words.t(l, "accounting.assets_less_liabilities_and_equity"),
+                money.show(out_by, c)],
+            if out_by == 0 { "ok" } else { "stop" }))
+    return [table(words.t(l, "accounting.balance_sheet"),
+            "\(words.t(l, "accounting.as_at_today")) · \(words.t(l, "accounting.touch_an_account_for_its_ledger"))",
+            [words.t(l, "accounting.section"), words.t(l, "common.code"),
+                words.t(l, "common.account"), words.t(l, "common.amount")], rows)]
+}
+
+/// Every account with its debits, credits and balance — and a way in.
+///
+/// Touching a row opens that account's general ledger. Without it a trial
+/// balance is a list of figures with no way to ask where any of them came
+/// from, which is the one question it exists to raise.
+fn books_trial(trial: doc.Doc, win: str, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    var rows: [desk.Row] = []
+    for line in doc.items(doc.field(trial, "lines")) {
+        let code = doc.text(line, "code", "")
+        let debit = doc.int_of(line, "debit", 0)
+        let credit = doc.int_of(line, "credit", 0)
+        rows.push(touchable("t\(code)", [
+                    code, doc.text(line, "name", ""),
+                    account_kind_of(l, doc.text(line, "kind", "")),
+                    if debit == 0 { "" } else { money.show(debit, c) },
+                    if credit == 0 { "" } else { money.show(credit, c) },
+                    money.show(debit - credit, c),
+                ], "", "books-account", code))
+    }
+    let td = doc.int_of(trial, "total_debit", 0)
+    let tc = doc.int_of(trial, "total_credit", 0)
+    rows.push(row("total", ["", words.t(l, "accounting.totals"), "",
+                money.show(td, c), money.show(tc, c),
+                if td == tc { words.t(l, "common.balanced") } else { money.show(td - tc, c) }],
+            if td == tc { "ok" } else { "stop" }))
+    return [table(words.t(l, "accounting.trial_balance"),
+            "\(window_of(l, win)) · \(words.t(l, "accounting.touch_a_row_for_its_ledger"))",
+            [words.t(l, "common.code"), words.t(l, "common.account"), words.t(l, "common.type"),
+                words.t(l, "accounting.debits"), words.t(l, "accounting.credits"),
+                words.t(l, "common.balance")], rows)]
+}
+
+/// One account, movement by movement, with the balance after each.
+fn books_ledger(ledger: doc.Doc, code: str, win: str, l: i18n.Lang,
+    c: money.Currency) -> [desk.Block] {
+    if code.len() == 0 {
+        return [desk.Block.Note(heading: words.t(l, "accounting.pick_an_account"),
+                body: words.t(l, "accounting.pick_an_account_body"))]
+    }
+    let account = doc.field(ledger, "account")
+    var rows: [desk.Row] = [
+        row("opening", ["", "", words.t(l, "accounting.opening_balance"), "", "", "",
+                cash(ledger, "opening", c)], ""),
+    ]
+    for line in doc.items(doc.field(ledger, "lines")) {
+        let amount = doc.int_of(line, "amount", 0)
+        rows.push(row(doc.text(line, "entry_id", "") + doc.text(line, "number", ""), [
+                    browser.day_of(doc.int_of(line, "value_at", 0)),
+                    doc.text(line, "number", ""),
+                    if doc.text(line, "line_memo", "").len() > 0 {
+                        doc.text(line, "line_memo", "")
+                    } else {
+                        doc.text(line, "memo", "")
+                    },
+                    caused_by_of(l, doc.text(line, "ref_type", "")),
+                    if amount > 0 { money.show(amount, c) } else { "" },
+                    if amount < 0 { money.show(0 - amount, c) } else { "" },
+                    cash(line, "balance", c),
+                ], ""))
+    }
+    rows.push(row("closing", ["", "", words.t(l, "accounting.closing_balance"), "", "", "",
+                cash(ledger, "closing", c)], "ok"))
+    return [table("\(doc.text(account, "code", "")) \(doc.text(account, "name", ""))",
+            "\(window_of(l, win)) · \(account_kind_of(l, doc.text(account, "kind", ""))) · \(words.fill(l, "accounting.n_normal", normal_of(l, doc.text(account, "normal", ""))))",
+            [words.t(l, "common.date"), words.t(l, "accounting.entry"),
+                words.t(l, "accounting.memo"), words.t(l, "accounting.caused_by"),
+                words.t(l, "accounting.debit"), words.t(l, "accounting.credit"),
+                words.t(l, "common.balance")], rows)]
+}
+
+/// The journal, **with the lines that make each entry up**.
+///
+/// The API had been returning `lines[]` all along and the screen drew only the
+/// entry headers — a journal with no debits and no credits on it, which is a
+/// list of events rather than a journal. Each entry is followed by its legs,
+/// indented by an empty first cell.
+fn books_journal(journal: doc.Doc, win: str, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    let lines = doc.items(doc.field(journal, "lines"))
+    var rows: [desk.Row] = []
+    for e in doc.items(doc.field(journal, "entries")) {
+        let id = doc.text(e, "id", "")
+        rows.push(touchable("e\(id)", [
+                    doc.text(e, "number", ""),
+                    browser.day_of(doc.int_of(e, "value_at", 0)),
+                    doc.text(e, "memo", ""),
+                    caused_by_of(l, doc.text(e, "ref_type", "")),
+                    doc.text(e, "user_name", "—"),
+                    "", "",
+                ], if doc.text(e, "corrects_id", "").len() > 0 { "warn" } else { "" },
+                "books-reverse", id))
+        for line in lines {
+            if doc.text(line, "entry_id", "") == id {
+                let amount = doc.int_of(line, "amount", 0)
+                rows.push(row("l\(doc.text(line, "id", ""))", [
+                            "", "",
+                            "\(doc.text(line, "account_code", "")) \(doc.text(line, "account_name", ""))",
+                            doc.text(line, "memo", ""), "",
+                            if amount > 0 { money.show(amount, c) } else { "" },
+                            if amount < 0 { money.show(0 - amount, c) } else { "" },
+                        ], ""))
+            }
+        }
+    }
+    let shown = doc.int_of(journal, "shown", 0)
+    let total = doc.int_of(journal, "total", 0)
+    // "3 / 40" rather than "3 of 40": a word between two numbers has to be
+    // ordered, and the slash reads the same in both languages.
+    return [table(words.t(l, "accounting.journal"),
+            "\(window_of(l, win)) · \(words.fill_n(l, "accounting.n_entries_newest_first", "\(shown) / \(total)")) · \(words.t(l, "accounting.touch_an_entry_to_correct_it"))",
+            [words.t(l, "accounting.entry"), words.t(l, "common.date"),
+                words.t(l, "common.detail"), words.t(l, "accounting.caused_by"),
+                words.t(l, "settings.who"), words.t(l, "accounting.debit"),
+                words.t(l, "accounting.credit")], rows)]
+}
+
+fn books_accounts(accounts: doc.Doc, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    var rows: [desk.Row] = []
+    for a in doc.items(doc.field(accounts, "accounts")) {
+        let code = doc.text(a, "code", "")
+        rows.push(touchable("a\(code)", [
+                    code, doc.text(a, "name", ""),
+                    account_kind_of(l, doc.text(a, "kind", "")),
+                    normal_of(l, doc.text(a, "normal", "")),
+                ], "", "books-account", code))
+    }
+    return [table(words.t(l, "accounting.chart_of_accounts"),
+            words.t(l, "accounting.touch_an_account_for_its_ledger"),
+            [words.t(l, "common.code"), words.t(l, "common.name"), words.t(l, "common.kind"),
+                words.t(l, "accounting.normal_balance")], rows)]
+}
+
+/// Months that have been closed, and the way back out of one.
+///
+/// Reopening is a real button rather than a support call: the endpoint existed
+/// and nothing called it. Closing is the guard against a backdated correction
+/// landing in a month already reported to the outside world — reopening is
+/// admitting the report was wrong, which happens.
+fn books_periods(summary: doc.Doc, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    let periods = doc.items(doc.field(summary, "periods"))
+    if periods.len() == 0 {
+        return [
+            desk.Block.Note(heading: words.t(l, "accounting.no_month_has_been_closed"),
+                body: words.t(l, "accounting.closing_a_month_stops_anything")),
+            desk.Block.Buttons(items: [
+                    desk.action(words.t(l, "accounting.close_a_month"),
+                        "form-close-period", "", "filled"),
+                ]),
+        ]
+    }
+    var rows: [desk.Row] = []
+    for p in periods {
+        let closed = doc.int_of(p, "closed_at", 0)
+        rows.push(touchable(doc.text(p, "id", ""), [
+                    browser.day_of(doc.int_of(p, "starts_at", 0)),
+                    browser.day_of(doc.int_of(p, "ends_at", 0)),
+                    if closed > 0 {
+                        browser.day_of(closed)
+                    } else {
+                        words.t(l, "common.open_state")
+                    },
+                    doc.text(p, "note", ""),
+                    if closed > 0 { words.t(l, "accounting.reopen") } else { "" },
+                ], if closed > 0 { "ok" } else { "" },
+                "books-reopen", doc.text(p, "id", "")))
+    }
+    return [
+        table(words.t(l, "accounting.fiscal_periods"),
+            words.t(l, "accounting.touch_a_closed_month_to_reopen_it"),
+            [words.t(l, "movements.from"), words.t(l, "movements.to"),
+                words.t(l, "common.closed"), words.t(l, "common.note"), ""], rows),
+    ]
+}
+
+/// The books, whichever sheet is open.
+///
+/// One entry point taking a bundle rather than eight positional documents:
+/// the sheets do not all need the same data, and threading nine parameters
+/// through would mean every new sheet changes the signature of all of them.
+pub fn accounting(view: str, win: str, data: doc.Doc, code: str,
+    l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    var blocks = books_chrome(view, win, l)
+    var body: [desk.Block] = []
+    if view == "pl" {
+        body = books_pl(doc.field(data, "pl"), win, l, c)
+    } else if view == "balance" {
+        body = books_balance(doc.field(data, "sheet"), l, c)
+    } else if view == "trial" {
+        body = books_trial(doc.field(data, "trial"), win, l, c)
+    } else if view == "ledger" {
+        body = books_ledger(doc.field(data, "ledger"), code, win, l, c)
+    } else if view == "journal" {
+        body = books_journal(doc.field(data, "journal"), win, l, c)
+    } else if view == "accounts" {
+        body = books_accounts(doc.field(data, "accounts"), l, c)
+    } else if view == "periods" {
+        body = books_periods(doc.field(data, "summary"), l, c)
+    } else {
+        body = books_summary(doc.field(data, "summary"), doc.field(data, "pl"),
+            doc.field(data, "sheet"), doc.field(data, "health"),
+            doc.field(data, "payables"), win, l, c)
+    }
+    for b in body {
+        blocks.push(b)
+    }
+    return blocks
+}
+
+pub fn settings(answer: doc.Doc, l: i18n.Lang) -> [desk.Block] {
+    let s = doc.field(answer, "settings")
+    var rows: [desk.Row] = []
+    // Setting key on the left, phrase key on the right: the first is what the
+    // shop stores and never translates, the second is what a reader is shown.
+    for pair in [
+        ["shop.name", "settings.shop_name"],
+        ["shop.name_my", "settings.shop_name_my"],
+        ["shop.address", "common.address"],
+        ["shop.phone", "common.phone"],
+        ["shop.tax_id", "common.tax_id"],
+        ["shop.receipt_footer", "settings.receipt_footer"],
+        ["currency.code", "settings.currency"],
+        ["currency.symbol", "settings.symbol"],
+        ["currency.minor_units", "settings.decimal_places"],
+        ["currency.symbol_first", "settings.symbol_first"],
+        ["tax.inclusive", "settings.prices_include_tax"],
+        ["tax.default_bp", "settings.default_tax_bp"],
+        ["locale.default", "settings.language"],
+        ["loyalty.points_per_unit", "settings.loyalty_points_per_unit"],
+        ["accounting.enabled", "settings.accounting_on"],
+    ] {
+        let key = pair[0]
+        rows.push(row(key, [words.t(l, pair[1]), key, doc.text(s, key, "")], ""))
+    }
+    return [
+        desk.Block.Buttons(items: [
+                desk.action(words.t(l, "settings.edit_settings"), "form-settings", "", "filled"),
+                desk.action(words.t(l, "accounting.close_a_month"),
+                    "form-close-period", "", "soft"),
+            ]),
+        table(words.t(l, "settings.the_shop"), "",
+            [words.t(l, "settings.setting"), words.t(l, "common.code"),
+                words.t(l, "common.value")], rows),
+    ]
+}

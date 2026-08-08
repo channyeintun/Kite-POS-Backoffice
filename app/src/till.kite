@@ -1,0 +1,849 @@
+//! The till, described.
+//!
+//! Every function here is a **pure function from the store to `html.Node`
+//! values**. Nothing in this file touches a document, listens for anything, or
+//! starts a request — `std/html` compares the description against the last one
+//! and changes only what differs, and `pos.kite` holds the two ends.
+//!
+//! **There are no event handlers in these nodes.** `html.Node` has nowhere to
+//! put one, and that turns out to be the right shape for a till: a
+//! `data-action` attribute names what an element means and one listener on the
+//! root reads it off whatever was touched. A rebuilt description has nothing to
+//! reattach.
+//!
+//! ## The four regions
+//!
+//! Every screen is the same four regions in the same order of authority, and
+//! they never reorder between viewports — they resize, demote to icons, or
+//! become a tab:
+//!
+//! | | |
+//! |---|---|
+//! | **ledger** | what the customer is buying. Never scrolls away. |
+//! | **work area** | how items get in. The only region that changes by mode. |
+//! | **commands** | what else the operator can do. Locked, never hidden. |
+//! | **status** | lane health only. Store, register, operator, connection, date. |
+//!
+//! What is never traded away, at any size: the running total is visible in
+//! every viewport and every mode; the commit button is pinned and never
+//! scrolls; the scan field never loses focus; a restricted command is shown
+//! locked rather than hidden; and the connection state is on screen at all
+//! times, because this till is online and that dot is load-bearing.
+
+use std/html
+use std/math
+use store
+use model
+use money
+use i18n
+use browser
+
+fn act(name: str) -> html.Attr {
+    return html.data("action", name)
+}
+
+fn with_id(name: str, id: str) -> [html.Attr] {
+    return [html.data("action", name), html.data("id", id)]
+}
+
+fn t(app: store.App, key: str) -> str {
+    return i18n.t(app.lang, key)
+}
+
+fn amount(app: store.App, value: int) -> str {
+    return money.show(value, store.currency_of(app))
+}
+
+fn button(label: str, classes: str, attrs: [html.Attr]) -> html.Node {
+    var all: [html.Attr] = [html.class(classes), html.attr("type", "button")]
+    all = concat(all, attrs)
+    return html.txt("button", all, label)
+}
+
+// ---- status ----------------------------------------------------------------
+
+/// Lane health, and nothing else.
+///
+/// Never customer or product content — this bar answers "can this lane
+/// transact", and mixing a customer's name into it is how it stops being read.
+/// Colour here carries machine state and only machine state.
+fn status_bar(app: store.App) -> html.Node {
+    let session = app.session
+    let name = if session == nil { "" } else { session.name }
+    let shop = if session == nil { "" } else { session.shop_name }
+    let lane = if session == nil { "" } else { session.register_id }
+
+    var right: [html.Node] = []
+    right.push(html.keyed("conn", html.txt("span",
+                [html.class(if app.online { "dot online" } else { "dot offline" })],
+                if app.online { t(app, "online") } else { t(app, "offline") })))
+    // Deliberately small — 44 px, below the transaction target scale and
+    // outside the scan-to-pay path. Switching language mid-basket is a mistake
+    // rather than a workflow, so it is reachable but not on the way anywhere.
+    right.push(html.keyed("lang", html.el("span", [html.class("lang")], [
+                    html.keyed("en", button("EN",
+                            if app.lang == i18n.Lang.En { "lang-on" } else { "lang-off" },
+                            [act("lang-en")])),
+                    html.keyed("my", button("မြန်မာ",
+                            if app.lang == i18n.Lang.My { "lang-on" } else { "lang-off" },
+                            // Its own `lang`, because the page's may be `en`:
+                            // a Burmese label needs the Burmese face and the
+                            // taller line box whatever the chrome is set to.
+                            [act("lang-my"), html.attr("lang", "my")])),
+                ])))
+    right.push(html.keyed("who", html.txt("span", [html.class("who")], name)))
+    right.push(html.keyed("when", html.txt("span", [html.class("when")],
+                browser.day_of(browser.now()))))
+
+    return html.keyed("status", html.el("header", [html.class("status")], [
+                html.keyed("mode", html.txt("span",
+                        [html.class(match app.mode { Sale => "mode sale", Tender => "mode tender" })],
+                        match app.mode { Sale => t(app, "sale"), Tender => t(app, "tender") })),
+                html.keyed("shop", html.txt("span", [html.class("shop")], shop)),
+                // `register`, not `lane`: `main.lane` is the layout container
+                // for the four regions, and a bare `.lane` rule written for it
+                // also matched this span and stretched the register ID across
+                // the status bar.
+                html.keyed("lane", html.txt("span", [html.class("register")], lane)),
+                html.keyed("shift", html.txt("span",
+                        [html.class(if app.basket.shift_open { "shift" } else { "shift shut" })],
+                        if app.basket.shift_open { t(app, "shift_open") } else { t(app, "no_shift") })),
+                html.keyed("gap", html.el("span", [html.class("gap")], [])),
+                html.keyed("right", html.el("span", [html.class("status-right")], right)),
+            ]))
+}
+
+// ---- the ledger ------------------------------------------------------------
+
+/// One line of the transaction.
+///
+/// The secondary line — unit price, the offer that priced it, an age flag — is
+/// the first thing to go when the screen narrows, and the quantity, the name
+/// and the amount are what stay. That ordering is the responsive rule written
+/// as markup rather than as a breakpoint.
+fn ledger_row(app: store.App, line: model.Line) -> html.Node {
+    var detail: [html.Node] = []
+    if line.promo_name.len() > 0 {
+        detail.push(html.keyed("promo", html.txt("span", [html.class("promo")], line.promo_name)))
+    }
+    if line.min_age > 0 {
+        detail.push(html.keyed("age", html.txt("span",
+                    [html.class(if line.age_checked { "age ok" } else { "age" })],
+                    "AGE \(line.min_age)\(if line.age_checked { " ✓" } else { "" })")))
+    }
+    if line.price_override {
+        detail.push(html.keyed("over", html.txt("span", [html.class("override")],
+                    t(app, "price_override"))))
+    }
+    detail.push(html.keyed("unit", html.txt("span", [html.class("unit")],
+                "\(amount(app, line.unit_price)) \(t(app, "each"))")))
+    if line.line_discount > 0 {
+        detail.push(html.keyed("cut", html.txt("span", [html.class("promo")],
+                    "− \(amount(app, line.line_discount))")))
+    }
+
+    var money_cell: [html.Node] = []
+    // The struck-through shelf price, beside what is actually being charged.
+    if line.promo_saved > 0 {
+        money_cell.push(html.keyed("was", html.txt("span", [html.class("was")],
+                    amount(app, line.total + line.promo_saved))))
+    }
+    money_cell.push(html.keyed("now", html.txt("span", [html.class("now")],
+                amount(app, line.total))))
+
+    return html.keyed(line.id, html.el("li",
+            [html.class("row"), html.data("action", "line"), html.data("id", line.id)], [
+                html.keyed("qty", html.txt("span", [html.class("qty")], money.quantity(line.qty))),
+                html.keyed("body", html.el("span", [html.class("line-body")], [
+                            html.keyed("name", html.txt("span", [html.class("name")], line.name)),
+                            html.keyed("detail", html.el("span", [html.class("detail")], detail)),
+                        ])),
+                html.keyed("amount", html.el("span", [html.class("amount")], money_cell)),
+            ]))
+}
+
+fn totals_block(app: store.App) -> html.Node {
+    let totals = app.basket.totals
+    var rows: [html.Node] = []
+    rows.push(html.keyed("sub", html.el("div", [html.class("tot")], [
+                    html.keyed("k", html.txt("span", [], t(app, "subtotal"))),
+                    html.keyed("v", html.txt("span", [], amount(app, totals.subtotal))),
+                ])))
+    if totals.promo_saved > 0 || totals.discount > 0 {
+        rows.push(html.keyed("saved", html.el("div", [html.class("tot saved")], [
+                        html.keyed("k", html.txt("span", [], t(app, "promotions_saved"))),
+                        html.keyed("v", html.txt("span", [],
+                                "−\(amount(app, totals.promo_saved + totals.discount))")),
+                    ])))
+    }
+    if totals.tax > 0 {
+        rows.push(html.keyed("tax", html.el("div", [html.class("tot")], [
+                        html.keyed("k", html.txt("span", [], t(app, "tax_included"))),
+                        html.keyed("v", html.txt("span", [], amount(app, totals.tax))),
+                    ])))
+    }
+    return html.keyed("totals", html.el("div", [html.class("totals")], rows))
+}
+
+/// The ledger: lines, totals, and the commit button.
+///
+/// The total is the largest type on the screen and the commit button lives with
+/// it rather than with the commands — it is the end of the transaction, not
+/// another thing the operator might do.
+fn ledger(app: store.App) -> html.Node {
+    let locked = app.mode == store.Mode.Tender
+    var body: [html.Node] = []
+
+    if app.basket.lines.len() == 0 {
+        body.push(html.keyed("empty", html.txt("p", [html.class("empty")], t(app, "empty_basket"))))
+    } else {
+        body.push(html.keyed("rows", html.el("ul", [html.class("rows")],
+                    map(app.basket.lines, |l: model.Line| ledger_row(app, l)))))
+    }
+
+    var head: [html.Node] = [
+        html.keyed("label", html.txt("span", [html.class("region")], t(app, "ledger"))),
+        html.keyed("count", html.txt("span", [html.class("count")],
+                "\(money.quantity(app.basket.totals.item_count)) \(t(app, "items"))\(if locked { " · locked" } else { "" })")),
+    ]
+    if app.basket.customer_name.len() > 0 {
+        head.push(html.keyed("cust", html.txt("span", [html.class("customer")],
+                    "\(app.basket.customer_name) · \(app.basket.customer_points) pts")))
+    }
+
+    var foot: [html.Node] = [totals_block(app)]
+    foot.push(html.keyed("grand", html.el("div", [html.class("grand")], [
+                    html.keyed("k", html.txt("span", [html.class("grand-label")], t(app, "total"))),
+                    html.keyed("v", html.txt("span", [html.class("grand-value")],
+                            amount(app, app.basket.totals.total))),
+                ])))
+    if !locked {
+        // Pinned, and it never scrolls. 118 px is 20 mm at this reference
+        // density — the kiosk minimum from Colle & Hiszem.
+        // Two spans rather than one string: in portrait the commit is a
+        // full-width bar across the bottom edge, and the design puts the word
+        // at the left and the amount at the right. One concatenated label can
+        // only ever be left-aligned as a block.
+        foot.push(html.keyed("pay", html.el("button", [
+                    html.class(if app.basket.lines.len() == 0 { "commit off" } else { "commit" }),
+                    html.attr("type", "button"),
+                    act("pay"),
+                ], [
+                    html.keyed("word", html.txt("span", [html.class("commit-word")],
+                            t(app, "pay"))),
+                    html.keyed("sum", html.txt("span", [html.class("commit-sum")],
+                            amount(app, app.basket.totals.total))),
+                ])))
+    }
+
+    return html.keyed("ledger", html.el("section", [html.class("ledger")], [
+                html.keyed("head", html.el("div", [html.class("ledger-head")], head)),
+                html.keyed("body", html.el("div", [html.class("ledger-body")], body)),
+                html.keyed("foot", html.el("div", [html.class("ledger-foot")], foot)),
+            ]))
+}
+
+// ---- the work area ---------------------------------------------------------
+
+fn tile(app: store.App, p: model.Product) -> html.Node {
+    var marks: [html.Node] = []
+    if p.min_age > 0 {
+        marks.push(html.keyed("age", html.txt("span", [html.class("tile-age")], "\(p.min_age)+")))
+    }
+    if p.ask_price {
+        marks.push(html.keyed("ask", html.txt("span", [html.class("tile-ask")], "ASK PRICE")))
+    }
+    if p.stock <= 0.0 {
+        marks.push(html.keyed("out", html.txt("span", [html.class("tile-out")], "OUT")))
+    }
+    return html.keyed(p.id, html.el("button",
+            concat([html.class("tile"), html.attr("type", "button")], with_id("tile", p.id)), [
+                html.keyed("photo", html.el("span", [html.class("tile-photo")], [])),
+                html.keyed("name", html.txt("span", [html.class("tile-name")],
+                        store.product_label(p, app.lang))),
+                html.keyed("price", html.txt("span", [html.class("tile-price")],
+                        amount(app, p.price))),
+                html.keyed("marks", html.el("span", [html.class("tile-marks")], marks)),
+            ]))
+}
+
+fn tabs(app: store.App) -> html.Node {
+    var out: [html.Node] = [
+        html.keyed("fav", button(t(app, "favourites"),
+                if app.tab.len() == 0 { "tab on" } else { "tab" },
+                [html.data("action", "tab"), html.data("id", "")])),
+    ]
+    for c in app.categories {
+        out.push(html.keyed(c.id, button(model.category_label(c, app.lang),
+                    if app.tab == c.id { "tab on" } else { "tab" },
+                    [html.data("action", "tab"), html.data("id", c.id)])))
+    }
+    return html.keyed("tabs", html.el("div", [html.class("tabs")], out))
+}
+
+/// Sale mode: the scan field owns the top and never loses focus.
+///
+/// A barcode scanner is a fast keyboard, so anything typed anywhere has to land
+/// here — and the field takes focus back the moment a dialog closes.
+fn work_sale(app: store.App) -> html.Node {
+    return html.keyed("work-sale", html.el("section", [html.class("work")], [
+                html.keyed("scan", html.el("div", [html.class("scan")], [
+                            html.keyed("label", html.txt("span", [html.class("region")], t(app, "scan"))),
+                            html.keyed("field", html.empty("input", [
+                                        html.id("scan"),
+                                        html.class("scan-field"),
+                                        html.attr("type", "text"),
+                                        html.attr("autocomplete", "off"),
+                                        html.attr("placeholder", t(app, "scan_hint")),
+                                    ])),
+                            html.keyed("search", button(t(app, "search"), "chip", [act("search")])),
+                            html.keyed("keypad", button(t(app, "keypad"), "chip", [act("keypad")])),
+                        ])),
+                tabs(app),
+                html.keyed("grid", html.el("div", [html.class("grid")],
+                        map(store.tiles(app), |p: model.Product| tile(app, p)))),
+            ]))
+}
+
+// ---- tender ----------------------------------------------------------------
+
+fn tender_button(app: store.App, tender: model.Tender, key: str) -> html.Node {
+    return html.keyed(key, button(t(app, key),
+            if app.tender == tender { "tender on" } else { "tender" },
+            [html.data("action", "tender"), html.data("id", model.tender_code(tender))]))
+}
+
+fn key_button(label: str, action: str, classes: str) -> html.Node {
+    return html.keyed(action + label, button(label, classes,
+            [html.data("action", "key"), html.data("id", label)]))
+}
+
+/// The numeric surface.
+///
+/// Keys are 118 × 118 px — 20 mm at this reference density, the size Colle &
+/// Hiszem found sufficient at a standing kiosk, where 25 mm tested no better.
+/// Gaps are 8 px because spacing had no measurable effect in that study, so the
+/// screen budget goes into the targets. That is also why Clear and 000 sit in a
+/// column beside the digits rather than stealing a row from them.
+///
+/// **Emitted row by row, not column by column.** The grid is four columns
+/// wide, so the order the keys are pushed in *is* the order they are read in:
+/// twelve keys in three-column order against a four-column grid laid out as
+/// `1 2 3 4 / 5 6 7 8 / 9 0 000 ⌫` — every digit in the wrong place, on a
+/// surface where a cashier's hand knows where 7 is without looking. The last
+/// key is `0` alone, which the stylesheet widens across the digit columns.
+fn keypad(app: store.App, suffix: str) -> html.Node {
+    var keys: [html.Node] = []
+    let rows: [[str]] = [
+        ["1", "2", "3", "back"],
+        ["4", "5", "6", "clear"],
+        ["7", "8", "9", "000"],
+    ]
+    for row in rows {
+        for k in row {
+            if k == "back" {
+                keys.push(html.keyed("back\(suffix)", button("⌫", "key util",
+                            [html.data("action", "key"), html.data("id", "back")])))
+            } else if k == "clear" {
+                keys.push(html.keyed("clear\(suffix)", button(t(app, "clear"), "key util",
+                            [html.data("action", "key"), html.data("id", "clear")])))
+            } else {
+                keys.push(key_button(k, suffix, "key"))
+            }
+        }
+    }
+    keys.push(key_button("0", suffix, "key"))
+    return html.keyed("keypad\(suffix)", html.el("div", [html.class("keypad")], keys))
+}
+
+fn taken_row(app: store.App, index: int, p: model.Payment) -> html.Node {
+    return html.keyed("t\(index)", html.el("li", [html.class("taken")], [
+                html.keyed("k", html.txt("span", [], t(app, model.tender_key(p.tender)))),
+                html.keyed("v", html.txt("span", [html.class("now")], amount(app, p.amount))),
+            ]))
+}
+
+fn work_tender(app: store.App) -> html.Node {
+    let due = store.balance_due(app)
+    let change = store.change_due(app)
+    let typed = or_else(money.from_keys(app.entry, store.currency_of(app)), 0)
+
+    // The notes a customer actually hands over: the exact amount, then the next
+    // round figures up.
+    var quick: [html.Node] = []
+    if due > 0 {
+        var offers: [int] = [due]
+        for step in [1000, 5000, 10000, 50000] {
+            let rounded = ((due + step - 1) / step) * step
+            if rounded > due && !includes(offers, rounded) && offers.len() < 5 {
+                offers.push(rounded)
+            }
+        }
+        for value in offers {
+            quick.push(html.keyed("q\(value)", button(money.plain(value, store.currency_of(app)),
+                        "quick", [html.data("action", "quick"), html.data("id", "\(value)")])))
+        }
+    }
+
+    var right: [html.Node] = [
+        html.keyed("label", html.txt("span", [html.class("region")], t(app, "tender_type"))),
+        html.keyed("types", html.el("div", [html.class("tenders")], [
+                    tender_button(app, model.Tender.Cash, "cash"),
+                    tender_button(app, model.Tender.Card, "card"),
+                    tender_button(app, model.Tender.Wallet, "wallet"),
+                    tender_button(app, model.Tender.StoreCredit, "store_credit"),
+                ])),
+        html.keyed("rule", html.txt("p", [html.class("rule")], t(app, "only_cash_change"))),
+        html.keyed("entry", html.el("div", [html.class("entry")], [
+                    html.keyed("k", html.txt("span", [html.class("entry-label")],
+                            t(app, "cash_tendered"))),
+                    html.keyed("v", html.txt("span", [html.class("entry-value")],
+                            money.plain(typed, store.currency_of(app)))),
+                ])),
+        html.keyed("quick", html.el("div", [html.class("quicks")], quick)),
+        keypad(app, "t"),
+        html.keyed("add", button("\(t(app, "add_tender")) · \(money.plain(typed, store.currency_of(app)))",
+                if typed > 0 { "commit wide" } else { "commit wide off" }, [act("add-tender")])),
+    ]
+
+    var summary: [html.Node] = []
+    if app.taken.len() > 0 {
+        var rows: [html.Node] = []
+        for (i, p) in enumerate(app.taken) {
+            rows.push(taken_row(app, i, p))
+        }
+        summary.push(html.keyed("taken", html.el("ul", [html.class("takens")], rows)))
+    }
+    summary.push(html.keyed("due", html.el("div", [html.class("due")], [
+                    html.keyed("k", html.txt("span", [],
+                            if change > 0 { t(app, "change_due") } else { t(app, "balance_due") })),
+                    html.keyed("v", html.txt("span", [html.class("due-value")],
+                            amount(app, if change > 0 { change } else { due }))),
+                ])))
+    summary.push(html.keyed("actions", html.el("div", [html.class("tender-actions")], [
+                    html.keyed("back", button(t(app, "back_to_sale"), "ghost", [act("back-to-sale")])),
+                    html.keyed("finish", button(t(app, "finish"),
+                            if due <= 0 && app.taken.len() > 0 { "commit" } else { "commit off" },
+                            [act("finish")])),
+                ])))
+
+    return html.keyed("work-tender", html.el("section", [html.class("work tender-work")], [
+                html.keyed("summary", html.el("div", [html.class("tender-summary")], summary)),
+                html.keyed("pad", html.el("div", [html.class("tender-pad")], right)),
+            ]))
+}
+
+// ---- commands --------------------------------------------------------------
+
+/// The command bar, built from what the server said this operator may do.
+///
+/// A command they lack rights to is drawn **locked rather than hidden** — it is
+/// how a cashier learns to call a manager. Destructive commands sit in their
+/// own group at the end, never beside a high-frequency target.
+fn command_bar(app: store.App) -> html.Node {
+    var ordinary: [html.Node] = []
+    var destructive: [html.Node] = []
+
+    for c in app.basket.commands {
+        var label = model.label_of(c, app.lang)
+        if c.id == "held" && app.basket.held_count > 0 {
+            label = "\(label) (\(app.basket.held_count))"
+        }
+        if !c.allowed {
+            label = "\(label) 🔒"
+        }
+        var classes = if c.danger { "command danger" } else { "command" }
+        if !c.allowed {
+            classes = classes + " locked"
+        }
+        let node = html.keyed(c.id, button(label, classes,
+                [html.data("action", "command"), html.data("id", c.id)]))
+        if c.danger {
+            destructive.push(node)
+        } else {
+            ordinary.push(node)
+        }
+    }
+
+    return html.keyed("commands", html.el("nav", [html.class("commands")], [
+                html.keyed("ordinary", html.el("div", [html.class("command-group")], ordinary)),
+                html.keyed("gap", html.el("span", [html.class("gap")], [])),
+                html.keyed("destructive", html.el("div", [html.class("command-group restricted")],
+                        destructive)),
+            ]))
+}
+
+// ---- overlays --------------------------------------------------------------
+
+/// The parked baskets, or a sentence saying there are none.
+///
+/// Its own function because the two shapes are a list and a paragraph, and a
+/// key here implies a tag — keeping the promise is what lets the reconciler
+/// treat the change as a removal and an insertion, which is what it is.
+fn held_body(app: store.App) -> html.Node {
+    if app.held.len() == 0 {
+        return html.keyed("none", html.txt("p", [html.class("lede")], t(app, "no_held")))
+    }
+    var rows: [html.Node] = []
+    for h in app.held {
+        rows.push(html.keyed(h.id, html.el("li", [html.class("held-row")], [
+                        html.keyed("label", html.txt("span", [html.class("name")], h.label)),
+                        html.keyed("meta", html.txt("span", [html.class("detail")],
+                                "\(h.items) \(t(app, "items")) · \(browser.clock_of(h.created_at))")),
+                        html.keyed("total", html.txt("span", [html.class("now")], amount(app, h.total))),
+                        html.keyed("go", button(t(app, "resume"), "chip",
+                                [html.data("action", "recall"), html.data("id", h.id)])),
+                    ])))
+    }
+    return html.keyed("list", html.el("ul", [html.class("held-list")], rows))
+}
+
+fn found_body(app: store.App) -> html.Node {
+    var rows: [html.Node] = []
+    for p in app.found {
+        rows.push(html.keyed(p.id, html.el("li",
+                    [html.class("held-row"), html.data("action", "tile"), html.data("id", p.id)], [
+                        html.keyed("name", html.txt("span", [html.class("name")],
+                                store.product_label(p, app.lang))),
+                        html.keyed("sku", html.txt("span", [html.class("detail")], p.sku)),
+                        html.keyed("price", html.txt("span", [html.class("now")], amount(app, p.price))),
+                    ])))
+    }
+    return html.keyed("found", html.el("ul", [html.class("found")], rows))
+}
+
+fn customers_body(app: store.App) -> html.Node {
+    var rows: [html.Node] = []
+    for cu in app.customers {
+        rows.push(html.keyed(cu.id, html.el("li",
+                    [html.class("held-row"), html.data("action", "customer-pick"),
+                        html.data("id", cu.id)], [
+                        html.keyed("name", html.txt("span", [html.class("name")], cu.name)),
+                        html.keyed("phone", html.txt("span", [html.class("detail")], cu.phone)),
+                        html.keyed("points", html.txt("span", [html.class("now")],
+                                "\(cu.points) pts")),
+                    ])))
+    }
+    if rows.len() == 0 {
+        return html.keyed("none", html.txt("p", [html.class("lede")], t(app, "no_customers")))
+    }
+    return html.keyed("list", html.el("ul", [html.class("held-list")], rows))
+}
+
+fn receipts_body(app: store.App) -> html.Node {
+    var rows: [html.Node] = []
+    for r in app.receipts {
+        rows.push(html.keyed(r.id, html.el("li",
+                    [html.class("held-row"), html.data("action", "receipt-pick"),
+                        html.data("id", r.id)], [
+                        html.keyed("n", html.txt("span", [html.class("name")], "#\(r.number)")),
+                        html.keyed("meta", html.txt("span", [html.class("detail")],
+                                "\(r.items) \(t(app, "items")) · \(browser.clock_of(r.completed_at)) · \(r.cashier)")),
+                        html.keyed("total", html.txt("span", [html.class("now")], amount(app, r.total))),
+                    ])))
+    }
+    if rows.len() == 0 {
+        return html.keyed("none", html.txt("p", [html.class("lede")], t(app, "no_receipts")))
+    }
+    return html.keyed("list", html.el("ul", [html.class("held-list")], rows))
+}
+
+/// The lines of a receipt, with a stepper on each.
+///
+/// A return is counted out one unit at a time rather than typed, because the
+/// customer is standing there with the goods and the operator is looking at
+/// them, not at a keypad.
+fn returning_body(app: store.App) -> html.Node {
+    var rows: [html.Node] = []
+    var total = 0
+    for l in app.returning {
+        if l.returnable <= 0.0 {
+            continue
+        }
+        let share = if l.qty > 0.0 { l.taking / l.qty } else { 0.0 }
+        // Rounded, not truncated: this is the figure the operator reads out to
+        // the customer, and it has to match what the server will actually pay.
+        total = total + math.round_to((l.total as float) * share)
+        rows.push(html.keyed(l.id, html.el("li", [html.class("return-row")], [
+                        html.keyed("name", html.el("span", [html.class("line-body")], [
+                                    html.keyed("n", html.txt("span", [html.class("name")], l.name)),
+                                    html.keyed("d", html.txt("span", [html.class("detail")],
+                                            "\(t(app, "returnable")) \(money.quantity(l.returnable)) · \(amount(app, l.total))")),
+                                ])),
+                        html.keyed("less", button("−", "step",
+                                [html.data("action", "return-less"), html.data("id", l.id)])),
+                        html.keyed("qty", html.txt("span", [html.class("qty")],
+                                money.quantity(l.taking))),
+                        html.keyed("more", button("+", "step",
+                                [html.data("action", "return-more"), html.data("id", l.id)])),
+                    ])))
+    }
+    if rows.len() == 0 {
+        return html.keyed("none", html.txt("p", [html.class("lede")], t(app, "nothing_returnable")))
+    }
+    rows.push(html.keyed("reason", html.empty("input", [
+                    html.id("reason"),
+                    html.class("scan-field"),
+                    html.attr("type", "text"),
+                    html.attr("placeholder", t(app, "reason")),
+                ])))
+    rows.push(html.keyed("total", html.el("div", [html.class("due")], [
+                    html.keyed("k", html.txt("span", [], t(app, "total"))),
+                    html.keyed("v", html.txt("span", [html.class("due-value")], amount(app, total))),
+                ])))
+    return html.keyed("list", html.el("ul", [html.class("held-list")], rows))
+}
+
+fn shade(key: str, title: str, body: [html.Node]) -> html.Node {
+    return html.keyed(key, html.el("div", [html.class("shade")], [
+                html.keyed("panel", html.el("div", [html.class("panel")], concat([
+                                html.keyed("title", html.txt("h2", [], title)),
+                            ], body))),
+            ]))
+}
+
+fn overlay_of(app: store.App) -> [html.Node] {
+    return match app.overlay {
+        None => [],
+        AgeCheck(name, min_age, born_before, code, product_id) => [
+            shade("age", t(app, "age_check"), [
+                    html.keyed("what", html.txt("p", [html.class("lede")], name)),
+                    html.keyed("age", html.el("div", [html.class("age-figures")], [
+                                html.keyed("min", html.el("div", [], [
+                                            html.keyed("k", html.txt("span", [html.class("k")],
+                                                    t(app, "age_min"))),
+                                            html.keyed("v", html.txt("span", [html.class("big")],
+                                                    "\(min_age)")),
+                                        ])),
+                                // The date to check against, so nobody is doing
+                                // arithmetic at the counter with a queue waiting.
+                                html.keyed("born", html.el("div", [], [
+                                            html.keyed("k", html.txt("span", [html.class("k")],
+                                                    t(app, "born_before"))),
+                                            html.keyed("v", html.txt("span", [html.class("big")],
+                                                    browser.date_of(born_before))),
+                                        ])),
+                            ])),
+                    html.keyed("actions", html.el("div", [html.class("panel-actions")], [
+                                html.keyed("no", button(t(app, "refuse"), "ghost", [act("dismiss")])),
+                                html.keyed("yes", button(t(app, "approve"), "commit",
+                                        concat([html.data("action", "age-ok")],
+                                            [html.data("id", code), html.data("pid", product_id)]))),
+                            ])),
+                ]),
+        ],
+        AskPrice(name, product_id) => [
+            shade("price", t(app, "price"), [
+                    html.keyed("what", html.txt("p", [html.class("lede")], name)),
+                    html.keyed("entry", html.txt("div", [html.class("entry-value")],
+                            money.plain(or_else(money.from_keys(app.entry, store.currency_of(app)), 0),
+                                store.currency_of(app)))),
+                    keypad(app, "p"),
+                    html.keyed("actions", html.el("div", [html.class("panel-actions")], [
+                                html.keyed("no", button(t(app, "cancel"), "ghost", [act("dismiss")])),
+                                html.keyed("yes", button(t(app, "confirm"), "commit",
+                                        [html.data("action", "price-ok"), html.data("id", product_id)])),
+                            ])),
+                ]),
+        ],
+        Held => [
+            shade("held", t(app, "held"), [
+                    held_body(app),
+                    html.keyed("actions", html.el("div", [html.class("panel-actions")], [
+                                html.keyed("close", button(t(app, "cancel"), "ghost", [act("dismiss")])),
+                            ])),
+                ]),
+        ],
+        Search => [
+            shade("search", t(app, "search"), [
+                    html.keyed("field", html.empty("input", [
+                                html.id("find"),
+                                html.class("scan-field"),
+                                html.attr("type", "text"),
+                                html.attr("autocomplete", "off"),
+                                html.attr("placeholder", t(app, "search")),
+                            ])),
+                    found_body(app),
+                    html.keyed("actions", html.el("div", [html.class("panel-actions")], [
+                                html.keyed("close", button(t(app, "cancel"), "ghost", [act("dismiss")])),
+                            ])),
+                ]),
+        ],
+        Keypad(purpose, line_id, title) => [
+            shade("pad", title, [
+                    html.keyed("entry", html.txt("div", [html.class("entry-value")], app.entry)),
+                    keypad(app, "k"),
+                    html.keyed("actions", html.el("div", [html.class("panel-actions")], [
+                                html.keyed("no", button(t(app, "cancel"), "ghost", [act("dismiss")])),
+                                html.keyed("yes", button(t(app, "confirm"), "commit",
+                                        [html.data("action", "keypad-ok"),
+                                            html.data("id", line_id),
+                                            html.data("purpose", purpose)])),
+                            ])),
+                ]),
+        ],
+        ManagerPin(purpose, line_id, amount_value) => [
+            shade("mgr", t(app, "manager_pin"), [
+                    html.keyed("lede", html.txt("p", [html.class("lede")], t(app, "needs_manager"))),
+                    html.keyed("dots", html.txt("div", [html.class("entry-value")],
+                            repeat_dots(app.entry.len()))),
+                    keypad(app, "m"),
+                    html.keyed("actions", html.el("div", [html.class("panel-actions")], [
+                                html.keyed("no", button(t(app, "cancel"), "ghost", [act("dismiss")])),
+                                html.keyed("yes", button(t(app, "confirm"), "commit",
+                                        [html.data("action", "manager-ok"),
+                                            html.data("id", line_id),
+                                            html.data("purpose", purpose),
+                                            html.data("amount", "\(amount_value)")])),
+                            ])),
+                ]),
+        ],
+        Confirm(purpose, message) => [
+            shade("confirm", t(app, "confirm"), [
+                    html.keyed("lede", html.txt("p", [html.class("lede")], message)),
+                    html.keyed("field", html.empty("input", [
+                                html.id("reason"),
+                                html.class("scan-field"),
+                                html.attr("type", "text"),
+                                html.attr("placeholder", t(app, "reason")),
+                            ])),
+                    html.keyed("actions", html.el("div", [html.class("panel-actions")], [
+                                html.keyed("no", button(t(app, "cancel"), "ghost", [act("dismiss")])),
+                                html.keyed("yes", button(t(app, "confirm"), "commit danger",
+                                        [html.data("action", "confirm-ok"),
+                                            html.data("purpose", purpose)])),
+                            ])),
+                ]),
+        ],
+        Customers => [
+            shade("customers", t(app, "customer"), [
+                    html.keyed("field", html.empty("input", [
+                                html.id("who"),
+                                html.class("scan-field"),
+                                html.attr("type", "text"),
+                                html.attr("autocomplete", "off"),
+                                html.attr("placeholder", t(app, "customer")),
+                            ])),
+                    customers_body(app),
+                    html.keyed("actions", html.el("div", [html.class("panel-actions")], [
+                                html.keyed("close", button(t(app, "cancel"), "ghost", [act("dismiss")])),
+                                html.keyed("new", button(t(app, "new_customer"), "commit",
+                                        [act("customer-new")])),
+                            ])),
+                ]),
+        ],
+        Receipts => [
+            shade("receipts", t(app, "return"), [
+                    html.keyed("field", html.empty("input", [
+                                html.id("receipt"),
+                                html.class("scan-field"),
+                                html.attr("type", "text"),
+                                html.attr("inputmode", "numeric"),
+                                html.attr("placeholder", t(app, "receipt_number")),
+                            ])),
+                    receipts_body(app),
+                    html.keyed("actions", html.el("div", [html.class("panel-actions")], [
+                                html.keyed("close", button(t(app, "cancel"), "ghost", [act("dismiss")])),
+                            ])),
+                ]),
+        ],
+        Returning(sale_id, number) => [
+            shade("returning", "\(t(app, "return")) · #\(number)", [
+                    returning_body(app),
+                    html.keyed("actions", html.el("div", [html.class("panel-actions")], [
+                                html.keyed("no", button(t(app, "cancel"), "ghost", [act("dismiss")])),
+                                html.keyed("yes", button(t(app, "confirm"), "commit danger",
+                                        [html.data("action", "return-go"), html.data("id", sale_id)])),
+                            ])),
+                ]),
+        ],
+        PriceCheck(name, detail, price) => [
+            shade("check", t(app, "price_check"), [
+                    html.keyed("what", html.txt("p", [html.class("lede")], name)),
+                    html.keyed("detail", html.txt("p", [html.class("detail")], detail)),
+                    html.keyed("price", html.txt("div", [html.class("entry-value")], price)),
+                    html.keyed("actions", html.el("div", [html.class("panel-actions")], [
+                                html.keyed("close", button(t(app, "cancel"), "ghost", [act("dismiss")])),
+                            ])),
+                ]),
+        ],
+    }
+}
+
+fn repeat_dots(n: int) -> str {
+    var out = ""
+    for _i in 0..n {
+        out = out + "•"
+    }
+    return out
+}
+
+// ---- signing in ------------------------------------------------------------
+
+/// The PIN pad.
+///
+/// No username: the pad is built for a touchscreen and a queue, and asking who
+/// you are before asking for four digits doubles the taps at the busiest moment
+/// of the day. The dots show progress without ever displaying the PIN.
+fn sign_in(app: store.App) -> [html.Node] {
+    var keys: [html.Node] = []
+    for row in [["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"]] {
+        for k in row {
+            keys.push(html.keyed("p\(k)", button(k, "key",
+                        [html.data("action", "pin-key"), html.data("id", k)])))
+        }
+    }
+    keys.push(html.keyed("pclear", button("⌫", "key util",
+                [html.data("action", "pin-key"), html.data("id", "back")])))
+    keys.push(html.keyed("p0", button("0", "key",
+                [html.data("action", "pin-key"), html.data("id", "0")])))
+    keys.push(html.keyed("pgo", button("→", "key go",
+                [html.data("action", "pin-go")])))
+
+    return [
+        html.keyed("signin", html.el("main", [html.class("signin")], [
+                    html.keyed("title", html.txt("h1", [], t(app, "enter_pin"))),
+                    html.keyed("dots", html.txt("div", [html.class("pin-dots")],
+                            repeat_dots(app.pin.len()))),
+                    html.keyed("pad", html.el("div", [html.class("keypad pin-pad")], keys)),
+                    html.keyed("trouble", html.txt("p", [html.class("trouble")], app.trouble)),
+                    html.keyed("lang", html.el("div", [html.class("lang")], [
+                                html.keyed("en", button("EN",
+                                        if app.lang == i18n.Lang.En { "lang-on" } else { "lang-off" },
+                                        [act("lang-en")])),
+                                html.keyed("my", button("မြန်မာ",
+                                        if app.lang == i18n.Lang.My { "lang-on" } else { "lang-off" },
+                                        [act("lang-my"), html.attr("lang", "my")])),
+                            ])),
+                ])),
+    ]
+}
+
+// ---- the page --------------------------------------------------------------
+
+/// The whole till, as a description.
+pub fn page(app: store.App) -> [html.Node] {
+    if app.session == nil {
+        return sign_in(app)
+    }
+
+    var out: [html.Node] = [status_bar(app)]
+    out.push(html.keyed("main", html.el("main",
+                [html.class(match app.mode { Sale => "lane", Tender => "lane tendering" })], [
+                    ledger(app),
+                    match app.mode {
+                        Sale => work_sale(app),
+                        Tender => work_tender(app),
+                    },
+                ])))
+    if app.mode == store.Mode.Sale {
+        out.push(command_bar(app))
+    }
+    if app.trouble.len() > 0 {
+        out.push(html.keyed("trouble", html.txt("div", [html.class("trouble-bar")], app.trouble)))
+    } else if app.notice.len() > 0 {
+        out.push(html.keyed("notice", html.txt("div", [html.class("notice-bar")], app.notice)))
+    }
+    out = concat(out, overlay_of(app))
+    return out
+}

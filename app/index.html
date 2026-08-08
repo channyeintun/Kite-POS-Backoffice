@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- A till is a fixed-size appliance: no zoom, no bounce, no address bar
+     appearing halfway through a sale. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0b0d0f">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Till — Kite POS</title>
+
+<!-- Where the Worker is. Same-origin `/api` by default, which Vite proxies to
+     `wrangler dev` in development. Change this one line to point a build at a
+     deployed Worker; nothing is compiled in. -->
+<meta name="api-base" content="/api">
+
+<link rel="manifest" href="/manifest-till.webmanifest">
+<link rel="icon" href="/icon-till-192.png">
+<link rel="apple-touch-icon" href="/icon-till-192.png">
+<link rel="stylesheet" href="/src/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Noto+Sans+Myanmar:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="/src/pos.kite"></script>
+</body>
+</html>

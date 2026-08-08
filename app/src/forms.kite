@@ -1,0 +1,590 @@
+//! Every dialog in the back office, in one file.
+//!
+//! A form is a value — see `desk.Form` — so this is a list of constructors and
+//! nothing else: no document, no requests, no state. `office.kite` opens one of
+//! these when a button is pressed and matches on the same `id` when it is
+//! submitted, so what a form *asks for* and what it *does* sit one function
+//! apart and cannot drift.
+//!
+//! Money fields are pre-filled and read back as the shop writes amounts, which
+//! for a zero-decimal currency means "18500" and for one with cents "185.00".
+//! `money.from_text` is the one place that conversion happens.
+//!
+//! Every constructor takes the language first among the things it is told,
+//! because a label, a hint and a dropdown's options are all chrome. What a
+//! field is *called* switches; what it holds — a supplier's name, an account
+//! code, a barcode — does not.
+
+use desk
+use doc
+use i18n
+use money
+use words
+
+fn text_field(name: str, label: str, value: str) -> desk.Field {
+    return desk.field(name, label, desk.FieldKind.Text, value)
+}
+
+fn money_field(name: str, label: str, value: int, c: money.Currency) -> desk.Field {
+    return desk.field(name, label, desk.FieldKind.Money, money.plain(value, c))
+}
+
+fn whole_field(name: str, label: str, value: int) -> desk.Field {
+    return desk.field(name, label, desk.FieldKind.Whole, "\(value)")
+}
+
+fn qty_field(name: str, label: str, value: float) -> desk.Field {
+    return desk.field(name, label, desk.FieldKind.Quantity, money.quantity(value))
+}
+
+fn toggle_field(name: str, label: str, on: bool, hint: str) -> desk.Field {
+    return desk.hinted(desk.field(name, label, desk.FieldKind.Toggle, if on { "1" } else { "0" }), hint)
+}
+
+fn choice_field(name: str, label: str, options: [str], labels: [str], value: str) -> desk.Field {
+    return desk.field(name, label, desk.FieldKind.Choice(options: options, labels: labels), value)
+}
+
+fn readonly_field(name: str, label: str, value: str) -> desk.Field {
+    return desk.field(name, label, desk.FieldKind.Readonly, value)
+}
+
+/// The empty option at the top of a dropdown that may be left unanswered.
+///
+/// A phrase rather than a blank line, because a select whose first option is
+/// empty looks broken rather than optional.
+fn none_option(l: i18n.Lang) -> str {
+    return words.t(l, "common.none_dash")
+}
+
+// ---- the catalogue ---------------------------------------------------------
+
+/// Add or edit a product.
+///
+/// The same form both ways: an empty `id` means a new one, and the values are
+/// whatever the product already had. Two forms would drift the day a column is
+/// added, which is the sort of drift a shop notices as "the edit screen has
+/// forgotten about age restrictions".
+pub fn product(existing: doc.Doc, id: str, categories: [doc.Doc], suppliers: [doc.Doc],
+    l: i18n.Lang, c: money.Currency) -> desk.Form {
+    var category_ids: [str] = [""]
+    var category_names: [str] = [none_option(l)]
+    for cat in categories {
+        category_ids.push(doc.text(cat, "id", ""))
+        category_names.push(doc.text(cat, "name", ""))
+    }
+    var supplier_ids: [str] = [""]
+    var supplier_names: [str] = [none_option(l)]
+    for s in suppliers {
+        supplier_ids.push(doc.text(s, "id", ""))
+        supplier_names.push(doc.text(s, "name", ""))
+    }
+
+    let fields: [desk.Field] = [
+        desk.required(text_field("sku", words.t(l, "products.sku"),
+                doc.text(existing, "sku", ""))),
+        desk.required(text_field("name", words.t(l, "common.name"),
+                doc.text(existing, "name", ""))),
+        desk.hinted(text_field("name_my", words.t(l, "products.name_my"),
+                doc.text(existing, "name_my", "")),
+            words.t(l, "products.name_my_hint")),
+        choice_field("category_id", words.t(l, "common.category"), category_ids, category_names,
+            doc.text(existing, "category_id", "")),
+        choice_field("supplier_id", words.t(l, "common.supplier"), supplier_ids, supplier_names,
+            doc.text(existing, "supplier_id", "")),
+        money_field("price", words.t(l, "products.shelf_price"),
+            doc.int_of(existing, "price", 0), c),
+        money_field("cost", words.t(l, "common.cost"), doc.int_of(existing, "cost", 0), c),
+        desk.hinted(whole_field("tax_bp", words.t(l, "products.tax_bp"),
+                doc.int_of(existing, "tax_bp", 0)),
+            words.t(l, "products.tax_bp_hint")),
+        desk.hinted(whole_field("min_age", words.t(l, "products.minimum_age"),
+                doc.int_of(existing, "min_age", 0)),
+            words.t(l, "products.min_age_hint")),
+        choice_field("unit", words.t(l, "products.sold_by"), ["each", "kg", "litre", "pack"],
+            [words.t(l, "products.unit_each"), words.t(l, "products.unit_kilo"),
+                words.t(l, "products.unit_litre"), words.t(l, "products.unit_pack")],
+            doc.text(existing, "unit", "each")),
+        toggle_field("ask_price", words.t(l, "products.price_at_till"),
+            doc.int_of(existing, "ask_price", 0) == 1,
+            words.t(l, "products.ask_for_a_price_at_the_till")),
+        qty_field("reorder_point", words.t(l, "common.reorder_at"),
+            doc.num_of(existing, "reorder_point", 0.0)),
+        qty_field("reorder_qty", words.t(l, "products.reorder_quantity"),
+            doc.num_of(existing, "reorder_qty", 0.0)),
+        desk.hinted(whole_field("quick_key", words.t(l, "products.favourites_position"),
+                doc.int_of(existing, "quick_key", 0)),
+            words.t(l, "products.quick_key_hint")),
+        toggle_field("active", words.t(l, "products.for_sale"),
+            doc.int_of(existing, "active", 1) == 1,
+            words.t(l, "products.for_sale_hint")),
+    ]
+    return desk.about(
+        desk.form("product",
+            if id.len() > 0 {
+                words.t(l, "products.edit_product")
+            } else {
+                words.t(l, "products.add_a_product")
+            },
+            words.t(l, "common.save"), fields),
+        id)
+}
+
+pub fn barcode(product_id: str, product_name: str, l: i18n.Lang) -> desk.Form {
+    return desk.about(
+        desk.explained(
+            desk.form("barcode", words.t(l, "products.add_a_barcode"), words.t(l, "common.add"), [
+                    readonly_field("product", words.t(l, "common.product"), product_name),
+                    desk.required(text_field("barcode", words.t(l, "common.barcode"), "")),
+                    desk.hinted(qty_field("pack_size", words.t(l, "products.units_per_scan"), 1.0),
+                        words.t(l, "products.pack_size_hint")),
+                    text_field("label", words.t(l, "common.label"), ""),
+                ]),
+            words.t(l, "products.barcode_lede")),
+        product_id)
+}
+
+pub fn category(existing: doc.Doc, id: str, l: i18n.Lang) -> desk.Form {
+    return desk.about(
+        desk.form("category",
+            if id.len() > 0 {
+                words.t(l, "categories.edit_category")
+            } else {
+                words.t(l, "categories.add_a_category")
+            },
+            words.t(l, "common.save"), [
+                desk.required(text_field("name", words.t(l, "common.name"),
+                        doc.text(existing, "name", ""))),
+                text_field("name_my", words.t(l, "products.name_my"),
+                    doc.text(existing, "name_my", "")),
+                whole_field("sort", words.t(l, "categories.position"),
+                    doc.int_of(existing, "sort", 0)),
+            ]),
+        id)
+}
+
+pub fn supplier(existing: doc.Doc, id: str, l: i18n.Lang) -> desk.Form {
+    return desk.about(
+        desk.form("supplier",
+            if id.len() > 0 {
+                words.t(l, "suppliers.edit_supplier")
+            } else {
+                words.t(l, "suppliers.add_a_supplier")
+            },
+            words.t(l, "common.save"), [
+                desk.required(text_field("name", words.t(l, "common.name"),
+                        doc.text(existing, "name", ""))),
+                text_field("phone", words.t(l, "common.phone"), doc.text(existing, "phone", "")),
+                text_field("email", words.t(l, "common.email"), doc.text(existing, "email", "")),
+                desk.field("address", words.t(l, "common.address"), desk.FieldKind.Lines,
+                    doc.text(existing, "address", "")),
+                desk.hinted(whole_field("lead_days", words.t(l, "suppliers.lead_time_days"),
+                        doc.int_of(existing, "lead_days", 3)),
+                    words.t(l, "suppliers.lead_days_hint")),
+                toggle_field("active", words.t(l, "suppliers.still_buying_from_them"),
+                    doc.int_of(existing, "active", 1) == 1, words.t(l, "common.active")),
+            ]),
+        id)
+}
+
+// ---- offers ----------------------------------------------------------------
+
+pub fn promotion(existing: doc.Doc, id: str, products: [doc.Doc], categories: [doc.Doc],
+    l: i18n.Lang, c: money.Currency) -> desk.Form {
+    var product_ids: [str] = [""]
+    var product_names: [str] = [none_option(l)]
+    for p in products {
+        product_ids.push(doc.text(p, "id", ""))
+        product_names.push(doc.text(p, "name", ""))
+    }
+    var category_ids: [str] = [""]
+    var category_names: [str] = [none_option(l)]
+    for cat in categories {
+        category_ids.push(doc.text(cat, "id", ""))
+        category_names.push(doc.text(cat, "name", ""))
+    }
+
+    return desk.about(
+        desk.explained(
+            desk.form("promotion",
+                if id.len() > 0 {
+                    words.t(l, "promotions.edit_offer")
+                } else {
+                    words.t(l, "promotions.add_an_offer")
+                },
+                words.t(l, "common.save"), [
+                    desk.required(text_field("name", words.t(l, "promotions.name_on_the_receipt"),
+                            doc.text(existing, "name", ""))),
+                    text_field("name_my", words.t(l, "products.name_my"),
+                        doc.text(existing, "name_my", "")),
+                    choice_field("kind", words.t(l, "common.kind"),
+                        ["percent_off", "amount_off", "fixed_price", "n_for_x"],
+                        [words.t(l, "promotions.percentage_off"),
+                            words.t(l, "promotions.amount_off_each"),
+                            words.t(l, "promotions.fixed_price_each"),
+                            words.t(l, "promotions.multibuy")],
+                        doc.text(existing, "kind", "percent_off")),
+                    desk.hinted(whole_field("value", words.t(l, "common.value"),
+                            doc.int_of(existing, "value", 0)),
+                        words.fill(l, "promotions.value_hint", c.code)),
+                    desk.hinted(whole_field("n", words.t(l, "promotions.buy_how_many"),
+                            doc.int_of(existing, "n", 0)),
+                        words.t(l, "promotions.n_hint")),
+                    choice_field("scope", words.t(l, "promotions.applies_to"),
+                        ["product", "category", "all"],
+                        [words.t(l, "promotions.one_product"),
+                            words.t(l, "promotions.a_whole_category"),
+                            words.t(l, "promotions.everything")],
+                        doc.text(existing, "scope", "product")),
+                    choice_field("product_id", words.t(l, "common.product"),
+                        product_ids, product_names,
+                        doc.text(existing, "product_id", "")),
+                    choice_field("category_id", words.t(l, "common.category"),
+                        category_ids, category_names,
+                        doc.text(existing, "category_id", "")),
+                    desk.hinted(whole_field("priority", words.t(l, "promotions.priority"),
+                            doc.int_of(existing, "priority", 0)),
+                        words.t(l, "promotions.only_breaks_a_tie_between_equal_offers")),
+                    toggle_field("active", words.t(l, "promotions.live"),
+                        doc.int_of(existing, "active", 1) == 1,
+                        words.t(l, "promotions.running")),
+                ]),
+            words.t(l, "promotions.offers_do_not_stack")),
+        id)
+}
+
+// ---- people ----------------------------------------------------------------
+
+pub fn customer(existing: doc.Doc, id: str, l: i18n.Lang) -> desk.Form {
+    return desk.about(
+        desk.form("customer",
+            if id.len() > 0 {
+                words.t(l, "customers.edit_customer")
+            } else {
+                words.t(l, "customers.add_a_customer")
+            },
+            words.t(l, "common.save"), [
+                desk.required(text_field("name", words.t(l, "common.name"),
+                        doc.text(existing, "name", ""))),
+                text_field("phone", words.t(l, "common.phone"), doc.text(existing, "phone", "")),
+                desk.field("note", words.t(l, "common.note"), desk.FieldKind.Lines,
+                    doc.text(existing, "note", "")),
+            ]),
+        id)
+}
+
+pub fn staff(l: i18n.Lang) -> desk.Form {
+    return desk.explained(
+        desk.form("staff", words.t(l, "staff.add_staff"), words.t(l, "common.add"), [
+                desk.required(text_field("name", words.t(l, "common.name"), "")),
+                choice_field("role", words.t(l, "staff.role"),
+                    ["sale_staff", "manager", "owner"],
+                    [words.t(l, "staff.role_sale_staff_option"),
+                        words.t(l, "staff.role_manager_option"), words.t(l, "staff.owner")],
+                    "sale_staff"),
+                desk.hinted(text_field("pin", words.t(l, "staff.pin"), ""),
+                    words.t(l, "staff.pin_hint")),
+                desk.hinted(text_field("username", words.t(l, "common.username"), ""),
+                    words.t(l, "staff.username_hint")),
+                desk.field("password", words.t(l, "common.password"), desk.FieldKind.Password, ""),
+            ]),
+        words.t(l, "staff.a_role_decides_which_app"))
+}
+
+pub fn staff_pin(id: str, name: str, l: i18n.Lang) -> desk.Form {
+    return desk.about(
+        desk.form("staff-pin", words.t(l, "staff.set_a_pin"), words.t(l, "register.set"), [
+                readonly_field("who", words.t(l, "common.staff"), name),
+                desk.required(text_field("pin", words.t(l, "staff.new_pin"), "")),
+            ]),
+        id)
+}
+
+pub fn staff_password(id: str, name: str, l: i18n.Lang) -> desk.Form {
+    return desk.about(
+        desk.explained(
+            desk.form("staff-password", words.t(l, "staff.set_a_password"),
+                words.t(l, "register.set"), [
+                    readonly_field("who", words.t(l, "common.staff"), name),
+                    desk.required(desk.field("password", words.t(l, "staff.new_password"),
+                            desk.FieldKind.Password, "")),
+                ]),
+            words.t(l, "staff.password_lede")),
+        id)
+}
+
+pub fn staff_edit(existing: doc.Doc, id: str, l: i18n.Lang) -> desk.Form {
+    return desk.about(
+        desk.form("staff-edit", words.t(l, "staff.edit_staff"), words.t(l, "common.save"), [
+                desk.required(text_field("name", words.t(l, "common.name"),
+                        doc.text(existing, "name", ""))),
+                toggle_field("active", words.t(l, "common.active"),
+                    doc.int_of(existing, "active", 1) == 1,
+                    words.t(l, "staff.deactivating_hint")),
+            ]),
+        id)
+}
+
+// ---- stock and buying ------------------------------------------------------
+
+pub fn adjust(product_id: str, name: str, stock: float, l: i18n.Lang) -> desk.Form {
+    return desk.about(
+        desk.explained(
+            desk.form("adjust", words.t(l, "inventory.adjust_stock"), words.t(l, "register.apply"), [
+                    readonly_field("product", words.t(l, "common.product"), name),
+                    readonly_field("was", words.t(l, "inventory.the_computer_thinks"),
+                        money.quantity(stock)),
+                    desk.required(qty_field("counted", words.t(l, "common.counted"), stock)),
+                    choice_field("reason", words.t(l, "common.because"),
+                        ["count", "waste", "adjust"],
+                        [words.t(l, "inventory.a_stock_count"),
+                            words.t(l, "inventory.waste_or_breakage"),
+                            words.t(l, "inventory.a_correction")], "count"),
+                    text_field("note", words.t(l, "common.note"), ""),
+                ]),
+            words.t(l, "inventory.adjust_lede")),
+        product_id)
+}
+
+pub fn receive(item_id: str, name: str, outstanding: float, unit_cost: int,
+    l: i18n.Lang, c: money.Currency) -> desk.Form {
+    return desk.about(
+        desk.explained(
+            desk.form("receive", words.t(l, "purchase_order.receive"),
+                words.t(l, "purchase_order.receive"), [
+                    readonly_field("product", words.t(l, "common.product"), name),
+                    readonly_field("outstanding", words.t(l, "purchase_order.still_expected"),
+                        money.quantity(outstanding)),
+                    desk.required(qty_field("qty", words.t(l, "purchase_order.arrived"),
+                            outstanding)),
+                    money_field("unit_cost", words.t(l, "purchase_order.cost_each"), unit_cost, c),
+                ]),
+            words.t(l, "purchase_order.receive_lede")),
+        item_id)
+}
+
+pub fn invoice(supplier_ids: [str], supplier_names: [str], po_id: str, supplier_id: str,
+    total: int, l: i18n.Lang, c: money.Currency) -> desk.Form {
+    return desk.about(
+        desk.explained(
+            desk.form("invoice", words.t(l, "payables.record_an_invoice"),
+                words.t(l, "shifts.record"), [
+                    choice_field("supplier_id", words.t(l, "common.supplier"),
+                        supplier_ids, supplier_names, supplier_id),
+                    text_field("reference", words.t(l, "payables.their_reference"), ""),
+                    money_field("total", words.t(l, "common.total"), total, c),
+                    desk.hinted(whole_field("due_days", words.t(l, "payables.due_in_days"), 30),
+                        words.t(l, "payables.due_days_hint")),
+                ]),
+            words.t(l, "payables.invoice_lede")),
+        po_id)
+}
+
+pub fn pay_invoice(id: str, supplier: str, outstanding: int, l: i18n.Lang,
+    c: money.Currency) -> desk.Form {
+    return desk.about(
+        desk.form("pay-invoice", words.t(l, "payables.pay_supplier"), words.t(l, "common.pay"), [
+                readonly_field("supplier", words.t(l, "common.supplier"), supplier),
+                readonly_field("outstanding", words.t(l, "common.outstanding"),
+                    money.show(outstanding, c)),
+                desk.required(money_field("amount", words.t(l, "payables.paying"),
+                        outstanding, c)),
+                choice_field("method", words.t(l, "common.how"), ["cash", "card", "wallet"],
+                    [words.t(l, "common.cash"), words.t(l, "common.card"),
+                        words.t(l, "common.wallet")], "cash"),
+            ]),
+        id)
+}
+
+pub fn expense(accounts: [doc.Doc], l: i18n.Lang, c: money.Currency) -> desk.Form {
+    var codes: [str] = []
+    var names: [str] = []
+    for a in accounts {
+        codes.push(doc.text(a, "code", ""))
+        names.push("\(doc.text(a, "code", "")) \(doc.text(a, "name", ""))")
+    }
+    // An account's code and name come from the chart of accounts, which is the
+    // shop's own data — so the fallback is the account the ledger ships with
+    // rather than a phrase, and it reads the same in both languages.
+    if codes.len() == 0 {
+        codes = ["6000"]
+        names = ["6000 Operating expenses"]
+    }
+    return desk.explained(
+        desk.form("expense", words.t(l, "expenses.record_an_expense"),
+            words.t(l, "shifts.record"), [
+                desk.hinted(choice_field("account_code", words.t(l, "expenses.what_kind_of_cost"),
+                        codes, names, "6000"),
+                    words.t(l, "expenses.account_hint")),
+                desk.required(text_field("category", words.t(l, "expenses.what_for"), "")),
+                text_field("payee", words.t(l, "expenses.paid_to"), ""),
+                text_field("reference", words.t(l, "common.reference"), ""),
+                desk.required(money_field("amount", words.t(l, "common.amount"), 0, c)),
+                desk.hinted(money_field("tax", words.t(l, "common.tax_included"), 0, c),
+                    words.t(l, "expenses.tax_hint")),
+                choice_field("method", words.t(l, "common.how"),
+                    ["cash", "card", "wallet", "on_account"],
+                    [words.t(l, "expenses.cash_from_the_safe"), words.t(l, "common.card"),
+                        words.t(l, "common.wallet"),
+                        words.t(l, "expenses.on_account_the_shop_owes_it")],
+                    "cash"),
+                text_field("note", words.t(l, "common.note"), ""),
+            ]),
+        words.t(l, "expenses.expense_lede"))
+}
+
+// ---- lanes and drawers -----------------------------------------------------
+
+pub fn open_shift(register_ids: [str], register_names: [str], l: i18n.Lang,
+    c: money.Currency) -> desk.Form {
+    return desk.form("open-shift", words.t(l, "shifts.open_a_drawer"),
+        words.t(l, "common.open"), [
+            choice_field("register_id", words.t(l, "common.lane"), register_ids, register_names,
+                or_else(first(register_ids), "")),
+            desk.required(money_field("opening_float", words.t(l, "shifts.counted_float"), 0, c)),
+        ])
+}
+
+pub fn close_shift(id: str, lane: str, expected: int, l: i18n.Lang,
+    c: money.Currency) -> desk.Form {
+    return desk.about(
+        desk.explained(
+            desk.form("close-shift", words.t(l, "shifts.count_and_close"),
+                words.t(l, "common.close"), [
+                    readonly_field("lane", words.t(l, "common.lane"), lane),
+                    readonly_field("expected", words.t(l, "shifts.the_books_expect"),
+                        money.show(expected, c)),
+                    desk.required(money_field("counted_total", words.t(l, "common.counted"),
+                            expected, c)),
+                    text_field("note", words.t(l, "common.note"), ""),
+                ]),
+            words.t(l, "shifts.close_lede")),
+        id)
+}
+
+pub fn movement(shift_id: str, l: i18n.Lang, c: money.Currency) -> desk.Form {
+    return desk.about(
+        desk.form("movement", words.t(l, "shifts.cash_in_or_out"), words.t(l, "shifts.record"), [
+                choice_field("kind", words.t(l, "inventory.what_happened"),
+                    ["paid_in", "paid_out", "safe_drop"],
+                    [words.t(l, "shifts.paid_in_option"), words.t(l, "shifts.paid_out_option"),
+                        words.t(l, "shifts.safe_drop_option")], "paid_in"),
+                desk.required(money_field("amount", words.t(l, "common.amount"), 0, c)),
+                desk.required(text_field("reason", words.t(l, "common.why"), "")),
+            ]),
+        shift_id)
+}
+
+pub fn register(l: i18n.Lang) -> desk.Form {
+    return desk.form("register", words.t(l, "tills.add_a_lane"), words.t(l, "common.add"), [
+            desk.required(text_field("name", words.t(l, "common.name"), "")),
+            choice_field("kind", words.t(l, "common.kind"), ["counter", "handheld"],
+                [words.t(l, "tills.counter_tablet"), words.t(l, "tills.handheld")], "counter"),
+        ])
+}
+
+// ---- selling ---------------------------------------------------------------
+
+pub fn refund(sale_id: str, number: int, lines: [doc.Doc], l: i18n.Lang,
+    c: money.Currency) -> desk.Form {
+    var fields: [desk.Field] = [
+        readonly_field("receipt", words.t(l, "common.receipt"), "#\(number)"),
+    ]
+    // `line` rather than `l`, which is the language everywhere else in this file.
+    for line in lines {
+        let left = doc.num_of(line, "qty", 0.0) - doc.num_of(line, "refunded_qty", 0.0)
+        if left <= 0.0 {
+            continue
+        }
+        fields.push(desk.hinted(
+                desk.field("line:\(doc.text(line, "id", ""))", doc.text(line, "name", ""),
+                    desk.FieldKind.Quantity, "0"),
+                "\(words.fill(l, "sales.up_to_n", money.quantity(left))) · \(money.show(doc.int_of(line, "total", 0), c))"))
+    }
+    fields.push(desk.required(text_field("reason", words.t(l, "common.why"), "")))
+    fields.push(choice_field("method", words.t(l, "sales.refund_to"),
+            ["cash", "card", "wallet", "store_credit"],
+            [words.t(l, "common.cash"), words.t(l, "common.card"), words.t(l, "common.wallet"),
+                words.t(l, "common.store_credit")], "cash"))
+    fields.push(toggle_field("restock", words.t(l, "sales.put_the_items_back_into_stock"), true,
+            words.t(l, "sales.restock")))
+    return desk.about(
+        desk.explained(desk.form("refund", words.t(l, "sales.refund"),
+                words.t(l, "sales.refund"), fields),
+            words.t(l, "sales.refund_lede")),
+        sale_id)
+}
+
+// ---- the shop ---------------------------------------------------------------
+
+pub fn settings(current: doc.Doc, l: i18n.Lang) -> desk.Form {
+    return desk.explained(
+        desk.form("settings", words.t(l, "common.settings"), words.t(l, "common.save"), [
+                text_field("shop.name", words.t(l, "settings.shop_name"),
+                    doc.text(current, "shop.name", "")),
+                text_field("shop.name_my", words.t(l, "settings.shop_name_my"),
+                    doc.text(current, "shop.name_my", "")),
+                desk.field("shop.address", words.t(l, "common.address"), desk.FieldKind.Lines,
+                    doc.text(current, "shop.address", "")),
+                text_field("shop.phone", words.t(l, "common.phone"),
+                    doc.text(current, "shop.phone", "")),
+                text_field("shop.tax_id", words.t(l, "common.tax_id"),
+                    doc.text(current, "shop.tax_id", "")),
+                text_field("shop.receipt_footer", words.t(l, "settings.receipt_footer"),
+                    doc.text(current, "shop.receipt_footer", "")),
+                text_field("currency.code", words.t(l, "settings.currency"),
+                    doc.text(current, "currency.code", "MMK")),
+                text_field("currency.symbol", words.t(l, "settings.symbol"),
+                    doc.text(current, "currency.symbol", "K")),
+                desk.hinted(text_field("currency.minor_units", words.t(l, "settings.decimal_places"),
+                        doc.text(current, "currency.minor_units", "0")),
+                    words.t(l, "settings.minor_units_hint")),
+                choice_field("currency.symbol_first", words.t(l, "settings.symbol_goes"),
+                    ["1", "0"],
+                    [words.t(l, "settings.before_the_number"),
+                        words.t(l, "settings.after_the_number")],
+                    doc.text(current, "currency.symbol_first", "1")),
+                choice_field("tax.inclusive", words.t(l, "settings.shelf_prices"), ["1", "0"],
+                    [words.t(l, "settings.include_tax"), words.t(l, "settings.exclude_tax")],
+                    doc.text(current, "tax.inclusive", "1")),
+                whole_field("tax.default_bp", words.t(l, "settings.default_tax_bp"),
+                    or_else(parse_int(doc.text(current, "tax.default_bp", "0")), 0)),
+                // The two language names stay in their own scripts, the way a
+                // language picker anywhere does: somebody who cannot read the
+                // current one still has to be able to find the other.
+                choice_field("locale.default", words.t(l, "settings.language"), ["en", "my"],
+                    ["English", "မြန်မာ"], doc.text(current, "locale.default", "en")),
+                text_field("loyalty.points_per_unit", words.t(l, "settings.loyalty_points_per_unit"),
+                    doc.text(current, "loyalty.points_per_unit", "0")),
+                choice_field("accounting.enabled", words.t(l, "common.accounting"), ["0", "1"],
+                    [words.t(l, "settings.off"), words.t(l, "settings.on_post_every_sale")],
+                    doc.text(current, "accounting.enabled", "0")),
+            ]),
+        words.t(l, "settings.settings_lede"))
+}
+
+pub fn close_period(l: i18n.Lang) -> desk.Form {
+    return desk.explained(
+        desk.form("close-period", words.t(l, "accounting.close_a_month"),
+            words.t(l, "common.close"), [
+                desk.required(text_field("month", words.t(l, "common.month"), "")),
+            ]),
+        words.t(l, "accounting.close_period_lede"))
+}
+
+/// Undo a posting, by posting its opposite.
+///
+/// Not an edit — there is no edit. The reversal is a second entry linked to
+/// the first, dated today, and both stay in the journal, so a reader sees what
+/// happened *and* that it was undone. The reason is required because a
+/// correction with no explanation is the thing an auditor asks about.
+pub fn reverse_entry(id: str, l: i18n.Lang) -> desk.Form {
+    return desk.about(
+        desk.explained(
+            desk.form("reverse-entry", words.t(l, "accounting.correct_this_entry"),
+                words.t(l, "accounting.post_the_correction"), [
+                    desk.required(text_field("reason", words.t(l, "common.why"), "")),
+                ]),
+            words.t(l, "accounting.reverse_entry_lede")),
+        id)
+}
