@@ -733,35 +733,25 @@ pub fn took_subject(var app: App, subject: doc.Doc, lines: [doc.Doc]) {
 /// the one that will be closed. `"all"` starts at the epoch, which is before
 /// any shop in this system opened.
 pub fn window_seconds(name: str, now: int) -> [int] {
-    if name == "today" {
-        return [now - (now % 86400), now]
+    return match name {
+        "today" => [now - (now % 86400), now],
+        "7" => [now - 7 * 86400, now],
+        "month" => [now - 30 * 86400, now],
+        "all" => [0, now],
+        // An unrecognised name gets thirty days — the same window
+        // `window_label` names it, so the figures and the label agree.
+        _ => [now - 30 * 86400, now],
     }
-    if name == "7" {
-        return [now - 7 * 86400, now]
-    }
-    if name == "month" {
-        return [now - 30 * 86400, now]
-    }
-    if name == "all" {
-        return [0, now]
-    }
-    return [now - 30 * 86400, now]
 }
 
 pub fn window_label(name: str) -> str {
-    if name == "today" {
-        return "today"
+    return match name {
+        "today" => "today",
+        "7" => "seven days",
+        "month" => "this month",
+        "all" => "all time",
+        _ => "thirty days",
     }
-    if name == "7" {
-        return "seven days"
-    }
-    if name == "month" {
-        return "this month"
-    }
-    if name == "all" {
-        return "all time"
-    }
-    return "thirty days"
 }
 
 pub fn show_books(var app: App, view: str) {

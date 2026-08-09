@@ -625,44 +625,39 @@ fn open_form(app: desk.App, what: str, id: str) {
     let c = desk.currency_of(app)
     let l = desk.lang_of(app)
 
-    if what == "form-product" {
-        let existing = if id.len() > 0 { app.subject } else { doc.nothing() }
-        desk.open_form(app, forms.product(existing, id, app.ref_categories, app.ref_suppliers, l, c))
-    } else if what == "form-barcode" {
-        desk.open_form(app, forms.barcode(id, doc.text(app.subject, "name", ""), l))
-    } else if what == "form-category" {
-        desk.open_form(app, forms.category(one_of(app.ref_categories, id), id, l))
-    } else if what == "form-supplier" {
-        desk.open_form(app, forms.supplier(one_of(app.ref_suppliers, id), id, l))
-    } else if what == "form-promotion" {
-        desk.open_form(app, forms.promotion(doc.nothing(), id, app.ref_products,
-                app.ref_categories, l, c))
-    } else if what == "form-customer" {
-        desk.open_form(app, forms.customer(doc.nothing(), id, l))
-    } else if what == "form-staff" {
-        desk.open_form(app, forms.staff(l))
-    } else if what == "form-expense" {
-        desk.open_form(app, forms.expense(app.ref_expense_accounts, l, c))
-    } else if what == "form-settings" {
-        desk.open_form(app, forms.settings(app.ref_settings, l))
-    } else if what == "form-close-period" {
-        desk.open_form(app, forms.close_period(l))
-    } else if what == "form-register" {
-        desk.open_form(app, forms.register(l))
-    } else if what == "form-adjust" {
-        desk.open_form(app, forms.adjust(id, doc.text(app.subject, "name", ""),
-                doc.num_of(app.subject, "stock", 0.0), l))
-    } else if what == "form-open-shift" {
-        desk.open_form(app, forms.open_shift(ids_of(app.ref_registers),
-                names_of(app.ref_registers), l, c))
-    } else if what == "form-invoice" {
-        desk.open_form(app, forms.invoice(ids_of(app.ref_suppliers), names_of(app.ref_suppliers),
-                id, doc.text(app.subject, "supplier_id", ""),
-                doc.int_of(app.subject, "total", 0), l, c))
-    } else {
+    // **Statement position, and no arm returns.** Every branch — including the
+    // default — falls out to the `repaint` below, which is what actually puts
+    // the dialog on screen. An arm that returned would set the form state and
+    // draw nothing, and the press would look like it did nothing at all.
+    match what {
+        "form-product" => {
+            let existing = if id.len() > 0 { app.subject } else { doc.nothing() }
+            desk.open_form(app, forms.product(existing, id, app.ref_categories,
+                    app.ref_suppliers, l, c))
+        },
+        "form-barcode" => desk.open_form(app, forms.barcode(id,
+                doc.text(app.subject, "name", ""), l)),
+        "form-category" => desk.open_form(app, forms.category(one_of(app.ref_categories, id), id, l)),
+        "form-supplier" => desk.open_form(app, forms.supplier(one_of(app.ref_suppliers, id), id, l)),
+        "form-promotion" => desk.open_form(app, forms.promotion(doc.nothing(), id,
+                app.ref_products, app.ref_categories, l, c)),
+        "form-customer" => desk.open_form(app, forms.customer(doc.nothing(), id, l)),
+        "form-staff" => desk.open_form(app, forms.staff(l)),
+        "form-expense" => desk.open_form(app, forms.expense(app.ref_expense_accounts, l, c)),
+        "form-settings" => desk.open_form(app, forms.settings(app.ref_settings, l)),
+        "form-close-period" => desk.open_form(app, forms.close_period(l)),
+        "form-register" => desk.open_form(app, forms.register(l)),
+        "form-adjust" => desk.open_form(app, forms.adjust(id,
+                doc.text(app.subject, "name", ""),
+                doc.num_of(app.subject, "stock", 0.0), l)),
+        "form-open-shift" => desk.open_form(app, forms.open_shift(ids_of(app.ref_registers),
+                names_of(app.ref_registers), l, c)),
+        "form-invoice" => desk.open_form(app, forms.invoice(ids_of(app.ref_suppliers),
+                names_of(app.ref_suppliers), id, doc.text(app.subject, "supplier_id", ""),
+                doc.int_of(app.subject, "total", 0), l, c)),
         // A developer's message, not a shopkeeper's: it only appears when a
         // button names a form nobody wrote, which is a bug rather than a state.
-        desk.went_wrong(app, "\(what) is not wired up")
+        _ => desk.went_wrong(app, "\(what) is not wired up"),
     }
     repaint(app)
 }
@@ -1050,264 +1045,246 @@ async fn do_submit(app: desk.App, id: str, subject: str) {
     let l = desk.lang_of(app)
     let body = doc.object()
 
-    if id == "product" {
-        doc.put_text(body, "sku", value_of("sku"))
-        doc.put_text(body, "name", value_of("name"))
-        doc.put_text(body, "name_my", value_of("name_my"))
-        doc.put_text(body, "category_id", value_of("category_id"))
-        doc.put_text(body, "supplier_id", value_of("supplier_id"))
-        doc.put_int(body, "price", money_of(app, "price"))
-        doc.put_int(body, "cost", money_of(app, "cost"))
-        doc.put_int(body, "tax_bp", whole_of("tax_bp"))
-        doc.put_int(body, "min_age", whole_of("min_age"))
-        doc.put_text(body, "unit", value_of("unit"))
-        doc.put_bool(body, "ask_price", checked("ask_price"))
-        doc.put_num(body, "reorder_point", qty_of("reorder_point"))
-        doc.put_num(body, "reorder_qty", qty_of("reorder_qty"))
-        doc.put_int(body, "quick_key", whole_of("quick_key"))
-        doc.put_bool(body, "active", checked("active"))
-        let open = app.form
-        if open != nil {
-            doc.put_text(body, "photo_key", field_value_of(open, "photo_key"))
-        }
-        let (_, err) = await api.save_product(token, subject, body)
-        settle(app, err, words.t(l, "toast.saved"))
-        return
-    }
-    if id == "barcode" {
-        doc.put_text(body, "barcode", value_of("barcode"))
-        doc.put_num(body, "pack_size", qty_of("pack_size"))
-        doc.put_text(body, "label", value_of("label"))
-        let (_, err) = await api.add_barcode(token, subject, body)
-        settle(app, err, words.t(l, "toast.barcode_added"))
-        return
-    }
-    if id == "category" {
-        doc.put_text(body, "name", value_of("name"))
-        doc.put_text(body, "name_my", value_of("name_my"))
-        doc.put_int(body, "sort", whole_of("sort"))
-        let (_, err) = await api.save_category(token, subject, body)
-        settle(app, err, words.t(l, "toast.saved"))
-        return
-    }
-    if id == "supplier" {
-        doc.put_text(body, "name", value_of("name"))
-        doc.put_text(body, "phone", value_of("phone"))
-        doc.put_text(body, "email", value_of("email"))
-        doc.put_text(body, "address", value_of("address"))
-        doc.put_int(body, "lead_days", whole_of("lead_days"))
-        doc.put_bool(body, "active", checked("active"))
-        let (_, err) = await api.save_supplier(token, subject, body)
-        settle(app, err, words.t(l, "toast.saved"))
-        return
-    }
-    if id == "promotion" {
-        doc.put_text(body, "name", value_of("name"))
-        doc.put_text(body, "name_my", value_of("name_my"))
-        doc.put_text(body, "kind", value_of("kind"))
-        doc.put_int(body, "value", whole_of("value"))
-        doc.put_int(body, "n", whole_of("n"))
-        doc.put_text(body, "scope", value_of("scope"))
-        put_text_if(body, "product_id", value_of("product_id"))
-        put_text_if(body, "category_id", value_of("category_id"))
-        doc.put_int(body, "priority", whole_of("priority"))
-        doc.put_bool(body, "active", checked("active"))
-        let (_, err) = await api.save_promotion(token, subject, body)
-        settle(app, err, words.t(l, "toast.saved"))
-        return
-    }
-    if id == "customer" {
-        doc.put_text(body, "name", value_of("name"))
-        doc.put_text(body, "phone", value_of("phone"))
-        doc.put_text(body, "note", value_of("note"))
-        let (_, err) = await api.save_customer(token, subject, body)
-        settle(app, err, words.t(l, "toast.saved"))
-        return
-    }
-    if id == "staff" {
-        doc.put_text(body, "name", value_of("name"))
-        doc.put_text(body, "role", value_of("role"))
-        put_text_if(body, "pin", value_of("pin"))
-        put_text_if(body, "username", value_of("username"))
-        put_text_if(body, "password", value_of("password"))
-        let (_, err) = await api.save_staff(token, "", body)
-        settle(app, err, words.t(l, "toast.added"))
-        return
-    }
-    if id == "staff-pin" {
-        let (_, err) = await api.set_staff_pin(token, subject, value_of("pin"))
-        settle(app, err, words.t(l, "toast.pin_set"))
-        return
-    }
-    if id == "staff-password" {
-        let (_, err) = await api.set_staff_password(token, subject, value_of("password"))
-        settle(app, err, words.t(l, "toast.password_set"))
-        return
-    }
-    if id == "staff-edit" {
-        doc.put_text(body, "name", value_of("name"))
-        doc.put_bool(body, "active", checked("active"))
-        let (_, err) = await api.save_staff(token, subject, body)
-        settle(app, err, words.t(l, "toast.saved"))
-        return
-    }
-    if id == "adjust" {
-        doc.put_text(body, "product_id", subject)
-        doc.put_num(body, "counted", qty_of("counted"))
-        doc.put_text(body, "reason", value_of("reason"))
-        doc.put_text(body, "note", value_of("note"))
-        let (_, err) = await api.adjust_stock(token, body)
-        settle(app, err, words.t(l, "toast.stock_was_adjusted"))
-        return
-    }
-    if id == "receive" {
-        let lines = doc.array()
-        let line = doc.object()
-        doc.put_text(line, "item_id", subject)
-        doc.put_num(line, "qty", qty_of("qty"))
-        doc.put_int(line, "unit_cost", money_of(app, "unit_cost"))
-        doc.push(lines, line)
-        doc.put(body, "lines", lines)
-        let (_, err) = await api.receive_order(token, order_id_of(app), body)
-        settle(app, err, words.t(l, "common.received"))
-        return
-    }
-    if id == "invoice" {
-        doc.put_text(body, "supplier_id", value_of("supplier_id"))
-        put_text_if(body, "po_id", subject)
-        doc.put_text(body, "reference", value_of("reference"))
-        doc.put_int(body, "total", money_of(app, "total"))
-        doc.put_int(body, "issued_at", browser.now())
-        doc.put_int(body, "due_at", browser.now() + whole_of("due_days") * day())
-        let (_, err) = await api.add_invoice(token, body)
-        settle(app, err, words.t(l, "toast.invoice_recorded"))
-        return
-    }
-    if id == "pay-invoice" {
-        doc.put_int(body, "amount", money_of(app, "amount"))
-        doc.put_text(body, "method", value_of("method"))
-        let (_, err) = await api.pay_invoice(token, subject, body)
-        settle(app, err, words.t(l, "payables.paid"))
-        return
-    }
-    if id == "expense" {
-        doc.put_text(body, "account_code", value_of("account_code"))
-        doc.put_text(body, "category", value_of("category"))
-        doc.put_text(body, "payee", value_of("payee"))
-        put_text_if(body, "reference", value_of("reference"))
-        doc.put_int(body, "amount", money_of(app, "amount"))
-        doc.put_int(body, "tax", money_of(app, "tax"))
-        doc.put_text(body, "method", value_of("method"))
-        doc.put_text(body, "note", value_of("note"))
-        let (_, err) = await api.add_expense(token, body)
-        settle(app, err, words.t(l, "toast.recorded"))
-        return
-    }
-    if id == "open-shift" {
-        let (_, err) = await api.open_shift(token, value_of("register_id"),
-            money_of(app, "opening_float"))
-        settle(app, err, words.t(l, "toast.drawer_open"))
-        return
-    }
-    if id == "close-shift" {
-        let (_, err) = await api.close_shift(token, subject,
-            money_of(app, "counted_total"), value_of("note"))
-        settle(app, err, words.t(l, "toast.drawer_closed"))
-        return
-    }
-    if id == "movement" {
-        doc.put_text(body, "kind", value_of("kind"))
-        doc.put_int(body, "amount", money_of(app, "amount"))
-        doc.put_text(body, "reason", value_of("reason"))
-        let (_, err) = await api.shift_movement(token, subject, body)
-        settle(app, err, words.t(l, "toast.recorded"))
-        return
-    }
-    if id == "register" {
-        doc.put_text(body, "name", value_of("name"))
-        doc.put_text(body, "kind", value_of("kind"))
-        let (_, err) = await api.add_register(token, body)
-        settle(app, err, words.t(l, "toast.lane_added"))
-        return
-    }
-    if id == "cancel-invoice" {
-        doc.put_text(body, "reason", value_of("reason"))
-        let (_, err) = await api.cancel_invoice(token, value_of("invoice_id"), body)
-        settle(app, err, words.t(desk.lang_of(app), "payables.cancelled"))
-        return
-    }
-    if id == "journal-filter" {
-        desk.filter_journal(app, value_of("ref_type"), value_of("account_code"), value_of("q"))
-        desk.close_form(app)
-        load(app)
-        return
-    }
-    if id == "opening-balances" {
-        doc.put_int(body, "cash_in_safe", money_of(app, "cash_in_safe"))
-        doc.put_int(body, "cash_in_drawer", money_of(app, "cash_in_drawer"))
-        let (_, err) = await api.post_opening_balances(token, body)
-        settle(app, err, words.t(desk.lang_of(app), "accounting.opening_balances"))
-        return
-    }
-    if id == "reverse-entry" {
-        doc.put_text(body, "reason", value_of("reason"))
-        let (_, err) = await api.reverse_entry(token, subject, body)
-        settle(app, err, words.t(l, "toast.correction_posted"))
-        return
-    }
-    if id == "refund" {
-        let lines = doc.array()
-        for line in app.subject_lines {
-            let line_id = doc.text(line, "id", "")
-            let wanted = qty_of("line:\(line_id)")
-            if wanted > 0.0 {
-                let entry = doc.object()
-                doc.put_text(entry, "sale_item_id", line_id)
-                doc.put_num(entry, "qty", wanted)
-                doc.push(lines, entry)
+    // **The default is a tail, not an else.** Every arm below used to end in
+    // `return`, which is the only reason the refusal underneath was reached
+    // solely on a miss. As a `match` those returns are redundant — but the
+    // refusal has to come *with* the default, or every successful save would
+    // also refuse its own form and repaint over its own toast.
+    match id {
+        "product" => {
+            doc.put_text(body, "sku", value_of("sku"))
+            doc.put_text(body, "name", value_of("name"))
+            doc.put_text(body, "name_my", value_of("name_my"))
+            doc.put_text(body, "category_id", value_of("category_id"))
+            doc.put_text(body, "supplier_id", value_of("supplier_id"))
+            doc.put_int(body, "price", money_of(app, "price"))
+            doc.put_int(body, "cost", money_of(app, "cost"))
+            doc.put_int(body, "tax_bp", whole_of("tax_bp"))
+            doc.put_int(body, "min_age", whole_of("min_age"))
+            doc.put_text(body, "unit", value_of("unit"))
+            doc.put_bool(body, "ask_price", checked("ask_price"))
+            doc.put_num(body, "reorder_point", qty_of("reorder_point"))
+            doc.put_num(body, "reorder_qty", qty_of("reorder_qty"))
+            doc.put_int(body, "quick_key", whole_of("quick_key"))
+            doc.put_bool(body, "active", checked("active"))
+            let open = app.form
+            if open != nil {
+                doc.put_text(body, "photo_key", field_value_of(open, "photo_key"))
             }
-        }
-        doc.put(body, "lines", lines)
-        doc.put_text(body, "reason", value_of("reason"))
-        doc.put_text(body, "method", value_of("method"))
-        doc.put_bool(body, "restock", checked("restock"))
-        let (_, err) = await api.refund_sale(token, subject, body)
-        settle(app, err, words.t(l, "common.refunded"))
-        return
-    }
-    if id == "settings" {
-        for key in [
-            "shop.name", "shop.name_my", "shop.address", "shop.phone", "shop.tax_id",
-            "shop.receipt_footer", "currency.code", "currency.symbol", "currency.minor_units",
-            "currency.symbol_first", "tax.inclusive", "tax.default_bp", "locale.default",
-            "loyalty.points_per_unit", "accounting.enabled",
-        ] {
-            doc.put_text(body, key, value_of(key))
-        }
-        let (_, err) = await api.save_settings(token, body)
-        settle(app, err, words.t(l, "toast.saved"))
-        return
-    }
-    if id == "close-period" {
-        let month = value_of("month")
-        let bounds = browser.month_bounds(month)
-        if bounds.len() != 2 {
-            desk.form_refused(app, words.t(l, "error.write_the_month_as"))
+            let (_, err) = await api.save_product(token, subject, body)
+            settle(app, err, words.t(l, "toast.saved"))
+        },
+        "barcode" => {
+            doc.put_text(body, "barcode", value_of("barcode"))
+            doc.put_num(body, "pack_size", qty_of("pack_size"))
+            doc.put_text(body, "label", value_of("label"))
+            let (_, err) = await api.add_barcode(token, subject, body)
+            settle(app, err, words.t(l, "toast.barcode_added"))
+        },
+        "category" => {
+            doc.put_text(body, "name", value_of("name"))
+            doc.put_text(body, "name_my", value_of("name_my"))
+            doc.put_int(body, "sort", whole_of("sort"))
+            let (_, err) = await api.save_category(token, subject, body)
+            settle(app, err, words.t(l, "toast.saved"))
+        },
+        "supplier" => {
+            doc.put_text(body, "name", value_of("name"))
+            doc.put_text(body, "phone", value_of("phone"))
+            doc.put_text(body, "email", value_of("email"))
+            doc.put_text(body, "address", value_of("address"))
+            doc.put_int(body, "lead_days", whole_of("lead_days"))
+            doc.put_bool(body, "active", checked("active"))
+            let (_, err) = await api.save_supplier(token, subject, body)
+            settle(app, err, words.t(l, "toast.saved"))
+        },
+        "promotion" => {
+            doc.put_text(body, "name", value_of("name"))
+            doc.put_text(body, "name_my", value_of("name_my"))
+            doc.put_text(body, "kind", value_of("kind"))
+            doc.put_int(body, "value", whole_of("value"))
+            doc.put_int(body, "n", whole_of("n"))
+            doc.put_text(body, "scope", value_of("scope"))
+            put_text_if(body, "product_id", value_of("product_id"))
+            put_text_if(body, "category_id", value_of("category_id"))
+            doc.put_int(body, "priority", whole_of("priority"))
+            doc.put_bool(body, "active", checked("active"))
+            let (_, err) = await api.save_promotion(token, subject, body)
+            settle(app, err, words.t(l, "toast.saved"))
+        },
+        "customer" => {
+            doc.put_text(body, "name", value_of("name"))
+            doc.put_text(body, "phone", value_of("phone"))
+            doc.put_text(body, "note", value_of("note"))
+            let (_, err) = await api.save_customer(token, subject, body)
+            settle(app, err, words.t(l, "toast.saved"))
+        },
+        "staff" => {
+            doc.put_text(body, "name", value_of("name"))
+            doc.put_text(body, "role", value_of("role"))
+            put_text_if(body, "pin", value_of("pin"))
+            put_text_if(body, "username", value_of("username"))
+            put_text_if(body, "password", value_of("password"))
+            let (_, err) = await api.save_staff(token, "", body)
+            settle(app, err, words.t(l, "toast.added"))
+        },
+        "staff-pin" => {
+            let (_, err) = await api.set_staff_pin(token, subject, value_of("pin"))
+            settle(app, err, words.t(l, "toast.pin_set"))
+        },
+        "staff-password" => {
+            let (_, err) = await api.set_staff_password(token, subject, value_of("password"))
+            settle(app, err, words.t(l, "toast.password_set"))
+        },
+        "staff-edit" => {
+            doc.put_text(body, "name", value_of("name"))
+            doc.put_bool(body, "active", checked("active"))
+            let (_, err) = await api.save_staff(token, subject, body)
+            settle(app, err, words.t(l, "toast.saved"))
+        },
+        "adjust" => {
+            doc.put_text(body, "product_id", subject)
+            doc.put_num(body, "counted", qty_of("counted"))
+            doc.put_text(body, "reason", value_of("reason"))
+            doc.put_text(body, "note", value_of("note"))
+            let (_, err) = await api.adjust_stock(token, body)
+            settle(app, err, words.t(l, "toast.stock_was_adjusted"))
+        },
+        "receive" => {
+            let lines = doc.array()
+            let line = doc.object()
+            doc.put_text(line, "item_id", subject)
+            doc.put_num(line, "qty", qty_of("qty"))
+            doc.put_int(line, "unit_cost", money_of(app, "unit_cost"))
+            doc.push(lines, line)
+            doc.put(body, "lines", lines)
+            let (_, err) = await api.receive_order(token, order_id_of(app), body)
+            settle(app, err, words.t(l, "common.received"))
+        },
+        "invoice" => {
+            doc.put_text(body, "supplier_id", value_of("supplier_id"))
+            put_text_if(body, "po_id", subject)
+            doc.put_text(body, "reference", value_of("reference"))
+            doc.put_int(body, "total", money_of(app, "total"))
+            doc.put_int(body, "issued_at", browser.now())
+            doc.put_int(body, "due_at", browser.now() + whole_of("due_days") * day())
+            let (_, err) = await api.add_invoice(token, body)
+            settle(app, err, words.t(l, "toast.invoice_recorded"))
+        },
+        "pay-invoice" => {
+            doc.put_int(body, "amount", money_of(app, "amount"))
+            doc.put_text(body, "method", value_of("method"))
+            let (_, err) = await api.pay_invoice(token, subject, body)
+            settle(app, err, words.t(l, "payables.paid"))
+        },
+        "expense" => {
+            doc.put_text(body, "account_code", value_of("account_code"))
+            doc.put_text(body, "category", value_of("category"))
+            doc.put_text(body, "payee", value_of("payee"))
+            put_text_if(body, "reference", value_of("reference"))
+            doc.put_int(body, "amount", money_of(app, "amount"))
+            doc.put_int(body, "tax", money_of(app, "tax"))
+            doc.put_text(body, "method", value_of("method"))
+            doc.put_text(body, "note", value_of("note"))
+            let (_, err) = await api.add_expense(token, body)
+            settle(app, err, words.t(l, "toast.recorded"))
+        },
+        "open-shift" => {
+            let (_, err) = await api.open_shift(token, value_of("register_id"),
+                money_of(app, "opening_float"))
+            settle(app, err, words.t(l, "toast.drawer_open"))
+        },
+        "close-shift" => {
+            let (_, err) = await api.close_shift(token, subject,
+                money_of(app, "counted_total"), value_of("note"))
+            settle(app, err, words.t(l, "toast.drawer_closed"))
+        },
+        "movement" => {
+            doc.put_text(body, "kind", value_of("kind"))
+            doc.put_int(body, "amount", money_of(app, "amount"))
+            doc.put_text(body, "reason", value_of("reason"))
+            let (_, err) = await api.shift_movement(token, subject, body)
+            settle(app, err, words.t(l, "toast.recorded"))
+        },
+        "register" => {
+            doc.put_text(body, "name", value_of("name"))
+            doc.put_text(body, "kind", value_of("kind"))
+            let (_, err) = await api.add_register(token, body)
+            settle(app, err, words.t(l, "toast.lane_added"))
+        },
+        "cancel-invoice" => {
+            doc.put_text(body, "reason", value_of("reason"))
+            let (_, err) = await api.cancel_invoice(token, value_of("invoice_id"), body)
+            settle(app, err, words.t(desk.lang_of(app), "payables.cancelled"))
+        },
+        "journal-filter" => {
+            desk.filter_journal(app, value_of("ref_type"), value_of("account_code"), value_of("q"))
+            desk.close_form(app)
+            load(app)
+        },
+        "opening-balances" => {
+            doc.put_int(body, "cash_in_safe", money_of(app, "cash_in_safe"))
+            doc.put_int(body, "cash_in_drawer", money_of(app, "cash_in_drawer"))
+            let (_, err) = await api.post_opening_balances(token, body)
+            settle(app, err, words.t(desk.lang_of(app), "accounting.opening_balances"))
+        },
+        "reverse-entry" => {
+            doc.put_text(body, "reason", value_of("reason"))
+            let (_, err) = await api.reverse_entry(token, subject, body)
+            settle(app, err, words.t(l, "toast.correction_posted"))
+        },
+        "refund" => {
+            let lines = doc.array()
+            for line in app.subject_lines {
+                let line_id = doc.text(line, "id", "")
+                let wanted = qty_of("line:\(line_id)")
+                if wanted > 0.0 {
+                    let entry = doc.object()
+                    doc.put_text(entry, "sale_item_id", line_id)
+                    doc.put_num(entry, "qty", wanted)
+                    doc.push(lines, entry)
+                }
+            }
+            doc.put(body, "lines", lines)
+            doc.put_text(body, "reason", value_of("reason"))
+            doc.put_text(body, "method", value_of("method"))
+            doc.put_bool(body, "restock", checked("restock"))
+            let (_, err) = await api.refund_sale(token, subject, body)
+            settle(app, err, words.t(l, "common.refunded"))
+        },
+        "settings" => {
+            for key in [
+                "shop.name", "shop.name_my", "shop.address", "shop.phone", "shop.tax_id",
+                "shop.receipt_footer", "currency.code", "currency.symbol", "currency.minor_units",
+                "currency.symbol_first", "tax.inclusive", "tax.default_bp", "locale.default",
+                "loyalty.points_per_unit", "accounting.enabled",
+            ] {
+                doc.put_text(body, key, value_of(key))
+            }
+            let (_, err) = await api.save_settings(token, body)
+            settle(app, err, words.t(l, "toast.saved"))
+        },
+        "close-period" => {
+            let month = value_of("month")
+            let bounds = browser.month_bounds(month)
+            if bounds.len() != 2 {
+                desk.form_refused(app, words.t(l, "error.write_the_month_as"))
+                repaint(app)
+                return
+            }
+            doc.put_int(body, "starts_at", bounds[0])
+            doc.put_int(body, "ends_at", bounds[1])
+            let (_, err) = await api.close_period(token, body)
+            settle(app, err, words.t(l, "toast.month_closed"))
+        },
+        _ => {
+            // Left in English on purpose, like "is not wired up": it can only
+            // appear when a form was written and its submit arm was not, which
+            // nobody outside this file can act on.
+            desk.form_refused(app, "\(id) has no handler")
             repaint(app)
-            return
-        }
-        doc.put_int(body, "starts_at", bounds[0])
-        doc.put_int(body, "ends_at", bounds[1])
-        let (_, err) = await api.close_period(token, body)
-        settle(app, err, words.t(l, "toast.month_closed"))
-        return
+        },
     }
-
-    // Left in English on purpose, like "is not wired up" above: it can only
-    // appear when a form was written and its submit arm was not, which nobody
-    // outside this file can act on.
-    desk.form_refused(app, "\(id) has no handler")
-    repaint(app)
 }
 
 /// The purchase order a receive form belongs to.

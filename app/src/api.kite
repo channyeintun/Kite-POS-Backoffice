@@ -51,22 +51,16 @@ fn refused(status: int, body: str) -> error {
     if parsed.len() > 0 {
         return errors.new(parsed)
     }
-    if status == 401 {
-        return errors.new("that session has ended — sign in again")
+    // The server's own sentence beats every one of these, which is why the
+    // `parsed` test above stays an `if`: it is a precedence rule, not a row.
+    return match status {
+        401 => errors.new("that session has ended — sign in again"),
+        403 => errors.new("that needs a manager"),
+        404 => errors.new("that is not here"),
+        429 => errors.new("too many tries — wait a moment"),
+        s if s >= 500 => errors.new("the shop's server is having trouble (\(status))"),
+        _ => errors.new("that did not go through (\(status))"),
     }
-    if status == 403 {
-        return errors.new("that needs a manager")
-    }
-    if status == 404 {
-        return errors.new("that is not here")
-    }
-    if status == 429 {
-        return errors.new("too many tries — wait a moment")
-    }
-    if status >= 500 {
-        return errors.new("the shop's server is having trouble (\(status))")
-    }
-    return errors.new("that did not go through (\(status))")
 }
 
 /// The sentence the server put in the body, if it put one there.
