@@ -110,6 +110,24 @@ input { font: inherit; }
 .status:has(.mode.tender) { border-bottom: 3px solid var(--info); }
 .status .gap { flex: 1; }
 .status-right { display: flex; align-items: center; gap: 20px; flex: none; }
+/* The operator's name is the way off the lane, so it has to read as a control
+ * rather than as a label — the same place and the same idea as the back
+ * office's `.rail-me`. Two lines: who is on the till, and what pressing it
+ * does. A basket with lines on it refuses, so this cannot strand a sale. */
+.who {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 1px;
+  height: 44px;
+  padding: 0 10px;
+  border-radius: 8px;
+  text-align: right;
+}
+.who:active { background: var(--raised); }
+.who-name { font-size: 13px; color: var(--ink); }
+.who-out { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-faint); }
 /* Everything in this bar keeps its size. A flex child defaults to shrinking,
  * and a status bar whose contents squeeze as the mode name gets longer is one
  * that reads differently in tender than in sale — which is exactly what it must

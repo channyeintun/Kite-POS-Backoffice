@@ -114,7 +114,20 @@ async fn resume(app: store.App, token: str) {
     load_everything(app)
 }
 
+/// Signing off, and the one thing that stops it.
+///
+/// **A basket with lines on it is refused.** The status bar is a row of small
+/// targets beside the scan field, and a mis-tap that signed the cashier out
+/// mid-transaction would leave the customer's shopping stranded on a lane
+/// nobody is on. Hold parks it in one press and Void clears it; either makes
+/// this legal. That is also why there is no "are you sure" here — the refusal
+/// is more useful than a dialog, because it names what to do instead.
 fn sign_off(app: store.App) {
+    if app.basket.lines.len() > 0 {
+        store.went_wrong(app, i18n.t(app.lang, "sign_out_busy"))
+        repaint(app)
+        return
+    }
     let token = store.token_of(app)
     browser.drop_kept("kite-pos.token")
     store.signed_out(app)

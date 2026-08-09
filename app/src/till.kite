@@ -91,7 +91,19 @@ fn status_bar(app: store.App) -> html.Node {
                             // taller line box whatever the chrome is set to.
                             [act("lang-my"), html.attr("lang", "my")])),
                 ])))
-    right.push(html.keyed("who", html.txt("span", [html.class("who")], name)))
+    // The operator's name *is* the way out. The back office signs out from the
+    // same place — the person's own name at the edge of the chrome — and the
+    // till had no way out at all: `sign_off`, the `sign-out` arm and
+    // `api.sign_out` all existed and nothing ever emitted the action.
+    right.push(html.keyed("who", html.el("button", [
+                html.class("who"),
+                html.attr("type", "button"),
+                html.attr("title", t(app, "sign_out")),
+                act("sign-out"),
+            ], [
+                html.keyed("n", html.txt("span", [html.class("who-name")], name)),
+                html.keyed("o", html.txt("span", [html.class("who-out")], t(app, "sign_out"))),
+            ])))
     right.push(html.keyed("when", html.txt("span", [html.class("when")],
                 browser.day_of(browser.now()))))
 

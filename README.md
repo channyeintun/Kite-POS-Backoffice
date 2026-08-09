@@ -24,7 +24,7 @@ follows from it.
 
 | | | |
 |---|---|---|
-| **Till** — `index.html` | Sale staff | A 4-digit PIN at the lane. Full screen: ledger, work area, command bar, status bar. No rail, no reports, no settings, no way out except signing off. |
+| **Till** — `index.html` | Sale staff | A 4-digit PIN at the lane. Full screen: ledger, work area, command bar, status bar. No rail, no reports, no settings, no way out except signing off — which is the operator's own name in the status bar, and is refused while the basket has lines on it. |
 | **Back office** — `office.html` | Manager, owner | Username and password. Everything the shop is made of — stock, buying, books, staff — and **Tills** for the lanes. |
 
 A manager reaches a till by walking to it and authorising there, or by taking a

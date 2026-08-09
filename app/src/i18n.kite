@@ -153,6 +153,7 @@ fn english(key: str) -> str {
     if key == "shift_open" { return "Shift open" }
     if key == "sign_in" { return "Sign in" }
     if key == "sign_out" { return "Sign off" }
+    if key == "sign_out_busy" { return "Hold or void the basket before signing off." }
     if key == "store_credit" { return "Store credit" }
     if key == "subtotal" { return "Subtotal" }
     if key == "tax_added" { return "Tax" }
@@ -233,6 +234,7 @@ fn burmese(key: str) -> str {
     if key == "shift_open" { return "ဆစ်ဖ်ဖွင့်ပြီး" }
     if key == "sign_in" { return "ဝင်ရောက်" }
     if key == "sign_out" { return "ထွက်မည်" }
+    if key == "sign_out_busy" { return "မထွက်မီ စာရင်းကို ဆိုင်းငံ့ပါ သို့မဟုတ် ဖျက်ပါ။" }
     if key == "store_credit" { return "ဆိုင်ခရက်ဒစ်" }
     if key == "subtotal" { return "စုစုပေါင်းတန်ဖိုး" }
     if key == "tax_added" { return "အခွန်" }
