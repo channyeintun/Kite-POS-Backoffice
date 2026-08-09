@@ -1889,7 +1889,7 @@ fn burmese_accounting(key: str) -> str {
     if key == "accounting.summary" { return "အနှစ်ချုပ်" }
     if key == "accounting.system" { return "စနစ်" }
     if key == "accounting.system_accounts_cannot_be_added_or" { return "စနစ်အကောင့်များကို ထည့်၍ဖြစ်စေ ဖျက်၍ဖြစ်စေ မရပါ — စာရင်းသွင်းစည်းမျဉ်းများက ၎င်းတို့အပေါ် မှီခိုနေသည်။ ဤနေရာတွင် သင်ထည့်သမျှကို အသုံးစရိတ် စာရင်းသွင်းရန် သုံးနိုင်သည်။" }
-    if key == "accounting.these_products_carry_a_quantity_that_no" { return "ဤကုန်ပစ္စည်းများ၏ အရေအတွက်သည် ၎င်းတို့၏ လှုပ်ရှားမှုပေါင်းလဒ်နှင့် မကိုက်ညီတော့ပါ။ လှုပ်ရှားမှုများသည် အမှန်ဖြစ်သည်။ ကုန်ပစ္စည်းပေါ်ရှိ အရေအတွက်မှာ စကင်ဖတ်တိုင်း ပြန်ပေါင်းစရာမလိုအောင် သိမ်းထားသည့် မှတ်ဉာဏ်သာဖြစ်သည်။ ပြန်လည်ကိုက်ညီစေရန် စင်ပေါ်တွင် ပြန်ရေတွက်ပါ။" }
+    if key == "accounting.these_products_carry_a_quantity_that_no" { return "ဤကုန်ပစ္စည်းများ၏ အရေအတွက်သည် ၎င်းတို့၏ လှုပ်ရှားမှုပေါင်းလဒ်နှင့် မကိုက်ညီတော့ပါ။ လှုပ်ရှားမှုများသည် အမှန်ဖြစ်သည်။ ကုန်ပစ္စည်းပေါ်ရှိ အရေအတွက်မှာ စကန်ဖတ်တိုင်း ပြန်ပေါင်းစရာမလိုအောင် သိမ်းထားသည့် မှတ်ဉာဏ်သာဖြစ်သည်။ ပြန်လည်ကိုက်ညီစေရန် စင်ပေါ်တွင် ပြန်ရေတွက်ပါ။" }
     if key == "accounting.total_revenue" { return "စုစုပေါင်း ဝင်ငွေ" }
     if key == "accounting.total_running_costs" { return "စုစုပေါင်း လည်ပတ်စရိတ်" }
     if key == "accounting.totals" { return "စုစုပေါင်းများ" }
@@ -2479,7 +2479,7 @@ fn burmese_payables(key: str) -> str {
 }
 
 fn burmese_product_detail(key: str) -> str {
-    if key == "product_detail.a_multi_buy_pack_often_has_its_own" { return "အထုပ်လိုက်ဝယ်သည့် ပက်ကေ့ဂျ်တွင် သီးသန့်ဘားကုဒ် ရှိတတ်သည်။ ဤနေရာတွင် ချိတ်ဆက်ထားလျှင် တစ်ကြိမ်စကင်ဖတ်ရုံဖြင့် အရေအတွက် မှန်ကန်စွာ ဝင်လာမည်။" }
+    if key == "product_detail.a_multi_buy_pack_often_has_its_own" { return "အထုပ်လိုက်ဝယ်သည့် ပက်ကေ့တွင် သီးသန့်ဘားကုဒ် ရှိတတ်သည်။ ဤနေရာတွင် ချိတ်ဆက်ထားလျှင် တစ်ကြိမ်စကန်ဖတ်ရုံဖြင့် အရေအတွက် မှန်ကန်စွာ ဝင်လာမည်။" }
     if key == "product_detail.full_ledger" { return "စာရင်းအပြည့်အစုံ" }
     if key == "product_detail.id_check" { return "+ မှတ်ပုံတင် စစ်ရန်" }
     if key == "product_detail.margin_per_unit" { return "%s / %s" }
@@ -2551,7 +2551,7 @@ fn burmese_products(key: str) -> str {
     if key == "products.add_a_barcode" { return "ဘားကုဒ် ထည့်ရန်" }
     if key == "products.add_a_product" { return "ကုန်ပစ္စည်း ထည့်ရန်" }
     if key == "products.age" { return "အသက်" }
-    if key == "products.barcode_lede" { return "ဘားကုဒ်သည် ကုန်ပစ္စည်း မဟုတ်ပါ — ကုန်ပစ္စည်းတစ်ခုတွင် ဘားကုဒ် အများအပြား ရှိနိုင်ပြီး တစ်ခုစီက စကင်တစ်ကြိမ်လျှင် ယူနစ် မည်မျှဟု ဆိုသည်။" }
+    if key == "products.barcode_lede" { return "ဘားကုဒ်သည် ကုန်ပစ္စည်း မဟုတ်ပါ — ကုန်ပစ္စည်းတစ်ခုတွင် ဘားကုဒ် အများအပြား ရှိနိုင်ပြီး တစ်ခုစီက စကန်တစ်ကြိမ်လျှင် ယူနစ် မည်မျှဟု ဆိုသည်။" }
     if key == "products.barcodes" { return "ဘားကုဒ်များ" }
     if key == "products.favourites_position" { return "အနှစ်သက်ဆုံး နေရာ" }
     if key == "products.for_sale" { return "ရောင်းရန်" }
@@ -2563,7 +2563,7 @@ fn burmese_products(key: str) -> str {
     if key == "products.name_my" { return "အမည် (မြန်မာ)" }
     if key == "products.name_my_hint" { return "မဖြစ်မနေ မလိုပါ။ ဤနေရာ ဗလာဖြစ်လျှင် ကောင်တာက သိမ်းထားသည့် အမည်ကို ပြမည် — ကုန်ပစ္စည်းစာရင်းကို ဘာသာပြန်ခြင်း မရှိပါ။" }
     if key == "products.on_the_shelf" { return "စင်ပေါ်တွင်" }
-    if key == "products.pack_size_hint" { return "ကြက်ဥ ခြောက်လုံးပါ ဗန်းတစ်ခုသည် ခြောက်လုံးတန်ဖိုးရှိသော ဘားကုဒ်တစ်ခုဖြစ်သည်။ တစ်ကြိမ် စကင်ဖတ်လျှင် ခြောက်လုံး ဝင်ပြီး တစ်ကြိမ်သာ ဈေးတွက်မည်။" }
+    if key == "products.pack_size_hint" { return "ကြက်ဥ ခြောက်လုံးပါ ဗန်းတစ်ခုသည် ခြောက်လုံးတန်ဖိုးရှိသော ဘားကုဒ်တစ်ခုဖြစ်သည်။ တစ်ကြိမ် စကန်ဖတ်လျှင် ခြောက်လုံး ဝင်ပြီး တစ်ကြိမ်သာ ဈေးတွက်မည်။" }
     if key == "products.price_at_till" { return "ကောင်တာတွင် ဈေးမေးမည်" }
     if key == "products.quick_key_hint" { return "0 ဆိုလျှင် ကောင်တာ၏ အနှစ်သက်ဆုံး ဇယားတွင် မပါဝင်ပါ။" }
     if key == "products.reorder_qty" { return "ပြန်မှာရမည့် အရေအတွက်" }
@@ -2577,7 +2577,7 @@ fn burmese_products(key: str) -> str {
     if key == "products.unit_kilo" { return "ကီလိုဖြင့်" }
     if key == "products.unit_litre" { return "လီတာဖြင့်" }
     if key == "products.unit_pack" { return "အထုပ်ဖြင့်" }
-    if key == "products.units_per_scan" { return "စကင်တစ်ကြိမ်လျှင် ယူနစ်" }
+    if key == "products.units_per_scan" { return "စကန်တစ်ကြိမ်လျှင် ယူနစ်" }
     return ""
 }
 
@@ -2837,8 +2837,8 @@ fn burmese_register(key: str) -> str {
     if key == "register.sale_complete" { return "အရောင်း ပြီးမြောက်ပါပြီ" }
     if key == "register.sale_note" { return "အရောင်း မှတ်ချက်" }
     if key == "register.save_note" { return "မှတ်ချက် သိမ်းရန်" }
-    if key == "register.scan_a_barcode_or_type_a_code_and_press" { return "ဘားကုဒ် စကင်ဖတ်ပါ သို့မဟုတ် ကုဒ်ရိုက်ပြီး Enter နှိပ်ပါ" }
-    if key == "register.scan_an_item_or_tap_a_quick_key_to_start_a" { return "ပစ္စည်းတစ်ခု စကင်ဖတ်ပါ သို့မဟုတ် အမြန်ခလုတ်ကို နှိပ်၍ အရောင်း စတင်ပါ။" }
+    if key == "register.scan_a_barcode_or_type_a_code_and_press" { return "ဘားကုဒ် စကန်ဖတ်ပါ သို့မဟုတ် ကုဒ်ရိုက်ပြီး Enter နှိပ်ပါ" }
+    if key == "register.scan_an_item_or_tap_a_quick_key_to_start_a" { return "ပစ္စည်းတစ်ခု စကန်ဖတ်ပါ သို့မဟုတ် အမြန်ခလုတ်ကို နှိပ်၍ အရောင်း စတင်ပါ။" }
     if key == "register.search_by_name_or_phone" { return "အမည် သို့မဟုတ် ဖုန်းဖြင့် ရှာရန်" }
     if key == "register.search_products_k" { return "ကုန်ပစ္စည်း ရှာရန်  ⌘K" }
     if key == "register.set" { return "သတ်မှတ်ရန်" }
@@ -2850,7 +2850,7 @@ fn burmese_register(key: str) -> str {
     if key == "register.tenders" { return "ပေးချေမှုနည်းလမ်းများ" }
     if key == "register.this_product_is_restricted_to_customers" { return "ဤကုန်ပစ္စည်းကို အသက်" }
     if key == "register.tip_press_a_quick_cash_button_or_type_an" { return "အကြံပြုချက် - အမြန်ငွေသား ခလုတ်ကို နှိပ်ပါ၊ သို့မဟုတ် ခွဲ၍ပေးချေရန် နည်းလမ်းတစ်ခုစီတွင် အတိအကျ ပမာဏကို ရိုက်ထည့်ပါ။" }
-    if key == "register.try_part_of_the_name_the_sku_or_scan_the" { return "အမည်၏ တစ်စိတ်တစ်ပိုင်း၊ SKU ဖြင့် ရှာကြည့်ပါ သို့မဟုတ် ဘားကုဒ် စကင်ဖတ်ပါ။" }
+    if key == "register.try_part_of_the_name_the_sku_or_scan_the" { return "အမည်၏ တစ်စိတ်တစ်ပိုင်း၊ SKU ဖြင့် ရှာကြည့်ပါ သို့မဟုတ် ဘားကုဒ် စကန်ဖတ်ပါ။" }
     if key == "register.unit_price" { return "တစ်ခုချင်း ဈေးနှုန်း" }
     if key == "register.use_hold_to_park_a_basket_and_serve_the" { return "ဈေးခြင်းကို ခဏရပ်ထားပြီး နောက်ဖောက်သည်ကို ဆက်လက်ဝန်ဆောင်ရန် ဆိုင်းငံ့ကို သုံးပါ။" }
     if key == "register.whole_basket_discount_f6" { return "ဈေးခြင်းတစ်ခုလုံး လျှော့ဈေး (F6)" }

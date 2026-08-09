@@ -15,6 +15,14 @@
 //! a class per string. Command labels are sized for the longer of the two, so
 //! nothing reflows when the language changes.
 //!
+//! The Burmese here is aligned with the reviewed set the back office uses
+//! (`words.kite`) wherever the same phrase appears in both — a sweep comparing
+//! them found this file still carrying placeholder wording: "shift" as the
+//! transliteration ဆစ်ဖ်, and the lane's no-drawer message naming ငွေတိုက် (the
+//! *safe*) for a till drawer, in a system that posts the two to different
+//! accounts. What is left different is left on purpose: `items` is the counter
+//! ခု, which is what "7 ခု" needs and what ပစ္စည်းများ would break.
+//!
 //! **This file is the till's vocabulary, and only the till's.** The back
 //! office has its own — `words.kite` — because both programs are built from
 //! the same `src/` directory and everything reachable from a program's
@@ -187,9 +195,9 @@ fn burmese(key: str) -> str {
     if key == "confirm" { return "အတည်ပြု" }
     if key == "counted" { return "ငွေတိုက်တွင် ရေတွက်ရရှိ" }
     if key == "customer" { return "ဖောက်သည်" }
-    if key == "discount" { return "လျှော့စျေး" }
+    if key == "discount" { return "လျှော့ဈေး" }
     if key == "each" { return "တစ်ခုလျှင်" }
-    if key == "empty_basket" { return "စတင်ရန် စကင်ဖတ်ပါ" }
+    if key == "empty_basket" { return "စတင်ရန် စကန်ဖတ်ပါ" }
     if key == "enter_pin" { return "သင့် PIN ရိုက်ထည့်ပါ" }
     if key == "favourites" { return "အသုံးများ" }
     if key == "finish" { return "ပြီးဆုံး" }
@@ -198,7 +206,7 @@ fn burmese(key: str) -> str {
     if key == "item_count" { return "ပစ္စည်း" }
     if key == "items" { return "ခု" }
     if key == "keypad" { return "ကီးပက်" }
-    if key == "label" { return "အမည်" }
+    if key == "label" { return "အညွှန်း" }
     if key == "ledger" { return "စာရင်း" }
     if key == "manager_pin" { return "မန်နေဂျာ PIN" }
     if key == "more" { return "နောက်ထပ်" }
@@ -208,13 +216,13 @@ fn burmese(key: str) -> str {
     if key == "no_held" { return "ဆိုင်းငံ့ထားသည် မရှိပါ" }
     if key == "no_receipts" { return "ပြေစာ ရှာမတွေ့ပါ" }
     if key == "no_sale" { return "အရောင်းမရှိ" }
-    if key == "no_shift" { return "ဤလိုင်းတွင် ငွေတိုက်ဖွင့်မထားပါ" }
+    if key == "no_shift" { return "ဤလိုင်းတွင် ငွေအံဆွဲ ဖွင့်မထားပါ" }
     if key == "nothing_returnable" { return "ဤပြေစာမှ အားလုံး ပြန်အမ်းပြီးဖြစ်သည်" }
     if key == "offline" { return "အော့ဖ်လိုင်း" }
     if key == "only_cash_change" { return "ငွေသားဖြင့်သာ အကြွေ ပြန်အမ်းနိုင်သည်။" }
     if key == "online" { return "အွန်လိုင်း" }
     if key == "pay" { return "ငွေရှင်းမည်" }
-    if key == "price" { return "စျေးနှုန်း" }
+    if key == "price" { return "ဈေးနှုန်း" }
     if key == "price_check" { return "စျေးနှုန်းစစ်" }
     if key == "price_override" { return "စျေးနှုန်းပြင်" }
     if key == "promotions_saved" { return "လျှော့စျေး" }
@@ -228,17 +236,17 @@ fn burmese(key: str) -> str {
     if key == "returnable" { return "ပြန်အမ်းနိုင်" }
     if key == "sale" { return "ရောင်းချမှု" }
     if key == "saved" { return "သက်သာ" }
-    if key == "scan" { return "စကင်ဖတ်" }
+    if key == "scan" { return "စကန်ဖတ်" }
     if key == "scan_hint" { return "ဘားကုဒ်ဖတ်ပါ သို့မဟုတ် SKU ရိုက်ပါ…" }
     if key == "search" { return "ရှာဖွေ" }
-    if key == "shift_open" { return "ဆစ်ဖ်ဖွင့်ပြီး" }
+    if key == "shift_open" { return "အလှည့်ဖွင့်ထား" }
     if key == "sign_in" { return "ဝင်ရောက်" }
     if key == "sign_out" { return "ထွက်မည်" }
     if key == "sign_out_busy" { return "မထွက်မီ စာရင်းကို ဆိုင်းငံ့ပါ သို့မဟုတ် ဖျက်ပါ။" }
     if key == "store_credit" { return "ဆိုင်ခရက်ဒစ်" }
-    if key == "subtotal" { return "စုစုပေါင်းတန်ဖိုး" }
+    if key == "subtotal" { return "ကြားပေါင်း" }
     if key == "tax_added" { return "အခွန်" }
-    if key == "tax_included" { return "အခွန် ပါဝင်ပြီး" }
+    if key == "tax_included" { return "အခွန်ပါဝင်ပြီး" }
     if key == "tender" { return "ငွေရှင်းမှု" }
     if key == "tender_type" { return "ငွေပေးချေမှုအမျိုးအစား" }
     if key == "total" { return "စုစုပေါင်း" }

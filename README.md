@@ -41,6 +41,16 @@ and `i18n.kite` are compiled into both without a line of either duplicated.
 
 Modelled on the feature set of `corner-mart-pos`, **without the AI assistant**.
 
+![The till, in မြန်မာ, mid-basket](docs/screenshots/till-my.png)
+
+The four regions, in the language the lane is set to: the **ledger** on the
+left with the 3-for-2,500 offer pricing the colas and the shelf price struck
+through, the **work area** with the scan box and the tile grid, the **commands**
+across the bottom with the manager-only ones shown locked rather than hidden,
+and the **status** bar carrying lane health and nothing else. Product names come
+from `name_my` where the catalogue has one and fall back to the stored name
+where it does not; amounts, quantities and SKUs stay in Latin digits.
+
 **At the till** — a scan box that never loses focus, a quick-key grid and
 category tabs, search, a merged basket (a rescan makes "×3", not three rows),
 offers shown on the line with the shelf price struck through, age checks that

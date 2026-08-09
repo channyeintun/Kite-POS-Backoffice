@@ -147,6 +147,7 @@ async function basketView(
       id: l.id,
       product_id: l.product_id,
       name: l.name,
+      name_my: l.name_my ?? "",
       sku: l.sku,
       qty: l.qty,
       unit_price: l.unit_price,

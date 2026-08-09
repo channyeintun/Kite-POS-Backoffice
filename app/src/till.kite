@@ -167,7 +167,8 @@ fn ledger_row(app: store.App, line: model.Line) -> html.Node {
             [html.class("row"), html.data("action", "line"), html.data("id", line.id)], [
                 html.keyed("qty", html.txt("span", [html.class("qty")], money.quantity(line.qty))),
                 html.keyed("body", html.el("span", [html.class("line-body")], [
-                            html.keyed("name", html.txt("span", [html.class("name")], line.name)),
+                            html.keyed("name", html.txt("span", [html.class("name")],
+                                    model.line_label(line, app.lang))),
                             html.keyed("detail", html.el("span", [html.class("detail")], detail)),
                         ])),
                 html.keyed("amount", html.el("span", [html.class("amount")], money_cell)),

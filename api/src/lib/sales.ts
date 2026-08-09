@@ -14,6 +14,8 @@ import { all, stmt } from "./db.js";
  */
 
 export type LineRow = {
+  /** The product's Burmese name *now*, for display. Not the receipt's record. */
+  name_my?: string;
   id: string;
   sale_id: string;
   product_id: string | null;
@@ -188,7 +190,11 @@ export async function livePromotions(db: D1Database, at: number): Promise<Promot
 export async function linesOf(db: D1Database, saleId: string): Promise<LineRow[]> {
   return await all<LineRow>(
     db,
-    `SELECT i.*, p.category_id AS category_id
+    // `i.name` is the snapshot the receipt is printed from and must not move.
+    // `p.name_my` is joined live, for the *screen* only — a cashier working in
+    // မြန်မာ scans a tile that reads ကြက်ဥ ၁၀ လုံး and the ledger beside it
+    // said "Eggs, tray of 10".
+    `SELECT i.*, p.category_id AS category_id, COALESCE(p.name_my, '') AS name_my
        FROM sale_items i LEFT JOIN products p ON p.id = i.product_id
       WHERE i.sale_id = ?1
       ORDER BY i.sort, i.rowid`,

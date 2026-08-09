@@ -72,7 +72,12 @@ pub fn session_of(d: doc.Doc, token: str) -> Session {
 pub struct Line {
     pub id: str
     pub product_id: str
+    /// What the receipt records — the snapshot taken when it was rung.
     pub name: str
+    /// What the *screen* shows in မြန်မာ, joined live from the product. Not the
+    /// same field on purpose: a receipt reprinted years later has to read as it
+    /// did on the day, and the shelf name can change under it.
+    pub name_my: str
     pub sku: str
     pub qty: float
     pub unit_price: int
@@ -91,6 +96,7 @@ pub fn line_of(d: doc.Doc) -> Line {
         id: doc.text(d, "id", ""),
         product_id: doc.text(d, "product_id", ""),
         name: doc.text(d, "name", ""),
+        name_my: doc.text(d, "name_my", ""),
         sku: doc.text(d, "sku", ""),
         qty: doc.num_of(d, "qty", 0.0),
         unit_price: doc.int_of(d, "unit_price", 0),
@@ -243,6 +249,15 @@ pub fn category_of(d: doc.Doc) -> Category {
         id: doc.text(d, "id", ""),
         name: doc.text(d, "name", ""),
         name_my: doc.text(d, "name_my", ""),
+    }
+}
+
+/// The name a *line* shows. Falls back to the receipt's snapshot, which is what
+/// a product with no Burmese name has.
+pub fn line_label(line: Line, l: i18n.Lang) -> str {
+    return match l {
+        En => line.name,
+        My => if line.name_my.len() > 0 { line.name_my } else { line.name },
     }
 }
 
