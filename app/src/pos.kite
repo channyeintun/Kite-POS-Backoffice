@@ -19,6 +19,7 @@
 //! ordinary function that writes the guard and repaints *before* the `async`
 //! one behind it is called.
 
+use std/crypto
 use std/dom
 use std/html
 use api
@@ -406,7 +407,7 @@ async fn do_pay(app: store.App) {
     // reason the server takes one. Minting it here, which is what this did,
     // gave every retry a key the server had never seen.
     let (answer, err) = await api.pay(store.token_of(app), app.taken,
-        store.pay_key_of(app, browser.nonce()))
+        store.pay_key_of(app, crypto.token()))
     if err != nil {
         store.went_wrong(app, err.message())
         repaint(app)

@@ -179,24 +179,13 @@ pub fn clear_and_focus(selector: str) {
     if target == nil {
         return
     }
-    let err = js.set(dom.raw(target), "value", js.of_str(""))
+    let err = dom.set_value(target, "")
     if err != nil {
         return
     }
     let (_, ferr) = js.call0(dom.raw(target), "focus")
     if ferr != nil {
         io.error("browser: could not focus \(selector)")
-    }
-}
-
-pub fn set_value(selector: str, value: str) {
-    let target = dom.find(selector)
-    if target == nil {
-        return
-    }
-    let err = js.set(dom.raw(target), "value", js.of_str(value))
-    if err != nil {
-        io.error("browser: could not write \(selector)")
     }
 }
 
@@ -242,19 +231,6 @@ pub fn print_page() {
     if err != nil {
         io.error("browser: could not print")
     }
-}
-
-/// Whether a checkbox is ticked.
-pub fn is_checked(e: dom.Element) -> bool {
-    let (value, err) = js.get(dom.raw(e), "checked")
-    if err != nil {
-        return false
-    }
-    let (on, berr) = js.as_bool(value)
-    if berr != nil {
-        return false
-    }
-    return on
 }
 
 /// The first and last second of a month written `2026-08`.
@@ -417,19 +393,6 @@ pub fn seems_online() -> bool {
         return true
     }
     return online
-}
-
-/// A random identifier, for an idempotency key the server can dedupe on.
-pub fn nonce() -> str {
-    let (value, err) = js.call0(js.global("crypto"), "randomUUID")
-    if err != nil {
-        return "n\(ticks())"
-    }
-    let (body, terr) = js.as_str(value)
-    if terr != nil {
-        return "n\(ticks())"
-    }
-    return body
 }
 
 /// Ask the browser to install the service worker.

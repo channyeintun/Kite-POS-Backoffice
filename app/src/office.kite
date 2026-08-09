@@ -764,7 +764,7 @@ fn checked(name: str) -> bool {
     if field == nil {
         return false
     }
-    return browser.is_checked(field)
+    return dom.checked(field)
 }
 
 /// An amount, after `first_unreadable` has already refused the form if any

@@ -366,7 +366,7 @@ pub fn clear_payments(var app: App) {
 /// The idempotency key for the basket on screen, minted once and kept.
 ///
 /// **A key made fresh on every attempt is not an idempotency key.** `do_pay`
-/// called `browser.nonce()` at the call site, so the retry after a lost answer
+/// called `crypto.token()` at the call site, so the retry after a lost answer
 /// carried a key the server had never seen — and the server, which by then had
 /// completed the sale, could not match it to anything. The lane was told there
 /// was nothing to pay for, the cashier rang the basket again, and the shop
