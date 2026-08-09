@@ -91,142 +91,170 @@ fn when(epoch: int) -> str {
 /// one place a window is read as prose rather than pressed as a chip, so it is
 /// said here in the reader's own language.
 fn window_of(l: i18n.Lang, name: str) -> str {
-    if name == "today" { return words.t(l, "common.today") }
-    if name == "7" { return words.t(l, "common.7_days") }
-    if name == "month" { return words.t(l, "common.this_month") }
-    if name == "all" { return words.t(l, "common.all_time") }
-    return words.t(l, "common.30_days")
+    return match name {
+        "today" => words.t(l, "common.today"),
+        "7" => words.t(l, "common.7_days"),
+        "month" => words.t(l, "common.this_month"),
+        "all" => words.t(l, "common.all_time"),
+        _ => words.t(l, "common.30_days"),
+    }
 }
 
 /// What a movement of stock was for — `stock_movements.reason`.
 fn stock_reason_of(l: i18n.Lang, code: str) -> str {
-    if code == "sale" { return words.t(l, "movements.reason_sale") }
-    if code == "refund" { return words.t(l, "sales.refund") }
-    if code == "receive" { return words.t(l, "inventory.delivery_received") }
-    if code == "adjust" { return words.t(l, "inventory.manual_correction") }
-    if code == "waste" { return words.t(l, "movements.reason_waste") }
-    if code == "count" { return words.t(l, "movements.reason_count") }
-    if code == "open" { return words.t(l, "products.opening_stock") }
-    return code
+    return match code {
+        "sale" => words.t(l, "movements.reason_sale"),
+        "refund" => words.t(l, "sales.refund"),
+        "receive" => words.t(l, "inventory.delivery_received"),
+        "adjust" => words.t(l, "inventory.manual_correction"),
+        "waste" => words.t(l, "movements.reason_waste"),
+        "count" => words.t(l, "movements.reason_count"),
+        "open" => words.t(l, "products.opening_stock"),
+        _ => code,
+    }
 }
 
 /// Whether a lane is being worked, shut, or has gone quiet.
 fn lane_state_of(l: i18n.Lang, code: str) -> str {
-    if code == "open" { return words.t(l, "common.open_state") }
-    if code == "closed" { return words.t(l, "common.closed") }
-    if code == "offline" { return words.t(l, "tills.offline") }
-    return code
+    return match code {
+        "open" => words.t(l, "common.open_state"),
+        "closed" => words.t(l, "common.closed"),
+        "offline" => words.t(l, "tills.offline"),
+        _ => code,
+    }
 }
 
 /// What moved the cash in a drawer — `cash_movements.kind`.
 fn drawer_kind_of(l: i18n.Lang, code: str) -> str {
-    if code == "paid_in" { return words.t(l, "shift_detail.cash_paid_in") }
-    if code == "paid_out" { return words.t(l, "shift_detail.cash_paid_out") }
-    if code == "safe_drop" { return words.t(l, "shifts.safe_drop") }
-    return code
+    return match code {
+        "paid_in" => words.t(l, "shift_detail.cash_paid_in"),
+        "paid_out" => words.t(l, "shift_detail.cash_paid_out"),
+        "safe_drop" => words.t(l, "shifts.safe_drop"),
+        _ => code,
+    }
 }
 
 /// How money changed hands — a tender, a refund or an expense.
 fn method_of(l: i18n.Lang, code: str) -> str {
-    if code == "cash" { return words.t(l, "common.cash") }
-    if code == "card" { return words.t(l, "common.card") }
-    if code == "wallet" { return words.t(l, "common.wallet") }
-    if code == "store_credit" { return words.t(l, "common.store_credit") }
-    if code == "on_account" { return words.t(l, "expenses.on_account") }
-    return code
+    return match code {
+        "cash" => words.t(l, "common.cash"),
+        "card" => words.t(l, "common.card"),
+        "wallet" => words.t(l, "common.wallet"),
+        "store_credit" => words.t(l, "common.store_credit"),
+        "on_account" => words.t(l, "expenses.on_account"),
+        _ => code,
+    }
 }
 
 /// What a person may open and how far they may reach — `users.role`.
 fn role_of(l: i18n.Lang, code: str) -> str {
-    if code == "sale_staff" { return words.t(l, "staff.sale_staff") }
-    if code == "manager" { return words.t(l, "staff.manager") }
-    if code == "owner" { return words.t(l, "staff.owner") }
-    return code
+    return match code {
+        "sale_staff" => words.t(l, "staff.sale_staff"),
+        "manager" => words.t(l, "staff.manager"),
+        "owner" => words.t(l, "staff.owner"),
+        _ => code,
+    }
 }
 
 /// Where a purchase order has got to — `purchase_orders.status`.
 fn order_status_of(l: i18n.Lang, code: str) -> str {
-    if code == "draft" { return words.t(l, "ui.draft") }
-    if code == "sent" { return words.t(l, "purchasing.sent") }
-    if code == "part_received" { return words.t(l, "ui.part_received") }
-    if code == "received" { return words.t(l, "common.received") }
-    if code == "cancelled" { return words.t(l, "common.cancelled") }
-    return code
+    return match code {
+        "draft" => words.t(l, "ui.draft"),
+        "sent" => words.t(l, "purchasing.sent"),
+        "part_received" => words.t(l, "ui.part_received"),
+        "received" => words.t(l, "common.received"),
+        "cancelled" => words.t(l, "common.cancelled"),
+        _ => code,
+    }
 }
 
 /// Where a sale has got to — `sales.status`.
 fn sale_status_of(l: i18n.Lang, code: str) -> str {
-    if code == "held" { return words.t(l, "ui.held") }
-    if code == "completed" { return words.t(l, "common.completed") }
-    if code == "voided" { return words.t(l, "common.voided") }
-    return code
+    return match code {
+        "held" => words.t(l, "ui.held"),
+        "completed" => words.t(l, "common.completed"),
+        "voided" => words.t(l, "common.voided"),
+        _ => code,
+    }
 }
 
 /// The shape of an offer — `promotions.kind`.
 fn offer_kind_of(l: i18n.Lang, code: str) -> str {
-    if code == "percent_off" { return words.t(l, "promotions.percentage_off") }
-    if code == "amount_off" { return words.t(l, "promotions.amount_off") }
-    if code == "fixed_price" { return words.t(l, "promotions.fixed_price") }
-    if code == "n_for_x" { return words.t(l, "promotions.multibuy") }
-    return code
+    return match code {
+        "percent_off" => words.t(l, "promotions.percentage_off"),
+        "amount_off" => words.t(l, "promotions.amount_off"),
+        "fixed_price" => words.t(l, "promotions.fixed_price"),
+        "n_for_x" => words.t(l, "promotions.multibuy"),
+        _ => code,
+    }
 }
 
 /// How wide an offer casts — `promotions.scope`.
 fn offer_scope_of(l: i18n.Lang, code: str) -> str {
-    if code == "product" { return words.t(l, "common.product") }
-    if code == "category" { return words.t(l, "common.category") }
-    if code == "all" { return words.t(l, "common.all") }
-    return code
+    return match code {
+        "product" => words.t(l, "common.product"),
+        "category" => words.t(l, "common.category"),
+        "all" => words.t(l, "common.all"),
+        _ => code,
+    }
 }
 
 /// Which side of the sheet an account sits on — `accounts.kind`.
 fn account_kind_of(l: i18n.Lang, code: str) -> str {
-    if code == "asset" { return words.t(l, "accounting.asset") }
-    if code == "liability" { return words.t(l, "accounting.liability") }
-    if code == "equity" { return words.t(l, "accounting.equity") }
-    if code == "income" { return words.t(l, "accounting.income") }
-    if code == "expense" { return words.t(l, "accounting.expense") }
-    return code
+    return match code {
+        "asset" => words.t(l, "accounting.asset"),
+        "liability" => words.t(l, "accounting.liability"),
+        "equity" => words.t(l, "accounting.equity"),
+        "income" => words.t(l, "accounting.income"),
+        "expense" => words.t(l, "accounting.expense"),
+        _ => code,
+    }
 }
 
 /// Which way an account normally moves — `accounts.normal`.
 fn normal_of(l: i18n.Lang, code: str) -> str {
-    if code == "debit" { return words.t(l, "accounting.debit") }
-    if code == "credit" { return words.t(l, "accounting.credit") }
-    return code
+    return match code {
+        "debit" => words.t(l, "accounting.debit"),
+        "credit" => words.t(l, "accounting.credit"),
+        _ => code,
+    }
 }
 
 /// What caused a journal entry — `journal_entries.ref_type`.
 /// What caused a journal entry — `journal_entries.ref_type`. Public because
 /// the journal's filter dialog offers the same list it renders.
 pub fn caused_by_of(l: i18n.Lang, code: str) -> str {
-    if code == "sale" { return words.t(l, "movements.reason_sale") }
-    if code == "refund" { return words.t(l, "sales.refund") }
-    if code == "shift" { return words.t(l, "nav.shift") }
-    if code == "cash_movement" { return words.t(l, "movements.cash_movement") }
-    if code == "expense" { return words.t(l, "accounting.expense") }
-    if code == "stock_movement" { return words.t(l, "movements.stock_movement") }
-    if code == "supplier_invoice" { return words.t(l, "payables.supplier_invoice") }
-    if code == "supplier_payment" { return words.t(l, "payables.supplier_payment") }
-    if code == "purchase_order" { return words.t(l, "nav.purchase_order") }
-    if code == "opening" { return words.t(l, "accounting.opening_balance") }
-    return code
+    return match code {
+        "sale" => words.t(l, "movements.reason_sale"),
+        "refund" => words.t(l, "sales.refund"),
+        "shift" => words.t(l, "nav.shift"),
+        "cash_movement" => words.t(l, "movements.cash_movement"),
+        "expense" => words.t(l, "accounting.expense"),
+        "stock_movement" => words.t(l, "movements.stock_movement"),
+        "supplier_invoice" => words.t(l, "payables.supplier_invoice"),
+        "supplier_payment" => words.t(l, "payables.supplier_payment"),
+        "purchase_order" => words.t(l, "nav.purchase_order"),
+        "opening" => words.t(l, "accounting.opening_balance"),
+        _ => code,
+    }
 }
 
 /// What somebody had to be authorised for — `audit_log.action`.
 fn authorised_of(l: i18n.Lang, code: str) -> str {
-    if code == "void_sale" { return words.t(l, "tills.void_sale") }
-    if code == "no_sale" { return words.t(l, "tills.no_sale") }
-    if code == "return" { return words.t(l, "tills.return") }
-    if code == "refund" { return words.t(l, "sales.refund") }
-    if code == "price_override" { return words.t(l, "tills.price_override") }
-    if code == "line_discount" { return words.t(l, "tills.line_discount") }
-    if code == "basket_discount" { return words.t(l, "register.basket_discount") }
-    if code == "close_lane" { return words.t(l, "tills.close_lane") }
-    if code == "expense" { return words.t(l, "accounting.expense") }
-    if code == "close_period" { return words.t(l, "accounting.close_the_month") }
-    if code == "reverse_entry" { return words.t(l, "accounting.entry_reversed") }
-    return code
+    return match code {
+        "void_sale" => words.t(l, "tills.void_sale"),
+        "no_sale" => words.t(l, "tills.no_sale"),
+        "return" => words.t(l, "tills.return"),
+        "refund" => words.t(l, "sales.refund"),
+        "price_override" => words.t(l, "tills.price_override"),
+        "line_discount" => words.t(l, "tills.line_discount"),
+        "basket_discount" => words.t(l, "register.basket_discount"),
+        "close_lane" => words.t(l, "tills.close_lane"),
+        "expense" => words.t(l, "accounting.expense"),
+        "close_period" => words.t(l, "accounting.close_the_month"),
+        "reverse_entry" => words.t(l, "accounting.entry_reversed"),
+        _ => code,
+    }
 }
 
 /// One of the till's own command words.
@@ -236,34 +264,40 @@ fn authorised_of(l: i18n.Lang, code: str) -> str {
 /// recognises comes through untouched, which is what a new command would do
 /// until somebody adds a line here.
 fn command_of(l: i18n.Lang, label: str) -> str {
-    if label == "Hold" { return words.t(l, "tills.hold") }
-    if label == "Held" { return words.t(l, "tills.held") }
-    if label == "Customer" { return words.t(l, "common.customer") }
-    if label == "Price check" { return words.t(l, "tills.price_check") }
-    if label == "Void line" { return words.t(l, "tills.void_line") }
-    if label == "Discount" { return words.t(l, "common.discount") }
-    if label == "Price override" { return words.t(l, "tills.price_override") }
-    if label == "Return" { return words.t(l, "tills.return") }
-    if label == "Void sale" { return words.t(l, "tills.void_sale") }
-    if label == "No sale" { return words.t(l, "tills.no_sale") }
-    if label == "Close lane" { return words.t(l, "tills.close_lane") }
-    return label
+    return match label {
+        "Hold" => words.t(l, "tills.hold"),
+        "Held" => words.t(l, "tills.held"),
+        "Customer" => words.t(l, "common.customer"),
+        "Price check" => words.t(l, "tills.price_check"),
+        "Void line" => words.t(l, "tills.void_line"),
+        "Discount" => words.t(l, "common.discount"),
+        "Price override" => words.t(l, "tills.price_override"),
+        "Return" => words.t(l, "tills.return"),
+        "Void sale" => words.t(l, "tills.void_sale"),
+        "No sale" => words.t(l, "tills.no_sale"),
+        "Close lane" => words.t(l, "tills.close_lane"),
+        _ => label,
+    }
 }
 
 /// Whether a role may reach a command, and what it costs them.
 fn allowance_of(l: i18n.Lang, code: str) -> str {
-    if code == "yes" { return words.t(l, "accounting.yes") }
-    if code == "pin" { return words.t(l, "tills.manager_pin") }
-    if code == "no" { return words.t(l, "error.not_allowed") }
-    return code
+    return match code {
+        "yes" => words.t(l, "accounting.yes"),
+        "pin" => words.t(l, "tills.manager_pin"),
+        "no" => words.t(l, "error.not_allowed"),
+        _ => code,
+    }
 }
 
 /// What the till asks for before it runs a command.
 fn confirm_of(l: i18n.Lang, code: str) -> str {
-    if code == "none" { return words.t(l, "common.none") }
-    if code == "explicit" { return words.t(l, "tills.confirm") }
-    if code == "reason" { return words.t(l, "common.reason") }
-    return code
+    return match code {
+        "none" => words.t(l, "common.none"),
+        "explicit" => words.t(l, "tills.confirm"),
+        "reason" => words.t(l, "common.reason"),
+        _ => code,
+    }
 }
 
 // ---- the day ---------------------------------------------------------------
@@ -1766,10 +1800,11 @@ fn books_pl(pl: doc.Doc, win: str, l: i18n.Lang, c: money.Currency) -> [desk.Blo
     rows.push(row("revenue", ["", "", words.t(l, "common.revenue"), cash(pl, "revenue", c)], "ok"))
     for e in doc.items(doc.field(pl, "expenses")) {
         let code = doc.text(e, "code", "")
-        let section = if code == "5000" || code == "5100" {
-            words.t(l, "accounting.cost_of_sales")
-        } else {
-            words.t(l, "accounting.running_costs")
+        // The same split the totals use, so the sections and the footer cannot
+        // disagree about which account is a cost of sale.
+        let section = match code {
+            "5000" | "5100" => words.t(l, "accounting.cost_of_sales"),
+            _ => words.t(l, "accounting.running_costs"),
         }
         rows.push(touchable("e\(code)", [section, code, doc.text(e, "name", ""),
                     cash(e, "amount", c)], "", "books-account", code))
