@@ -345,6 +345,10 @@ the second is refused. Then it re-checks every bug the two audits found, saves
 all sixteen exports and reads their headers back, and confirms the ledger
 balances and the sheet does too.
 
+**It turns the books on itself**, so the accounting half runs on any shop
+rather than only on one where somebody had already enabled it by hand — which
+is what it was doing, and which meant a clone of this repo tested none of it.
+
 **It is idempotent.** Running it three times against the same shop must pass
 three times — which is how the duplicate categories and customers were found,
 and why a suite that needs a fresh database is a suite that will pass while the

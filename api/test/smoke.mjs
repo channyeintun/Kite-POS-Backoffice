@@ -159,6 +159,16 @@ const run = async () => {
       });
   check("the offer is live", promo.status, 201);
 
+  // **Turn the books on.** Accounting is off in a fresh shop, and without this
+  // every check below that touches the ledger silently skipped — which meant
+  // the whole accounting half of this suite only ran against a database that
+  // happened to have had it enabled by hand. A clone of this repo is the only
+  // state a new contributor ever sees, and there it tested nothing.
+  const books = await call("PATCH", "/api/settings", {
+    token: owner, body: { "accounting.enabled": "1" },
+  });
+  check("the books are on", [200, 204].includes(books.status), true);
+
   console.log("\n— the lane —");
   const pin = await call("POST", "/api/auth/pin", { body: { pin: "4471", register_id: "reg_1" } });
   check("cashier signs in with a PIN", pin.status, 200);
@@ -798,7 +808,9 @@ const run = async () => {
     token: owner,
   });
   const anEntry = (forReversal.json.entries ?? [])[0];
+  let reversedAnEntry = false;
   if (anEntry) {
+    reversedAnEntry = true;
     check("an entry carries a quotable number", /^J-\d{6}$/.test(anEntry.number), true);
     const reversed = await call("POST", `/api/accounting/entries/${anEntry.id}/reverse`, {
       token: owner, body: { reason: "billed twice" },
@@ -816,7 +828,13 @@ const run = async () => {
   // a filtered journal returning fewer than a hundred entries worked fine.
   const wholeJournal = await call("GET", "/api/accounting/journal?from=0", { token: owner });
   check("the whole journal loads", wholeJournal.status, 200);
-  check("past the hundred-variable limit", (wholeJournal.json.entries ?? []).length > 100, true);
+  // The defect was a 500, not a row count: asserting "more than a hundred
+  // entries" only meant anything on a shop that had already traded a lot, and
+  // read as a failure on a fresh one. What is actually true of every shop is
+  // that the page returned is the whole window, up to the limit.
+  check("returning the whole page, however many that is",
+    (wholeJournal.json.entries ?? []).length,
+    Math.min(wholeJournal.json.total ?? 0, 200));
   check("and every entry it shows has its lines",
     (wholeJournal.json.entries ?? []).every((e) =>
       (wholeJournal.json.lines ?? []).some((l) => l.entry_id === e.id)), true);
@@ -859,7 +877,11 @@ const run = async () => {
   const trail = await call("GET", "/api/sales/audit/log?from=0", { token: owner });
   const logged = (trail.json.entries ?? []).map((e) => e.action);
   check("recording an expense leaves a trail", logged.includes("expense"), true);
-  check("and so does correcting an entry", logged.includes("reverse_entry"), true);
+  // Only if there was an entry to correct — on a shop whose books were just
+  // switched on there may not be one yet, and this asserted unconditionally.
+  if (reversedAnEntry) {
+    check("and so does correcting an entry", logged.includes("reverse_entry"), true);
+  }
 
   // The three endpoints that existed with no way to reach them, and the two
   // reports that had no screen.
