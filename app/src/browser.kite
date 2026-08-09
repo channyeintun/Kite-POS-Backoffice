@@ -535,3 +535,111 @@ pub fn download(filename: str, body: str, mime: str) {
         io.error("browser: could not release the file")
     }
 }
+
+// ---- pictures --------------------------------------------------------------
+
+/// Send the picture a file input is holding, and answer with its key.
+///
+/// **Not through `api.kite`.** `std/http` sends a `str` body, and an image is
+/// bytes — re-encoding one as text to get it through a typed door would double
+/// its size and corrupt it. So this is `fetch` reached through the JS bridge
+/// with the `File` handed over untouched, which is also what lets the browser
+/// stream it rather than holding a copy.
+///
+/// The content type comes off the file itself, because that is what the Worker
+/// keys its allow-list on — and what R2 will serve it back as.
+pub fn upload_photo(url: str, token: str, input: dom.Element,
+    done: fn(str), failed: fn(str)) {
+    let (files, ferr) = js.get(dom.raw(input), "files")
+    if ferr != nil {
+        failed("that input has no file")
+        return
+    }
+    // Split, because Kite will not let `count` be read in the same expression
+    // that tests its error — the value is only meaningful once `cerr` is nil.
+    let (count, cerr) = js.length(files)
+    if cerr != nil {
+        failed("that input has no file")
+        return
+    }
+    if count == 0 {
+        failed("nothing was chosen")
+        return
+    }
+    let (file, aerr) = js.at(files, 0)
+    if aerr != nil {
+        failed("that file could not be read")
+        return
+    }
+
+    let (headers, herr) = js.new0("Object")
+    if herr != nil {
+        failed("could not build the request")
+        return
+    }
+    let type_err = js.set(headers, "content-type",
+        js.of_str(js.str_or(file, "type", "application/octet-stream")))
+    let auth_err = js.set(headers, "authorization", js.of_str("Bearer \(token)"))
+    if type_err != nil || auth_err != nil {
+        failed("could not build the request")
+        return
+    }
+
+    let (init, ierr) = js.new0("Object")
+    if ierr != nil {
+        failed("could not build the request")
+        return
+    }
+    let m_err = js.set(init, "method", js.of_str("PUT"))
+    let b_err = js.set(init, "body", file)
+    let h_err = js.set(init, "headers", headers)
+    if m_err != nil || b_err != nil || h_err != nil {
+        failed("could not build the request")
+        return
+    }
+
+    let (promise, perr) = js.call2(window(), "fetch", js.of_str(url), init)
+    if perr != nil {
+        failed("the request did not go out")
+        return
+    }
+    let serr = js.settle(promise,
+        |response: JsValue| { photo_answered(response, done, failed) },
+        |why: str| { failed(why) })
+    if serr != nil {
+        failed("the request was not answered")
+    }
+}
+
+/// The response to an upload: refuse a non-2xx, then read the key out of the
+/// body. Two settles rather than one because `json()` is itself a promise.
+fn photo_answered(response: JsValue, done: fn(str), failed: fn(str)) {
+    if !js.bool_or(response, "ok", false) {
+        let status = math.round_to(js.num_or(response, "status", 0.0))
+        if status == 413 || status == 400 {
+            failed("that picture was refused — keep it under 2 MB, as a JPEG, PNG or WebP")
+        } else {
+            failed("that picture could not be saved (\(status))")
+        }
+        return
+    }
+    let (body, berr) = js.call0(response, "json")
+    if berr != nil {
+        failed("that answer could not be read")
+        return
+    }
+    let serr = js.settle(body,
+        |parsed: JsValue| { done(js.str_or(parsed, "key", "")) },
+        |why: str| { failed(why) })
+    if serr != nil {
+        failed("that answer could not be read")
+    }
+}
+
+/// Empty a file input, so choosing the *same* file twice still fires `change`.
+pub fn clear_file(input: dom.Element) {
+    let err = js.set(dom.raw(input), "value", js.of_str(""))
+    if err != nil {
+        io.error("browser: could not clear the file input")
+    }
+}

@@ -898,6 +898,10 @@ fn pressed(app: desk.App, what: str, id: str) {
         repaint(app)
         return
     }
+    if what == "photo-remove" {
+        do_remove_photo(app)
+        return
+    }
     if what == "books-filter" {
         desk.open_form(app, forms.journal_filter(desk.lang_of(app), app.journal_cause,
                 app.journal_account, app.journal_query, app.ref_accounts))
@@ -1062,6 +1066,10 @@ async fn do_submit(app: desk.App, id: str, subject: str) {
         doc.put_num(body, "reorder_qty", qty_of("reorder_qty"))
         doc.put_int(body, "quick_key", whole_of("quick_key"))
         doc.put_bool(body, "active", checked("active"))
+        let open = app.form
+        if open != nil {
+            doc.put_text(body, "photo_key", field_value_of(open, "photo_key"))
+        }
         let (_, err) = await api.save_product(token, subject, body)
         settle(app, err, words.t(l, "toast.saved"))
         return
@@ -1351,6 +1359,39 @@ fn settle(app: desk.App, err: error, said: str) {
 /// against a backdated correction landing in a period already reported to the
 /// outside world; reopening is admitting the report itself was wrong, which
 /// happens often enough to need a button.
+/// Take the picture off a product.
+///
+/// Deletes the object as well as clearing the column — the Worker does both —
+/// because a key nothing points at is a file nobody will ever find and R2 bills
+/// for storage.
+async fn do_remove_photo(app: desk.App) {
+    let open = app.form
+    if open == nil {
+        return
+    }
+    let key = field_value_of(open, "photo_key")
+    if key.len() == 0 {
+        return
+    }
+    desk.set_field(app, "photo_key", "")
+    repaint(app)
+    let (_, err) = await api.remove_photo(desk.token_of(app), key)
+    if err != nil {
+        failed(app, err.message())
+    }
+}
+
+/// What a field currently holds, from the form rather than from the document —
+/// a photo has no input to read back.
+fn field_value_of(f: desk.Form, name: str) -> str {
+    for field in f.fields {
+        if field.name == name {
+            return field.value
+        }
+    }
+    return ""
+}
+
 async fn do_reopen_period(app: desk.App, id: str) {
     let (_, err) = await api.reopen_period(desk.token_of(app), id)
     if err != nil {
@@ -1526,6 +1567,49 @@ fn clicked(app: desk.App, e: dom.Event) {
     pressed(app, name, id)
 }
 
+/// Something in the dialog changed. Only the photo inputs use this.
+fn changed(app: desk.App, e: dom.Event) {
+    let target = dom.target(e)
+    if target == nil {
+        return
+    }
+    let acted = browser.closest(target, "[data-action]")
+    if acted == nil {
+        return
+    }
+    if or_else(dom.attribute(acted, "data-action"), "") != "photo-pick" {
+        return
+    }
+    let open = app.form
+    if open == nil {
+        return
+    }
+    desk.form_working(app)
+    repaint(app)
+    // The element is read now, not inside the upload: a repaint replaces the
+    // node, and the file would go with it.
+    browser.upload_photo(
+        "\(api.base())/photos\(if open.subject.len() > 0 { "?product_id=\(open.subject)" } else { "" })",
+        desk.token_of(app),
+        acted,
+        |key: str| { photo_saved(app, key) },
+        |why: str| { photo_failed(app, why) })
+}
+
+/// A picture landed. The key goes into the open form, so the preview redraws
+/// and a Save carries it — which is what attaches it to a product that did not
+/// exist yet when the picture was taken.
+fn photo_saved(app: desk.App, key: str) {
+    desk.set_field(app, "photo_key", key)
+    desk.say(app, words.t(desk.lang_of(app), "toast.photo_saved"))
+    repaint(app)
+}
+
+fn photo_failed(app: desk.App, why: str) {
+    desk.form_refused(app, why)
+    repaint(app)
+}
+
 fn typed(app: desk.App, e: dom.Event) {
     if dom.key(e) != "Enter" {
         return
@@ -1568,6 +1652,12 @@ pub fn main() {
     let (_, cerr) = dom.on(root, "click", |e: dom.Event| { clicked(app, e) })
     if cerr != nil {
         io.error("office: no clicks: \(cerr.message())")
+    }
+    // A file input announces itself with `change`, not `click`: the click opens
+    // the picker and the file arrives later, on a second event.
+    let (_, cherr) = dom.on(root, "change", |e: dom.Event| { changed(app, e) })
+    if cherr != nil {
+        io.error("office: no change events: \(cherr.message())")
     }
     let (_, kerr) = dom.on(root, "keydown", |e: dom.Event| { typed(app, e) })
     if kerr != nil {

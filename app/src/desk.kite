@@ -325,6 +325,9 @@ pub enum FieldKind {
     Choice(options: [str], labels: [str])
     Toggle
     Password
+    /// A product picture: a preview, and the two ways to replace it. The
+    /// field's value is the R2 key, or "" for a product with no picture.
+    Photo
     /// Shown, never edited — context the operator needs while filling the rest.
     Readonly
 }
@@ -657,6 +660,26 @@ pub fn form_refused(var app: App, why: str) {
         return
     }
     app.form = Form{ ..open, trouble: why, busy: false }
+}
+
+/// Rewrite one field on the open form.
+///
+/// For a value the document cannot hold: a photo is a key, not an input, so
+/// there is nowhere in the DOM to read it back from at submit time.
+pub fn set_field(var app: App, name: str, value: str) {
+    let open = app.form
+    if open == nil {
+        return
+    }
+    var fields: [Field] = []
+    for f in open.fields {
+        if f.name == name {
+            fields.push(Field{ ..f, value: value })
+        } else {
+            fields.push(f)
+        }
+    }
+    app.form = Form{ ..open, fields: fields, busy: false }
 }
 
 pub fn form_working(var app: App) {

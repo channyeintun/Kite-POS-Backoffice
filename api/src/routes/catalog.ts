@@ -100,6 +100,9 @@ function productFields(body: unknown) {
     reorder_point: num(body, "reorder_point", 0),
     reorder_qty: num(body, "reorder_qty", 0),
     quick_key: optInt(body, "quick_key", 0),
+    // Set by the photo upload, and carried on a create so a picture taken
+    // before the product existed still lands on it.
+    photo_key: optStr(body, "photo_key") || null,
     active: bool(body, "active", true) ? 1 : 0,
   };
 }
@@ -137,6 +140,7 @@ catalog.post("/products", async (c) => {
     f.quick_key,
     f.active,
     at,
+    f.photo_key,
   );
   return c.json({ id }, 201);
 });

@@ -49,7 +49,8 @@ through, the **work area** with the scan box and the tile grid, the **commands**
 across the bottom with the manager-only ones shown locked rather than hidden,
 and the **status** bar carrying lane health and nothing else. Product names come
 from `name_my` where the catalogue has one and fall back to the stored name
-where it does not; amounts, quantities and SKUs stay in Latin digits.
+where it does not; amounts, quantities and SKUs stay in Latin digits. The tile
+pictures are placeholders — a shopkeeper takes their own, from the product form.
 
 **At the till** — a scan box that never loses focus, a quick-key grid and
 category tabs, search, a merged basket (a rescan makes "×3", not three rows),
@@ -74,7 +75,7 @@ out).
 | Tills | every lane as a card: who is on it, what the drawer should hold, what it is ringing, and the authorisations taken at it today |
 | Sales | seven days of receipts, with what came back |
 | Shifts | every drawer session and its over/short |
-| Products | the catalogue, flagged low and out |
+| Products | the catalogue, flagged low and out, each with a picture taken at the counter or chosen from the device |
 | Inventory | valuation at cost and retail, what needs attention, and value by category |
 | Purchasing | the reorder worksheet from what actually sold, purchase orders, and payables aged into buckets by supplier — with an invoice raised in error cancellable rather than payable |
 | Customers | visits, spend, points and store credit |

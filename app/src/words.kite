@@ -821,6 +821,8 @@ fn english_product_detail(key: str) -> str {
 }
 
 fn english_products(key: str) -> str {
+    if key == "products.take_photo" { return "Take a photo" }
+    if key == "products.save_first_for_a_photo" { return "Save the product, then add a picture" }
     if key == "products.adjust_the_filters_or_add_your_first" { return "Adjust the filters, or add your first product to get selling." }
     if key == "products.age_restricted" { return "Age restricted" }
     if key == "products.any_stock" { return "Any stock" }
@@ -1641,6 +1643,7 @@ fn english_title(key: str) -> str {
 }
 
 fn english_toast(key: str) -> str {
+    if key == "toast.photo_saved" { return "Picture saved" }
     if key == "toast.account_deactivated" { return "Account deactivated" }
     if key == "toast.account_reactivated" { return "Account reactivated" }
     if key == "toast.account_removed" { return "Account removed" }
@@ -2494,6 +2497,8 @@ fn burmese_product_detail(key: str) -> str {
 }
 
 fn burmese_products(key: str) -> str {
+    if key == "products.take_photo" { return "ဓာတ်ပုံ ရိုက်ရန်" }
+    if key == "products.save_first_for_a_photo" { return "ကုန်ပစ္စည်းကို သိမ်းပြီးမှ ဓာတ်ပုံ ထည့်ပါ" }
     if key == "products.adjust_the_filters_or_add_your_first" { return "စစ်ထုတ်မှုများကို ချိန်ညှိပါ သို့မဟုတ် ပထမဆုံး ကုန်ပစ္စည်းကို ထည့်ပြီး စတင်ရောင်းချပါ။" }
     if key == "products.age_restricted" { return "အသက်ကန့်သတ်ချက်ရှိ" }
     if key == "products.any_stock" { return "လက်ကျန်အားလုံး" }
@@ -3308,6 +3313,7 @@ fn burmese_title(key: str) -> str {
 }
 
 fn burmese_toast(key: str) -> str {
+    if key == "toast.photo_saved" { return "ဓာတ်ပုံ သိမ်းပြီး" }
     if key == "toast.account_deactivated" { return "အကောင့် ပိတ်လိုက်ပါပြီ" }
     if key == "toast.account_reactivated" { return "အကောင့် ပြန်ဖွင့်လိုက်ပါပြီ" }
     if key == "toast.account_removed" { return "အကောင့် ဖယ်ရှားပြီး" }

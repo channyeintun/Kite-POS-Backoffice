@@ -665,6 +665,10 @@ pub async fn cancel_invoice(token: str, id: str, body: doc.Doc) -> (doc.Doc, err
     return await post(token, "/purchasing/invoices/\(id)/cancel", body)
 }
 
+pub async fn remove_photo(token: str, key: str) -> (doc.Doc, error) {
+    return await send(token, "DELETE", "/photos/\(key)", "")
+}
+
 pub async fn post_opening_balances(token: str, body: doc.Doc) -> (doc.Doc, error) {
     return await post(token, "/accounting/opening-balances", body)
 }

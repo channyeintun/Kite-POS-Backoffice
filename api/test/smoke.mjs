@@ -943,6 +943,56 @@ const run = async () => {
     check("a part-paid invoice cannot be cancelled", refused.json.error?.code, "already_paid");
   }
 
+  // Product pictures. The permission matrix is the part that matters: an
+  // `<img src>` cannot send an Authorization header, so reading has to be open
+  // or the till's grid is a wall of broken tiles — while writing must stay shut.
+  const shot = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  const put = await fetch(`${BASE}/api/photos?product_id=${colaId}`, {
+    method: "PUT",
+    headers: { authorization: `Bearer ${owner}`, "content-type": "image/png" },
+    body: shot,
+  });
+  const putBody = await put.json();
+  check("a manager can save a picture", put.status, 201);
+  check("and gets a key back", /^products\/img_[0-9a-f]+\.png$/.test(putBody.key ?? ""), true);
+
+  const anon = await fetch(`${BASE}/api/photos/${putBody.key}`);
+  check("anyone may read it — an <img> cannot authenticate", anon.status, 200);
+  check("and it is served immutable",
+    (anon.headers.get("cache-control") ?? "").includes("immutable"), true);
+
+  const anonWrite = await fetch(`${BASE}/api/photos`, {
+    method: "PUT", headers: { "content-type": "image/png" }, body: shot,
+  });
+  check("but nobody may write one unauthenticated", anonWrite.status, 401);
+  const anonDelete = await fetch(`${BASE}/api/photos/${putBody.key}`, { method: "DELETE" });
+  check("nor delete one — the sub-path is gated too", anonDelete.status, 401);
+  const tillWrite = await fetch(`${BASE}/api/photos`, {
+    method: "PUT",
+    headers: { authorization: `Bearer ${till}`, "content-type": "image/png" },
+    body: shot,
+  });
+  check("and a cashier is refused", tillWrite.status, 403);
+
+  const wrongType = await fetch(`${BASE}/api/photos`, {
+    method: "PUT",
+    headers: { authorization: `Bearer ${owner}`, "content-type": "application/pdf" },
+    body: shot,
+  });
+  check("only images are accepted", (await wrongType.json()).error?.code, "bad_type");
+
+  const withPhoto = await call("GET", `/api/catalog/products/${colaId}`, { token: owner });
+  check("the upload attached it to the product", withPhoto.json.product?.photo_key, putBody.key);
+  const gone = await fetch(`${BASE}/api/photos/${putBody.key}`, {
+    method: "DELETE", headers: { authorization: `Bearer ${owner}` },
+  });
+  check("a manager can take it off again", gone.status, 200);
+  const unlinked = await call("GET", `/api/catalog/products/${colaId}`, { token: owner });
+  check("and the product no longer points at it", unlinked.json.product?.photo_key, null);
+
   console.log("\n— the books —");
 
   // The check that earns its keep. Posting a sale used to credit the *gross*

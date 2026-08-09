@@ -46,6 +46,10 @@ fn choice_field(name: str, label: str, options: [str], labels: [str], value: str
     return desk.field(name, label, desk.FieldKind.Choice(options: options, labels: labels), value)
 }
 
+fn photo_field(name: str, label: str, key: str) -> desk.Field {
+    return desk.field(name, label, desk.FieldKind.Photo, key)
+}
+
 fn readonly_field(name: str, label: str, value: str) -> desk.Field {
     return desk.field(name, label, desk.FieldKind.Readonly, value)
 }
@@ -93,6 +97,9 @@ pub fn product(existing: doc.Doc, id: str, categories: [doc.Doc], suppliers: [do
             doc.text(existing, "category_id", "")),
         choice_field("supplier_id", words.t(l, "common.supplier"), supplier_ids, supplier_names,
             doc.text(existing, "supplier_id", "")),
+        desk.hinted(photo_field("photo_key", words.t(l, "products.photo"),
+                doc.text(existing, "photo_key", "")),
+            words.t(l, "products.photo_hint")),
         money_field("price", words.t(l, "products.shelf_price"),
             doc.int_of(existing, "price", 0), c),
         money_field("cost", words.t(l, "common.cost"), doc.int_of(existing, "cost", 0), c),

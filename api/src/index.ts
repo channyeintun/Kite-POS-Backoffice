@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
+import type { MiddlewareHandler } from "hono";
 import type { Ctx } from "./env.js";
 import { authenticate, requireRole } from "./lib/auth.js";
 import { Unbalanced } from "./lib/ledger.js";
@@ -80,9 +81,25 @@ app.use("/api/till/*", async (c, next) => {
 
 app.route("/api/till", till);
 
-// Photos are readable by any signed-in device (the till draws the grid from
-// them) and writable only from the back office; `photos.ts` draws that line.
-app.use("/api/photos/*", authenticate);
+// **Reading a picture is not authenticated, and it cannot be.** An `<img src>`
+// sends no Authorization header — there is no way to give it one — so a
+// middleware over the whole path meant every product photo in the till's grid
+// came back 401 and drew as a broken tile. The URL is the capability instead:
+// the key is a random 20-character id, unguessable and never listed, and what
+// it protects is a photograph of a bottle on a shelf.
+//
+// Writing is a different matter and stays behind both gates: `photos.ts`
+// refuses PUT and DELETE to anything but a manager.
+//
+// Gated by *method*, not by path: `/api/photos/*` covers the key and
+// `/api/photos` does not, so scoping by path alone left DELETE outside the
+// middleware and it threw on a missing actor instead of refusing.
+const photoGate: MiddlewareHandler<Ctx> = async (c, next) => {
+  if (c.req.method === "GET") return next();
+  return authenticate(c, next);
+};
+app.use("/api/photos", photoGate);
+app.use("/api/photos/*", photoGate);
 app.route("/api/photos", photos);
 
 // The back office. A cashier's session cannot open any of it, which is the

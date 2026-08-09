@@ -552,7 +552,10 @@ fn toggle_attrs(id: str, name: str, on: bool) -> [html.Attr] {
     return attrs
 }
 
-fn field_of(f: desk.Field) -> html.Node {
+fn field_of(f: desk.Field, l: i18n.Lang) -> html.Node {
+    let i18n_photo_take = words.t(l, "products.take_photo")
+    let i18n_photo_choose = words.t(l, "products.choose_photo")
+    let i18n_photo_remove = words.t(l, "products.remove_photo")
     let id = "f-\(f.name)"
     var control = match f.kind {
         Text => html.empty("input", [
@@ -583,6 +586,51 @@ fn field_of(f: desk.Field) -> html.Node {
         Password => html.empty("input", [
                 html.id(id), html.data("field", f.name), html.class("field"), html.attr("type", "password"),
                 html.attr("autocomplete", "new-password"),
+            ]),
+        // Two inputs, not one. `accept="image/*"` alone offers a phone the
+        // choice of camera or library, but on a desktop it is a file picker
+        // only — and a counter tablet is the device this is for. `capture`
+        // opens the camera directly; without it, the library. Both are hidden
+        // and driven by their labels, because a bare file input cannot be
+        // styled and reads as a form control from 1998.
+        Photo => html.el("div", [html.class("photo-field")], [
+                html.keyed("preview", if f.value.len() > 0 {
+                        html.empty("img", [
+                                html.class("photo-preview"),
+                                html.attr("src", "/api/photos/\(f.value)"),
+                                html.attr("alt", ""),
+                            ])
+                    } else {
+                        html.el("div", [html.class("photo-preview empty")], [])
+                    }),
+                html.keyed("take", html.el("label", [html.class("photo-button")], [
+                            html.keyed("t", html.txt("span", [], i18n_photo_take)),
+                            html.keyed("i", html.empty("input", [
+                                        html.class("photo-input"),
+                                        html.attr("type", "file"),
+                                        html.attr("accept", "image/*"),
+                                        html.attr("capture", "environment"),
+                                        html.data("action", "photo-pick"),
+                                    ])),
+                        ])),
+                html.keyed("choose", html.el("label", [html.class("photo-button")], [
+                            html.keyed("t", html.txt("span", [], i18n_photo_choose)),
+                            html.keyed("i", html.empty("input", [
+                                        html.class("photo-input"),
+                                        html.attr("type", "file"),
+                                        html.attr("accept", "image/*"),
+                                        html.data("action", "photo-pick"),
+                                    ])),
+                        ])),
+                html.keyed("remove", if f.value.len() > 0 {
+                        html.txt("button", [
+                                html.class("photo-button quiet"),
+                                html.attr("type", "button"),
+                                act("photo-remove"),
+                            ], i18n_photo_remove)
+                    } else {
+                        html.el("span", [], [])
+                    }),
             ]),
         Readonly => html.txt("div", [html.class("field readonly")], f.value),
     }
@@ -622,7 +670,7 @@ fn dialog(f: desk.Form, l: i18n.Lang) -> html.Node {
     }
     var rows: [html.Node] = []
     for field in f.fields {
-        rows.push(field_of(field))
+        rows.push(field_of(field, l))
     }
     kids.push(html.keyed("fields", html.el("div", [html.class("fields")], rows)))
     kids.push(html.keyed("actions", html.el("div", [html.class("form-actions")], [

@@ -771,3 +771,36 @@ body:has(.shade) .scroll { overflow: hidden; }
   .inner { padding: 8px 16px 40px; }
   .lane-grid, .role-grid { grid-template-columns: 1fr; }
 }
+
+/* ---- the photo field ----------------------------------------------------- */
+/* Two ways in, because the device decides which is possible: `capture` opens a
+ * camera and is what a phone or a counter tablet uses; without it the file
+ * picker, which is all a desktop has. Both are real `<input type="file">`
+ * elements hidden inside their labels — a styled div cannot open a file
+ * picker, and a bare file input cannot be styled. */
+.photo-field { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.photo-preview {
+  width: 96px;
+  height: 96px;
+  border-radius: 10px;
+  background: var(--raised);
+  object-fit: cover;
+  flex: none;
+}
+.photo-preview.empty { background: var(--raised); }
+.photo-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 9999px;
+  background: var(--accent-soft);
+  color: var(--accent-on-soft);
+  font: 500 14px/1 Roboto, sans-serif;
+  cursor: pointer;
+}
+.photo-button.quiet { background: transparent; color: var(--ink-dim); }
+.photo-button:active { filter: brightness(0.94); }
+/* Hidden, not `display: none`: a display-none input cannot be opened by
+ * clicking its label in every browser. */
+.photo-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }

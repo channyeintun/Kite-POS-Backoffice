@@ -258,6 +258,16 @@ fn ledger(app: store.App) -> html.Node {
 
 // ---- the work area ---------------------------------------------------------
 
+/// Where the Worker is, for an image `src`. `api.kite` owns this and the till
+/// only ever needed it for JSON before now.
+fn api_base() -> str {
+    let kept = browser.meta("api-base")
+    if kept.len() > 0 {
+        return kept
+    }
+    return "/api"
+}
+
 fn tile(app: store.App, p: model.Product) -> html.Node {
     var marks: [html.Node] = []
     if p.min_age > 0 {
@@ -271,7 +281,20 @@ fn tile(app: store.App, p: model.Product) -> html.Node {
     }
     return html.keyed(p.id, html.el("button",
             concat([html.class("tile"), html.attr("type", "button")], with_id("tile", p.id)), [
-                html.keyed("photo", html.el("span", [html.class("tile-photo")], [])),
+                // The picture, or the grey field that stands in for one. An
+                // `<img>` with no `src` draws a broken-image glyph, so a
+                // product without a photo gets a plain box instead — which is
+                // also what the grid looked like before there were any.
+                html.keyed("photo", if p.photo_key.len() > 0 {
+                        html.empty("img", [
+                                html.class("tile-photo"),
+                                html.attr("src", "\(api_base())/photos/\(p.photo_key)"),
+                                html.attr("alt", ""),
+                                html.attr("loading", "lazy"),
+                            ])
+                    } else {
+                        html.el("span", [html.class("tile-photo")], [])
+                    }),
                 html.keyed("name", html.txt("span", [html.class("tile-name")],
                         store.product_label(p, app.lang))),
                 html.keyed("price", html.txt("span", [html.class("tile-price")],

@@ -914,3 +914,18 @@ main.lane { display: flex; flex: 1; min-width: 0; min-height: 0; }
   font: 500 24px/1 Roboto, sans-serif;
 }
 .step:active { background: var(--go); color: #04170d; }
+
+/* A product picture on a tile. `object-fit: cover` because a shelf photo taken
+ * on a phone is portrait and the tile is landscape — letterboxing a grid of
+ * sixty of them reads as broken, and cropping to the middle does not. The grey
+ * field is what a product with no picture keeps. */
+img.tile-photo {
+  object-fit: cover;
+  width: 100%;
+  height: 100%;
+  /* A flex item defaults to `min-height: auto`, which for an `<img>` is its
+   * *intrinsic* height scaled to the column width — so a 48 px thumbnail at
+   * 100% width claimed a 240 px row and pushed the name and the price off the
+   * bottom of the tile. `min-height: 0` lets the box win over the picture. */
+  min-height: 0;
+}
