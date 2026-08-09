@@ -5,7 +5,7 @@ import { all, batch, need, nextNumber, one, readSettings, run, settingBool, stmt
 import { newId } from "../lib/crypto.js";
 import { badRequest, conflict, int, num, oneOf, optInt, optStr, str } from "../lib/http.js";
 import { extend } from "../lib/money.js";
-import { invoiceEntry, post, receiptEntry, supplierPaymentEntry } from "../lib/ledger.js";
+import { invoiceEntry, post, receiptEntry, reversalEntry, supplierPaymentEntry } from "../lib/ledger.js";
 
 export const purchasing = new Hono<Ctx>();
 
@@ -303,6 +303,7 @@ purchasing.get("/payables", async (c) => {
             COALESCE((SELECT SUM(p.amount) FROM supplier_payments p WHERE p.invoice_id = i.id), 0) AS paid,
             i.total - COALESCE((SELECT SUM(p.amount) FROM supplier_payments p WHERE p.invoice_id = i.id), 0) AS outstanding
        FROM supplier_invoices i JOIN suppliers s ON s.id = i.supplier_id
+      WHERE i.status = 'open'
       ORDER BY (i.due_at IS NULL), i.due_at, i.issued_at DESC LIMIT 200`,
   );
   /**
@@ -337,7 +338,7 @@ purchasing.get("/payables", async (c) => {
                                      WHERE p.invoice_id = i.id), 0) AS out,
                 CASE WHEN i.due_at IS NULL OR i.due_at >= ?1 THEN 0
                      ELSE (?1 - i.due_at) / 86400 END AS days
-           FROM supplier_invoices i
+           FROM supplier_invoices i WHERE i.status = 'open'
        ) x
        JOIN suppliers s ON s.id = x.supplier_id
       WHERE x.out > 0
@@ -454,4 +455,92 @@ purchasing.post("/invoices/:id/pay", async (c) => {
     );
   }
   return c.json({ id }, 201);
+});
+
+/**
+ * Cancel an invoice that should never have been raised.
+ *
+ * Not a delete. Receiving a delivery raises an invoice on its own, so a
+ * delivery booked twice or against the wrong order leaves a payable the shop
+ * does not owe — and the only way out used to be to pay it. The row stays,
+ * marked, with the reason on it.
+ *
+ * Refused once anything has been paid against it: a part-paid invoice is a
+ * real obligation with real money already moved, and unwinding that is a
+ * credit note rather than a cancellation.
+ */
+purchasing.post("/invoices/:id/cancel", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const actor = c.get("actor");
+  const id = c.req.param("id");
+  const reason = str(body, "reason").trim();
+  if (reason.length === 0) throw badRequest("bad_reason", "cancelling an invoice needs a reason");
+
+  const paid = await one<{ amount: number }>(
+    c.env.DB,
+    "SELECT COALESCE(SUM(amount), 0) AS amount FROM supplier_payments WHERE invoice_id = ?1",
+    id,
+  );
+  if ((paid?.amount ?? 0) > 0) {
+    throw conflict("already_paid", "something has been paid against that invoice");
+  }
+
+  const at = now();
+  const cancelled = await run(
+    c.env.DB,
+    `UPDATE supplier_invoices SET status = 'cancelled', cancelled_at = ?2, cancel_reason = ?3
+      WHERE id = ?1 AND status = 'open'`,
+    id,
+    at,
+    reason,
+  );
+  if (cancelled.meta.changes === 0) {
+    throw conflict("not_open", "that invoice is not open");
+  }
+
+  // The accrual it raised has to come back off the books, or the shop still
+  // owes it in the ledger while the list says it does not.
+  const invoice = await one<{ total: number; po_id: string | null }>(
+    c.env.DB,
+    "SELECT total, po_id FROM supplier_invoices WHERE id = ?1",
+    id,
+  );
+  const settings = await readSettings(c.env.DB);
+  if (invoice && settingBool(settings, "accounting.enabled", false)) {
+    const original = await one<{
+      id: string; memo: string; ref_type: string; ref_id: string;
+    }>(
+      c.env.DB,
+      `SELECT id, memo, ref_type, ref_id FROM journal_entries
+        WHERE ref_type = 'supplier_invoice' AND ref_id = ?1
+          AND NOT EXISTS (SELECT 1 FROM journal_entries r WHERE r.corrects_id = journal_entries.id)
+        ORDER BY rowid LIMIT 1`,
+      id,
+    );
+    if (original) {
+      const lines = await all<{ account_code: string; amount: number; memo: string }>(
+        c.env.DB,
+        "SELECT account_code, amount, memo FROM journal_lines WHERE entry_id = ?1 ORDER BY rowid",
+        original.id,
+      );
+      if (lines.length > 0) {
+        await batch(
+          c.env.DB,
+          post(c.env.DB, reversalEntry({ original, lines, at, reason, userId: actor.userId })),
+        );
+      }
+    }
+  }
+
+  await run(
+    c.env.DB,
+    `INSERT INTO audit_log (id, at, user_id, approved_by, action, ref_type, ref_id, detail)
+     VALUES (?1, ?2, ?3, ?3, 'cancel_invoice', 'supplier_invoice', ?4, ?5)`,
+    newId("aud"),
+    at,
+    actor.userId,
+    id,
+    reason,
+  );
+  return c.json({ ok: true });
 });

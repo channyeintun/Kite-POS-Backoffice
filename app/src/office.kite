@@ -149,6 +149,13 @@ async fn load_refs(app: desk.App) {
     }
     desk.took_expense_accounts(app, expense_accounts)
 
+    var chart_accounts: [doc.Doc] = []
+    let (whole, werr) = await api.accounts(token)
+    if werr == nil {
+        chart_accounts = doc.items(doc.field(whole, "accounts"))
+    }
+    desk.took_accounts(app, chart_accounts)
+
     let (settings, terr) = await api.settings(token)
     if terr == nil {
         let values = doc.field(settings, "settings")
@@ -367,6 +374,7 @@ async fn load_purchasing(app: desk.App) {
     let (payables, perr) = await api.payables(token)
     if perr == nil {
         ps = payables
+        desk.took_invoices(app, doc.items(doc.field(payables, "invoices")))
     }
     done(app, screens.purchasing(sheet, os, ps, desk.lang_of(app), desk.currency_of(app)))
 }
@@ -424,7 +432,18 @@ async fn load_reports(app: desk.App) {
     if serr == nil {
         s = shrink
     }
-    done(app, screens.reports(products, d, s, desk.lang_of(app), desk.currency_of(app)))
+    var tax = doc.nothing()
+    let (rates, terr) = await api.tax_report(token, from, to)
+    if terr == nil {
+        tax = rates
+    }
+    var dead = doc.nothing()
+    let (idle, ierr) = await api.dead_stock(token, 60)
+    if ierr == nil {
+        dead = idle
+    }
+    done(app, screens.reports(products, d, s, tax, dead, desk.lang_of(app),
+            desk.currency_of(app)))
 }
 
 /// Fetch only what the open sheet needs.
@@ -487,7 +506,8 @@ async fn load_accounting(app: desk.App) {
         doc.put(data, "trial", trial)
     }
     if view == "journal" {
-        let (journal, jerr) = await api.journal(token, from, to)
+        let (journal, jerr) = await api.journal_filtered(token, from, to,
+            app.journal_cause, app.journal_account, app.journal_query)
         if jerr != nil {
             failed(app, jerr.message())
             return
@@ -872,6 +892,23 @@ fn pressed(app: desk.App, what: str, id: str) {
         repaint(app)
         return
     }
+    if what == "form-cancel-invoice" {
+        desk.open_form(app, forms.cancel_invoice(desk.lang_of(app), app.ref_invoices,
+                desk.currency_of(app)))
+        repaint(app)
+        return
+    }
+    if what == "books-filter" {
+        desk.open_form(app, forms.journal_filter(desk.lang_of(app), app.journal_cause,
+                app.journal_account, app.journal_query, app.ref_accounts))
+        repaint(app)
+        return
+    }
+    if what == "books-opening" {
+        desk.open_form(app, forms.opening_balances(desk.lang_of(app), desk.currency_of(app)))
+        repaint(app)
+        return
+    }
     if what == "books-reopen" {
         do_reopen_period(app, id)
         return
@@ -1183,6 +1220,25 @@ async fn do_submit(app: desk.App, id: str, subject: str) {
         doc.put_text(body, "kind", value_of("kind"))
         let (_, err) = await api.add_register(token, body)
         settle(app, err, words.t(l, "toast.lane_added"))
+        return
+    }
+    if id == "cancel-invoice" {
+        doc.put_text(body, "reason", value_of("reason"))
+        let (_, err) = await api.cancel_invoice(token, value_of("invoice_id"), body)
+        settle(app, err, words.t(desk.lang_of(app), "payables.cancelled"))
+        return
+    }
+    if id == "journal-filter" {
+        desk.filter_journal(app, value_of("ref_type"), value_of("account_code"), value_of("q"))
+        desk.close_form(app)
+        load(app)
+        return
+    }
+    if id == "opening-balances" {
+        doc.put_int(body, "cash_in_safe", money_of(app, "cash_in_safe"))
+        doc.put_int(body, "cash_in_drawer", money_of(app, "cash_in_drawer"))
+        let (_, err) = await api.post_opening_balances(token, body)
+        settle(app, err, words.t(desk.lang_of(app), "accounting.opening_balances"))
         return
     }
     if id == "reverse-entry" {

@@ -661,12 +661,24 @@ pub async fn journal_filtered(token: str, from: int, to: int, ref_type: str,
         "/accounting/journal?from=\(from)&to=\(to)&ref_type=\(ref_type)&account_code=\(code)&q=\(q)")
 }
 
+pub async fn cancel_invoice(token: str, id: str, body: doc.Doc) -> (doc.Doc, error) {
+    return await post(token, "/purchasing/invoices/\(id)/cancel", body)
+}
+
+pub async fn post_opening_balances(token: str, body: doc.Doc) -> (doc.Doc, error) {
+    return await post(token, "/accounting/opening-balances", body)
+}
+
 pub async fn reverse_entry(token: str, id: str, body: doc.Doc) -> (doc.Doc, error) {
     return await post(token, "/accounting/entries/\(id)/reverse", body)
 }
 
 pub async fn reopen_period(token: str, id: str) -> (doc.Doc, error) {
     return await post(token, "/accounting/periods/\(id)/reopen", doc.object())
+}
+
+pub async fn dead_stock(token: str, days: int) -> (doc.Doc, error) {
+    return await get(token, "/reports/dead-stock?days=\(days)")
 }
 
 pub async fn tax_report(token: str, from: int, to: int) -> (doc.Doc, error) {

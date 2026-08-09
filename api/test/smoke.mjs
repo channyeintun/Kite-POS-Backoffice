@@ -122,6 +122,18 @@ const run = async () => {
   });
   check("products are in the catalogue", [typeof colaId, typeof beerId], ["string", "string"]);
 
+  // A supplier, because the purchasing and payables checks below need one — and
+  // without it they were guarded by `if (supplier)` and quietly skipped every
+  // run, which is a test that reports success for work it never did.
+  const knownSuppliers = await call("GET", "/api/catalog/suppliers", { token: owner });
+  const existingSupplier = (knownSuppliers.json.suppliers ?? []).find((x) => x.name === "Shwe Trading");
+  const supplier = existingSupplier
+    ? existingSupplier
+    : (await call("POST", "/api/catalog/suppliers", {
+        token: owner, body: { name: "Shwe Trading", phone: "09-555-0180", lead_days: 3 },
+      })).json;
+  check("there is a supplier to buy from", typeof supplier.id, "string");
+
   // Barcodes and offers are idempotent in the same way: already-there is fine.
   const bar = await call("POST", `/api/catalog/products/${colaId}/barcodes`, {
     token: owner,
@@ -578,15 +590,11 @@ const run = async () => {
   // An invoice for nothing is what a form sends when the amount could not be
   // read — and it wrote a supplier invoice with no payable behind it, because
   // a zero-valued posting is dropped and the entry disappears entirely.
-  const suppliers = await call("GET", "/api/catalog/suppliers", { token: owner });
-  const anySupplier = (suppliers.json.suppliers ?? [])[0];
-  if (anySupplier) {
-    const zeroInvoice = await call("POST", "/api/purchasing/invoices", {
-      token: owner,
-      body: { supplier_id: anySupplier.id, reference: "ZERO-1", total: 0 },
-    });
-    check("an invoice for nothing is refused", zeroInvoice.json.error?.code, "bad_total");
-  }
+  const zeroInvoice = await call("POST", "/api/purchasing/invoices", {
+    token: owner,
+    body: { supplier_id: supplier.id, reference: "ZERO-1", total: 0 },
+  });
+  check("an invoice for nothing is refused", zeroInvoice.json.error?.code, "bad_total");
 
   // Two managers closing one lane at the same moment. The loser's UPDATE
   // matched no rows — a success — so its variance and sweep committed anyway,
@@ -852,6 +860,66 @@ const run = async () => {
   const logged = (trail.json.entries ?? []).map((e) => e.action);
   check("recording an expense leaves a trail", logged.includes("expense"), true);
   check("and so does correcting an entry", logged.includes("reverse_entry"), true);
+
+  // The three endpoints that existed with no way to reach them, and the two
+  // reports that had no screen.
+  const dead = await call("GET", "/api/reports/dead-stock?days=60", { token: owner });
+  check("dead stock is reported", dead.status, 200);
+  check("and only counts what is on the shelf",
+    (dead.json.products ?? []).every((p) => p.stock > 0), true);
+
+  const inv = await call("GET", "/api/reports/inventory", { token: owner });
+  check("stock is valued at cost and at retail", inv.status, 200);
+
+  // Cancelling an invoice: not a delete, refused once money has moved, and the
+  // accrual it raised comes back off the books.
+  {
+    const supplier2 = supplier;
+    const raised = await call("POST", "/api/purchasing/invoices", {
+      token: owner,
+      body: { supplier_id: supplier2.id, reference: `CANCEL-${Math.random().toString(36).slice(2, 7)}`,
+        total: 45000 },
+    });
+    check("an invoice is raised", raised.status, 201);
+    const owedBefore = (await call("GET", "/api/purchasing/payables", { token: owner }))
+      .json.totals.outstanding;
+    // Absent is `bad_field` from `str()`; blank — the field left empty, which is
+    // what actually happens — is the one this guard is for.
+    const noField = await call("POST", `/api/purchasing/invoices/${raised.json.id}/cancel`, {
+      token: owner, body: {},
+    });
+    check("cancelling without a reason field is refused", noField.json.error?.code, "bad_field");
+    const blankReason = await call("POST", `/api/purchasing/invoices/${raised.json.id}/cancel`, {
+      token: owner, body: { reason: "   " },
+    });
+    check("and so is a blank one", blankReason.json.error?.code, "bad_reason");
+    const cancelled = await call("POST", `/api/purchasing/invoices/${raised.json.id}/cancel`, {
+      token: owner, body: { reason: "entered twice" },
+    });
+    check("an unpaid invoice can be cancelled", cancelled.status, 200);
+    const owedAfter = (await call("GET", "/api/purchasing/payables", { token: owner }))
+      .json.totals.outstanding;
+    check("and stops counting toward what is owed", owedBefore - owedAfter, 45000);
+    const twice2 = await call("POST", `/api/purchasing/invoices/${raised.json.id}/cancel`, {
+      token: owner, body: { reason: "again" },
+    });
+    check("but only once", twice2.json.error?.code, "not_open");
+
+    // One that has been paid against is a real obligation with real money
+    // already moved — that is a credit note, not a cancellation.
+    const paidInv = await call("POST", "/api/purchasing/invoices", {
+      token: owner,
+      body: { supplier_id: supplier2.id, reference: `PAID-${Math.random().toString(36).slice(2, 7)}`,
+        total: 10000 },
+    });
+    await call("POST", `/api/purchasing/invoices/${paidInv.json.id}/pay`, {
+      token: owner, body: { amount: 4000, method: "cash" },
+    });
+    const refused = await call("POST", `/api/purchasing/invoices/${paidInv.json.id}/cancel`, {
+      token: owner, body: { reason: "changed my mind" },
+    });
+    check("a part-paid invoice cannot be cancelled", refused.json.error?.code, "already_paid");
+  }
 
   console.log("\n— the books —");
 

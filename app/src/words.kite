@@ -124,6 +124,15 @@ fn english_nav(key: str) -> str {
 }
 
 fn english_accounting(key: str) -> str {
+    if key == "accounting.opening_balances" { return "Opening balances" }
+    if key == "accounting.what_the_shop_is_starting_with" { return "What the shop is starting with" }
+    if key == "accounting.stock_is_taken_from_the_catalogue" { return "Stock is taken from the catalogue at what each product cost — only the cash is typed in." }
+    if key == "accounting.cash_in_the_safe" { return "Cash in the safe" }
+    if key == "accounting.cash_in_the_drawer" { return "Cash in the drawer" }
+    if key == "accounting.post_the_opening" { return "Post the opening" }
+    if key == "accounting.filter_the_journal" { return "Filter the journal" }
+    if key == "accounting.caused_by_anything" { return "Anything" }
+    if key == "accounting.search_memo_or_number" { return "Entry number or memo" }
     if key == "accounting.accounting_equation" { return "Accounting equation" }
     if key == "accounting.add_account" { return "Add account" }
     if key == "accounting.add_an_account" { return "Add an account" }
@@ -738,6 +747,14 @@ fn english_movements(key: str) -> str {
 }
 
 fn english_payables(key: str) -> str {
+    if key == "payables.cancel_invoice" { return "Cancel this invoice" }
+    if key == "payables.cancelling_reverses_the_accrual" { return "Nothing is deleted. The invoice is marked cancelled, stops counting toward what is owed, and the entry it raised is reversed. Refused once anything has been paid against it." }
+    if key == "payables.cancelled" { return "Cancelled" }
+    if key == "payables.d1_30" { return "1–30" }
+    if key == "payables.d31_60" { return "31–60" }
+    if key == "payables.d61_90" { return "61–90" }
+    if key == "payables.d90_plus" { return "90+" }
+    if key == "payables.all_suppliers" { return "All suppliers" }
     if key == "payables.130_days_late" { return "1–30 days late" }
     if key == "payables.add_an_invoice" { return "Add an invoice" }
     if key == "payables.aging_by_supplier" { return "Aging by supplier" }
@@ -1215,6 +1232,15 @@ fn english_replenishment(key: str) -> str {
 }
 
 fn english_reports(key: str) -> str {
+    if key == "reports.tax_collected_by_rate" { return "Tax collected, by rate" }
+    if key == "reports.the_only_vat_output" { return "What a VAT return is made from" }
+    if key == "reports.rate" { return "Rate %" }
+    if key == "reports.net" { return "Net" }
+    if key == "reports.gross" { return "Gross" }
+    if key == "reports.dead_stock" { return "Dead stock" }
+    if key == "reports.on_the_shelf_not_selling" { return "On the shelf, not selling" }
+    if key == "reports.days_since_sold" { return "Days since sold" }
+    if key == "reports.never_sold" { return "never" }
     if key == "reports.by_category" { return "By category" }
     if key == "reports.by_payment" { return "By payment" }
     if key == "reports.cost_value" { return "Cost value" }
@@ -1771,6 +1797,15 @@ fn burmese_nav(key: str) -> str {
 }
 
 fn burmese_accounting(key: str) -> str {
+    if key == "accounting.opening_balances" { return "အဖွင့် လက်ကျန်များ" }
+    if key == "accounting.what_the_shop_is_starting_with" { return "ဆိုင် စတင်ချိန် ပိုင်ဆိုင်မှု" }
+    if key == "accounting.stock_is_taken_from_the_catalogue" { return "ကုန်ပစ္စည်းကို စာရင်းမှ ကုန်ကျစရိတ်အတိုင်း ယူသည် — ငွေသားကိုသာ ရိုက်ထည့်ရန်။" }
+    if key == "accounting.cash_in_the_safe" { return "မီးခံသေတ္တာအတွင်း ငွေသား" }
+    if key == "accounting.cash_in_the_drawer" { return "ငွေအံဆွဲအတွင်း ငွေသား" }
+    if key == "accounting.post_the_opening" { return "အဖွင့်လက်ကျန် သွင်းရန်" }
+    if key == "accounting.filter_the_journal" { return "မှတ်တမ်း စစ်ထုတ်ရန်" }
+    if key == "accounting.caused_by_anything" { return "အားလုံး" }
+    if key == "accounting.search_memo_or_number" { return "မှတ်တမ်းနံပါတ် သို့မဟုတ် မှတ်ချက်" }
     if key == "accounting.accounting_equation" { return "စာရင်းကိုင် ညီမျှခြင်း" }
     if key == "accounting.add_account" { return "အကောင့် ထည့်ရန်" }
     if key == "accounting.add_an_account" { return "အကောင့်တစ်ခု ထည့်ရန်" }
@@ -2385,6 +2420,14 @@ fn burmese_movements(key: str) -> str {
 }
 
 fn burmese_payables(key: str) -> str {
+    if key == "payables.cancel_invoice" { return "ဤငွေတောင်းခံလွှာကို ပယ်ဖျက်ရန်" }
+    if key == "payables.cancelling_reverses_the_accrual" { return "မည်သည့်အရာမျှ ဖျက်ခြင်း မဟုတ်ပါ။ ငွေတောင်းခံလွှာကို ပယ်ဖျက်ပြီးဟု မှတ်သားကာ ပေးရန်ရှိမှုမှ ထုတ်ပယ်ပြီး ၎င်းထုတ်ပေးခဲ့သည့် စာရင်းကို ပြန်လှန်သည်။ ပေးချေမှု ရှိပြီးပါက ငြင်းပယ်သည်။" }
+    if key == "payables.cancelled" { return "ပယ်ဖျက်ပြီး" }
+    if key == "payables.d1_30" { return "၁–၃၀" }
+    if key == "payables.d31_60" { return "၃၁–၆၀" }
+    if key == "payables.d61_90" { return "၆၁–၉၀" }
+    if key == "payables.d90_plus" { return "၉၀+" }
+    if key == "payables.all_suppliers" { return "ပေးသွင်းသူ အားလုံး" }
     if key == "payables.130_days_late" { return "၁–၃၀ ရက် နောက်ကျ" }
     if key == "payables.add_an_invoice" { return "ငွေတောင်းခံလွှာ ထည့်ရန်" }
     if key == "payables.aging_by_supplier" { return "ပေးသွင်းသူအလိုက် ကြာမြင့်ချိန်" }
@@ -2862,6 +2905,15 @@ fn burmese_replenishment(key: str) -> str {
 }
 
 fn burmese_reports(key: str) -> str {
+    if key == "reports.tax_collected_by_rate" { return "အခွန်နှုန်းအလိုက် ကောက်ခံမှု" }
+    if key == "reports.the_only_vat_output" { return "အခွန်ကြေညာလွှာ ပြုစုရန် အခြေခံ" }
+    if key == "reports.rate" { return "နှုန်း %" }
+    if key == "reports.net" { return "အခွန်မပါ" }
+    if key == "reports.gross" { return "အခွန်အပါ" }
+    if key == "reports.dead_stock" { return "မရွေ့သော ကုန်ပစ္စည်း" }
+    if key == "reports.on_the_shelf_not_selling" { return "စင်ပေါ်တွင် ရှိပြီး မရောင်းရသေး" }
+    if key == "reports.days_since_sold" { return "နောက်ဆုံးရောင်းပြီး ရက်" }
+    if key == "reports.never_sold" { return "မရောင်းရသေး" }
     if key == "reports.by_category" { return "အမျိုးအစားအလိုက်" }
     if key == "reports.by_payment" { return "ပေးချေမှုနည်းလမ်းအလိုက်" }
     if key == "reports.cost_value" { return "အရင်း တန်ဖိုး" }

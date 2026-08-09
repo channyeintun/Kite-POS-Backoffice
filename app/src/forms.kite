@@ -19,6 +19,7 @@ use desk
 use doc
 use i18n
 use money
+use screens
 use words
 
 fn text_field(name: str, label: str, value: str) -> desk.Field {
@@ -561,6 +562,86 @@ pub fn settings(current: doc.Doc, l: i18n.Lang) -> desk.Form {
                     doc.text(current, "accounting.enabled", "0")),
             ]),
         words.t(l, "settings.settings_lede"))
+}
+
+/// Switching the books on in a shop that has already been trading.
+///
+/// Stock is not asked for: it is what the catalogue already says is on the
+/// shelf, at what each product cost. Asking again would invite a figure that
+/// disagrees with the stock the till is about to sell from. Only the cash is
+/// typed, because nothing in the system knows it.
+/// Cancel an invoice that should never have been raised.
+///
+/// A picker rather than a row action: a `desk.Row` carries one action, and on
+/// the payables table that action is *pay* — which is what a shopkeeper wants
+/// on nearly every row. Swapping it for cancel would put the destructive one
+/// under the finger that reaches for the common one.
+///
+/// Only invoices with nothing paid against them are offered, because that is
+/// the only case the server will accept: once money has moved, unwinding it is
+/// a credit note rather than a cancellation.
+pub fn cancel_invoice(l: i18n.Lang, invoices: [doc.Doc], c: money.Currency) -> desk.Form {
+    var ids: [str] = []
+    var names: [str] = []
+    for i in invoices {
+        if doc.int_of(i, "paid", 0) == 0 && doc.int_of(i, "outstanding", 0) > 0 {
+            ids.push(doc.text(i, "id", ""))
+            names.push("\(doc.text(i, "supplier_name", "")) · \(doc.text(i, "reference", "—")) · \(money.show(doc.int_of(i, "total", 0), c))")
+        }
+    }
+    if ids.len() == 0 {
+        ids = [""]
+        names = [words.t(l, "payables.nothing_outstanding")]
+    }
+    return desk.explained(
+        desk.form("cancel-invoice", words.t(l, "payables.cancel_invoice"),
+            words.t(l, "common.cancel"), [
+                choice_field("invoice_id", words.t(l, "payables.invoice"), ids, names, ids[0]),
+                desk.required(text_field("reason", words.t(l, "common.why"), "")),
+            ]),
+        words.t(l, "payables.cancelling_reverses_the_accrual"))
+}
+
+pub fn opening_balances(l: i18n.Lang, c: money.Currency) -> desk.Form {
+    return desk.explained(
+        desk.form("opening-balances", words.t(l, "accounting.opening_balances"),
+            words.t(l, "accounting.post_the_opening"), [
+                money_field("cash_in_safe", words.t(l, "accounting.cash_in_the_safe"), 0, c),
+                money_field("cash_in_drawer", words.t(l, "accounting.cash_in_the_drawer"), 0, c),
+            ]),
+        words.t(l, "accounting.stock_is_taken_from_the_catalogue"))
+}
+
+/// Narrowing the journal.
+pub fn journal_filter(l: i18n.Lang, ref_type: str, code: str, q: str,
+    accounts: [doc.Doc]) -> desk.Form {
+    var codes: [str] = [""]
+    var names: [str] = [words.t(l, "accounting.any_account")]
+    for a in accounts {
+        codes.push(doc.text(a, "code", ""))
+        names.push("\(doc.text(a, "code", "")) \(doc.text(a, "name", ""))")
+    }
+    // The same list the journal renders, named the same way — one mapper, so a
+    // filter can never offer a word the table does not use.
+    let kinds: [str] = ["", "sale", "refund", "shift", "cash_movement", "expense",
+        "stock_movement", "supplier_invoice", "supplier_payment", "purchase_order", "opening"]
+    var kind_names: [str] = []
+    for k in kinds {
+        if k.len() == 0 {
+            kind_names.push(words.t(l, "accounting.caused_by_anything"))
+        } else {
+            kind_names.push(screens.caused_by_of(l, k))
+        }
+    }
+    return desk.explained(
+        desk.form("journal-filter", words.t(l, "accounting.filter_the_journal"),
+            words.t(l, "register.apply"), [
+                choice_field("ref_type", words.t(l, "accounting.caused_by"), kinds, kind_names,
+                    ref_type),
+                choice_field("account_code", words.t(l, "common.account"), codes, names, code),
+                text_field("q", words.t(l, "accounting.search_memo_or_number"), q),
+            ]),
+        words.t(l, "accounting.every_figure_is_summed_from_the_journal"))
 }
 
 pub fn close_period(l: i18n.Lang) -> desk.Form {

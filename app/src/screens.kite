@@ -197,7 +197,9 @@ fn normal_of(l: i18n.Lang, code: str) -> str {
 }
 
 /// What caused a journal entry — `journal_entries.ref_type`.
-fn caused_by_of(l: i18n.Lang, code: str) -> str {
+/// What caused a journal entry — `journal_entries.ref_type`. Public because
+/// the journal's filter dialog offers the same list it renders.
+pub fn caused_by_of(l: i18n.Lang, code: str) -> str {
     if code == "sale" { return words.t(l, "movements.reason_sale") }
     if code == "refund" { return words.t(l, "sales.refund") }
     if code == "shift" { return words.t(l, "nav.shift") }
@@ -1008,6 +1010,30 @@ pub fn purchasing(sheet: doc.Doc, orders: doc.Doc, payables: doc.Doc,
                 if left > 0 { "form-pay-invoice" } else { "" }, doc.text(i, "id", "")))
     }
 
+    // Aging, by supplier. Which invoice to pay first is the question this
+    // screen exists to answer, and one lump sum cannot answer it. The buckets
+    // are summed by the database over *every* outstanding invoice, not over
+    // the page of two hundred drawn above.
+    let aging = doc.field(payables, "aging")
+    let aging_rows = doc.items(doc.field(aging, "rows"))
+    var aged: [desk.Row] = []
+    for a in aging_rows {
+        aged.push(row(doc.text(a, "supplier_id", ""), [
+                    doc.text(a, "supplier", ""),
+                    cash(a, "current", c), cash(a, "d30", c), cash(a, "d60", c),
+                    cash(a, "d90", c), cash(a, "d90up", c), cash(a, "total", c),
+                ], if doc.int_of(a, "d90up", 0) > 0 { "stop" }
+                   else if doc.int_of(a, "d60", 0) > 0 { "warn" } else { "" }))
+    }
+    if aged.len() > 0 {
+        let sums = doc.field(aging, "totals")
+        aged.push(row("all", [
+                    words.t(l, "payables.all_suppliers"),
+                    cash(sums, "current", c), cash(sums, "d30", c), cash(sums, "d60", c),
+                    cash(sums, "d90", c), cash(sums, "d90up", c), cash(sums, "total", c),
+                ], "ok"))
+    }
+
     return [
         desk.Block.Stats(items: [
                 desk.Stat{ label: words.t(l, "purchasing.to_order"), value: money.show(value, c),
@@ -1020,11 +1046,20 @@ pub fn purchasing(sheet: doc.Doc, orders: doc.Doc, payables: doc.Doc,
                 desk.Stat{ label: words.t(l, "purchasing.overdue"), value: money.show(overdue, c),
                     meta: words.t(l, "payables.past_the_due_date"),
                     tone: if overdue > 0 { "stop" } else { "ok" } },
+                desk.Stat{ label: words.t(l, "payables.not_yet_due"),
+                    value: money.show(doc.int_of(totals, "current", 0), c),
+                    meta: words.fill_n(l, "payables.n_suppliers", "\(aging_rows.len())"),
+                    tone: "ok" },
+                desk.Stat{ label: words.t(l, "payables.over_30_days_late"),
+                    value: money.show(doc.int_of(totals, "late_over_30", 0), c),
+                    meta: words.t(l, "payables.past_the_due_date"),
+                    tone: if doc.int_of(totals, "late_over_30", 0) > 0 { "stop" } else { "ok" } },
             ]),
         desk.Block.Buttons(items: [
                 desk.action(words.t(l, "purchasing.raise_orders_from_the_worksheet"),
                     "raise-orders", "", "filled"),
                 desk.action(words.t(l, "payables.record_an_invoice"), "form-invoice", "", "soft"),
+                desk.action(words.t(l, "payables.cancel_invoice"), "form-cancel-invoice", "", "quiet"),
                 desk.action(words.t(l, "common.suppliers"), "go", "suppliers", "quiet"),
             ]),
         table(words.t(l, "replenishment.reorder_worksheet"),
@@ -1042,6 +1077,12 @@ pub fn purchasing(sheet: doc.Doc, orders: doc.Doc, payables: doc.Doc,
             [words.t(l, "common.supplier"), words.t(l, "common.reference"),
                 words.t(l, "payables.issued"), words.t(l, "payables.due"),
                 words.t(l, "common.total"), words.t(l, "common.outstanding")], owing),
+        table(words.t(l, "payables.aging_by_supplier"),
+            words.t(l, "payables.past_the_due_date"),
+            [words.t(l, "common.supplier"), words.t(l, "payables.not_due"),
+                words.t(l, "payables.d1_30"), words.t(l, "payables.d31_60"),
+                words.t(l, "payables.d61_90"), words.t(l, "payables.d90_plus"),
+                words.t(l, "common.total")], aged),
     ]
 }
 
@@ -1296,7 +1337,7 @@ pub fn promotions(answer: doc.Doc, perf: doc.Doc, l: i18n.Lang,
 }
 
 pub fn reports(products_answer: doc.Doc, daily: doc.Doc, shrink: doc.Doc,
-    l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    tax: doc.Doc, dead: doc.Doc, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
     var products_rows: [desk.Row] = []
     for p in doc.items(doc.field(products_answer, "products")) {
         let margin = doc.int_of(p, "margin", 0)
@@ -1378,6 +1419,41 @@ pub fn reports(products_answer: doc.Doc, daily: doc.Doc, shrink: doc.Doc,
                 ], "stop"))
     }
 
+    // Tax banded by the rate as it was on the line, which is what a VAT return
+    // is made from. Nothing else in this system reports it.
+    var tax_rows: [desk.Row] = []
+    for r in doc.items(doc.field(tax, "rates")) {
+        let bp = doc.int_of(r, "tax_bp", 0)
+        tax_rows.push(row("r\(bp)", [
+                    "\(bp / 100).\((bp % 100) / 10)\(bp % 10)",
+                    cash(r, "net", c), cash(r, "tax", c), cash(r, "gross", c),
+                    "\(doc.int_of(r, "sales", 0))",
+                ], ""))
+    }
+    if tax_rows.len() > 0 {
+        tax_rows.push(row("tax-total", [
+                    words.t(l, "common.total"),
+                    cash(tax, "net", c), cash(tax, "tax", c), cash(tax, "gross", c), "",
+                ], "ok"))
+    }
+
+    // Ranked by what it is worth, not by how long it has sat: the decision this
+    // feeds is what to discount or send back, and a hundred kyat of dust is not
+    // worth an afternoon.
+    let now_at = browser.now()
+    var dead_rows: [desk.Row] = []
+    for d in doc.items(doc.field(dead, "products")) {
+        let last = doc.int_of(d, "last_sold", 0)
+        dead_rows.push(touchable(doc.text(d, "id", ""), [
+                    doc.text(d, "name", ""),
+                    doc.text(d, "sku", ""),
+                    qty(d, "stock"),
+                    if last > 0 { "\((now_at - last) / 86400)" }
+                    else { words.t(l, "reports.never_sold") },
+                    cash(d, "at_cost", c),
+                ], "warn", "open-product", doc.text(d, "id", "")))
+    }
+
     return [
         desk.Block.Meters(heading: words.t(l, "reports.the_trading_day"),
             note: words.t(l, "reports.thirty_days_by_hour"), rows: hours),
@@ -1400,6 +1476,16 @@ pub fn reports(products_answer: doc.Doc, daily: doc.Doc, shrink: doc.Doc,
         table(words.t(l, "reports.worst_affected"), "",
             [words.t(l, "common.product"), words.t(l, "products.sku"),
                 words.t(l, "common.units"), words.t(l, "common.value")], worst),
+        table(words.t(l, "reports.tax_collected_by_rate"),
+            words.t(l, "reports.the_only_vat_output"),
+            [words.t(l, "reports.rate"), words.t(l, "reports.net"),
+                words.t(l, "common.tax"), words.t(l, "reports.gross"),
+                words.t(l, "common.sales")], tax_rows),
+        table(words.t(l, "reports.dead_stock"),
+            words.t(l, "reports.on_the_shelf_not_selling"),
+            [words.t(l, "common.product"), words.t(l, "products.sku"),
+                words.t(l, "products.stock"), words.t(l, "reports.days_since_sold"),
+                words.t(l, "common.value")], dead_rows),
     ]
 }
 
@@ -1495,16 +1581,29 @@ fn books_chrome(view: str, win: str, l: i18n.Lang) -> [desk.Block] {
         windows.push(desk.action(words.t(l, pair[1]), "books-window", pair[0],
                 if win == pair[0] { "filled" } else { "quiet" }))
     }
+    var actions: [desk.Action] = [
+        desk.action(words.t(l, "expenses.record_an_expense"), "form-expense", "", "soft"),
+        desk.action(words.t(l, "accounting.close_a_month"), "form-close-period", "", "soft"),
+    ]
+    // Two buttons that belong to one sheet each rather than to the chrome: a
+    // filter with nothing to filter, and an opening balance offered from a
+    // trial balance, are both noise.
+    if view == "journal" {
+        actions.push(desk.action(words.t(l, "accounting.filter_the_journal"),
+                "books-filter", "", "soft"))
+    }
+    if view == "summary" {
+        actions.push(desk.action(words.t(l, "accounting.opening_balances"),
+                "books-opening", "", "quiet"))
+    }
+    actions.push(desk.action(words.t(l, "common.print"), "print", "", "quiet"))
+    actions.push(desk.action(words.t(l, "accounting.export_this_sheet"),
+            "books-export", view, "filled"))
+
     return [
         desk.Block.Buttons(items: sheets),
         desk.Block.Buttons(items: windows),
-        desk.Block.Buttons(items: [
-                desk.action(words.t(l, "expenses.record_an_expense"), "form-expense", "", "soft"),
-                desk.action(words.t(l, "accounting.close_a_month"),
-                    "form-close-period", "", "soft"),
-                desk.action(words.t(l, "accounting.export_this_sheet"),
-                    "books-export", view, "filled"),
-            ]),
+        desk.Block.Buttons(items: actions),
     ]
 }
 

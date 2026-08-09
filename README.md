@@ -66,10 +66,10 @@ out).
 | Shifts | every drawer session and its over/short |
 | Products | the catalogue, flagged low and out |
 | Inventory | valuation at cost and retail, what needs attention, and value by category |
-| Purchasing | the reorder worksheet from what actually sold, purchase orders, and payables with what is overdue |
+| Purchasing | the reorder worksheet from what actually sold, purchase orders, and payables aged into buckets by supplier — with an invoice raised in error cancellable rather than payable |
 | Customers | visits, spend, points and store credit |
 | Promotions | every offer, whether it is live, and what each one gave away |
-| Reports | the trading day by hour, products and categories by margin, tenders, by cashier, tax collected by rate, and stock valuation — ten of them, all exportable |
+| Reports | the trading day by hour, products and categories by margin, tenders, by cashier, tax collected by rate, dead stock, and stock valuation — ten of them, all exportable |
 | Accounting | eight sheets — summary with a ledger-health sweep, profit and loss, balance sheet, trial balance, general ledger, journal, chart of accounts, periods — over a window you pick, each saving as CSV |
 | Expenses | what was spent, against which account, and the tax paid on it |
 | Staff & access | the two roles, and the command matrix the till's command bar is built from |
@@ -386,6 +386,11 @@ Stated rather than implied:
   build hit a codegen bug where it wasn't, and nothing caught it until the page
   was open. Fixed upstream in Kite 0.1.5; the validation stays, because it costs
   a millisecond and the failure mode is a blank screen with no error.
+- **The chart of accounts is seeded, not editable.** Corner Mart lets an
+  account be added, renamed and deactivated; here the sixteen seeded accounts
+  plus the seven operating ones are what a corner shop needs, and a migration
+  adds more. The screen lists them and drills into each one's ledger, which is
+  what the chart is read for.
 - **Two tablet items are CSS-complete but structurally deferred.** The command
   strip still spans the full width rather than the work column in landscape,
   and the tender screen keeps its summary in the work area rather than moving

@@ -573,3 +573,37 @@ reports.get("/export", async (c) => {
 
   return csvResponse(`${report}-${isoDay(from)}.csv`, csvDoc(rows));
 });
+
+/**
+ * What is sitting on the shelf not selling.
+ *
+ * Ranked by what it is worth rather than by how long it has sat, because the
+ * decision it feeds is what to discount or return, and a hundred kyat of dust
+ * is not worth a shopkeeper's afternoon. A product that has *never* sold comes
+ * back with `last_sold` null and sorts with the oldest.
+ */
+reports.get("/dead-stock", async (c) => {
+  const days = Math.max(1, Number(c.req.query("days") ?? "60"));
+  const since = now() - days * 86400;
+  const rows = await all<{
+    id: string; sku: string; name: string; stock: number; cost: number;
+    at_cost: number; last_sold: number | null;
+  }>(
+    c.env.DB,
+    `SELECT p.id, p.sku, p.name, p.stock, p.cost,
+            CAST(ROUND(p.stock * p.cost) AS INTEGER) AS at_cost,
+            (SELECT MAX(s.completed_at) FROM sale_items i JOIN sales s ON s.id = i.sale_id
+              WHERE i.product_id = p.id AND s.status = 'completed') AS last_sold
+       FROM products p
+      WHERE p.active = 1 AND p.stock > 0
+        AND COALESCE((SELECT MAX(s.completed_at) FROM sale_items i JOIN sales s ON s.id = i.sale_id
+                       WHERE i.product_id = p.id AND s.status = 'completed'), 0) < ?1
+      ORDER BY at_cost DESC LIMIT 100`,
+    since,
+  );
+  return c.json({
+    days,
+    products: rows,
+    at_cost: rows.reduce((a, r) => a + Number(r.at_cost ?? 0), 0),
+  });
+});

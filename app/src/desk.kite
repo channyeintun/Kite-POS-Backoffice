@@ -434,6 +434,10 @@ pub struct App {
     /// The expense accounts a running cost may be booked to. Fetched rather
     /// than hard-coded, because the chart is data and a shop may extend it.
     pub var ref_expense_accounts: [doc.Doc]
+    /// The whole chart, for the journal filter's account picker.
+    pub var ref_accounts: [doc.Doc]
+    /// Open supplier invoices, for the cancel picker.
+    pub var ref_invoices: [doc.Doc]
     pub var ref_settings: doc.Doc
     pub var subject: doc.Doc
     pub var subject_lines: [doc.Doc]
@@ -455,6 +459,12 @@ pub struct App {
     /// Which account the general ledger is open at, reached by touching a row
     /// of the trial balance.
     pub var books_account: str
+    /// What the journal is narrowed to. Kept beside the window for the same
+    /// reason: a filter that resets every time you look at another sheet is a
+    /// filter nobody uses twice.
+    pub var journal_cause: str
+    pub var journal_account: str
+    pub var journal_query: str
 
     pub var trouble: str
     pub var notice: str
@@ -482,6 +492,8 @@ pub fn holding(root: dom.Element, view: html.Mounted) -> App {
         ref_products: [],
         ref_registers: [],
         ref_expense_accounts: [],
+        ref_accounts: [],
+        ref_invoices: [],
         ref_settings: doc.nothing(),
         subject: doc.nothing(),
         subject_lines: [],
@@ -489,6 +501,9 @@ pub fn holding(root: dom.Element, view: html.Mounted) -> App {
         books_view: "summary",
         books_window: "30",
         books_account: "",
+        journal_cause: "",
+        journal_account: "",
+        journal_query: "",
         trouble: "",
         notice: "",
         busy: false,
@@ -668,6 +683,14 @@ pub fn took_expense_accounts(var app: App, accounts: [doc.Doc]) {
     app.ref_expense_accounts = accounts
 }
 
+pub fn took_accounts(var app: App, accounts: [doc.Doc]) {
+    app.ref_accounts = accounts
+}
+
+pub fn took_invoices(var app: App, invoices: [doc.Doc]) {
+    app.ref_invoices = invoices
+}
+
 pub fn took_settings(var app: App, settings: doc.Doc) {
     app.ref_settings = settings
 }
@@ -724,6 +747,12 @@ pub fn show_books(var app: App, view: str) {
 
 pub fn set_books_window(var app: App, name: str) {
     app.books_window = name
+}
+
+pub fn filter_journal(var app: App, cause: str, code: str, q: str) {
+    app.journal_cause = cause
+    app.journal_account = code
+    app.journal_query = q
 }
 
 pub fn open_account(var app: App, code: str) {

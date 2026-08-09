@@ -723,7 +723,14 @@ body:has(.shade) .scroll { overflow: hidden; }
  * rail, no navigation, no card the reader was not looking at.
  */
 @media print {
-  .rail, .page-head, .buttons, .detail, .card, .trouble-bar, .shade { display: none !important; }
+  .rail, .page-head, .buttons, .trouble-bar, .shade { display: none !important; }
+  /* A page with a receipt on it prints the receipt and nothing else. Any other
+   * page prints its cards — which is what an accounting sheet *is*, and the
+   * blanket `.card { display: none }` that used to be here meant printing the
+   * trial balance produced an empty sheet of paper. */
+  .page:has(.receipt-card) .card,
+  .page:has(.receipt-card) .detail { display: none !important; }
+  .card { break-inside: avoid; box-shadow: none; background: #fff; }
   .receipt-card { display: block; padding: 0; }
   .receipt { width: auto; padding: 0; }
   html, body, .office, .page, .scroll, .inner { display: block; height: auto; background: #fff; }
