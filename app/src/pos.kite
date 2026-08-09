@@ -22,6 +22,7 @@
 use std/crypto
 use std/dom
 use std/html
+use std/window
 use api
 use browser
 use doc
@@ -85,7 +86,7 @@ fn submit_pin(app: store.App) {
 }
 
 async fn do_sign_in(app: store.App, pin: str) {
-    let lane = or_else(browser.kept("kite-pos.register"), "reg_1")
+    let lane = or_else(window.kept("kite-pos.register"), "reg_1")
     let (session, err) = await api.sign_in_with_pin(pin, lane)
     if err != nil {
         store.signing_in(app, false)
@@ -985,7 +986,7 @@ pub fn main() {
         return
     }
 
-    let lang = i18n.of_code(or_else(browser.kept("kite-pos.lang"), "en"))
+    let lang = i18n.of_code(or_else(window.kept("kite-pos.lang"), "en"))
     let app = store.holding(root, mounted, lang)
     repaint(app)
 
@@ -1006,7 +1007,7 @@ pub fn main() {
 
     browser.register_worker("/sw.js")
 
-    let token = browser.kept("kite-pos.token")
+    let token = window.kept("kite-pos.token")
     if token != nil {
         resume(app, token)
     }

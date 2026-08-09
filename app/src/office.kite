@@ -13,6 +13,7 @@
 
 use std/dom
 use std/html
+use std/window
 use api
 use browser
 use desk
@@ -163,7 +164,7 @@ async fn load_refs(app: desk.App) {
         // Seed from the shop's own `locale.default` when nobody at this desk
         // has chosen yet. The setting has been on the wire since the first
         // build and nothing has ever read it.
-        if browser.kept("kite-office.lang") == nil {
+        if window.kept("kite-office.lang") == nil {
             let code = doc.text(values, "locale.default", "en")
             desk.set_lang(app, i18n.of_code(code))
             repaint(app)
@@ -1517,7 +1518,7 @@ async fn open_close_lane(app: desk.App, id: str) {
 // ---- events ----------------------------------------------------------------
 
 fn arrived(app: desk.App) {
-    let wanted = desk.screen_of(browser.hash())
+    let wanted = desk.screen_of(window.hash())
     desk.go(app, wanted)
     if app.session == nil {
         repaint(app)
@@ -1619,11 +1620,11 @@ pub fn main() {
     // chose it, and the shop's setting is only ever the starting point. The
     // key is the office's own — a manager reading မြန်မာ at the desk should
     // not silently switch every lane in the building.
-    let kept = browser.kept("kite-office.lang")
+    let kept = window.kept("kite-office.lang")
     if kept != nil {
         desk.set_lang(app, i18n.of_code(kept))
     }
-    desk.go(app, desk.screen_of(browser.hash()))
+    desk.go(app, desk.screen_of(window.hash()))
     repaint(app)
 
     let (_, cerr) = dom.on(root, "click", |e: dom.Event| { clicked(app, e) })
@@ -1648,7 +1649,7 @@ pub fn main() {
 
     browser.register_worker("/sw.js")
 
-    let token = browser.kept("kite-office.token")
+    let token = window.kept("kite-office.token")
     if token != nil {
         resume(app, token)
     }

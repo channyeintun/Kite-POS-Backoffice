@@ -12,6 +12,7 @@
 
 use std/http
 use std/errors
+use std/window
 use doc
 use model
 use browser
@@ -260,17 +261,17 @@ pub async fn grid(token: str) -> (doc.Doc, error) {
 }
 
 pub async fn search(token: str, q: str) -> (doc.Doc, error) {
-    return await get(token, "/till/search?q=\(browser.escaped(q))")
+    return await get(token, "/till/search?q=\(window.escaped(q))")
 }
 
 pub async fn price_check(token: str, code: str) -> (doc.Doc, error) {
-    return await get(token, "/till/price/\(browser.escaped(code))")
+    return await get(token, "/till/price/\(window.escaped(code))")
 }
 
 // ---- the rest of the till's command bar ------------------------------------
 
 pub async fn customers_at_till(token: str, q: str) -> (doc.Doc, error) {
-    return await get(token, "/till/customers?q=\(browser.escaped(q))")
+    return await get(token, "/till/customers?q=\(window.escaped(q))")
 }
 
 pub async fn set_customer(token: str, customer_id: str) -> (doc.Doc, error) {
@@ -287,7 +288,7 @@ pub async fn new_customer(token: str, name: str, phone: str) -> (doc.Doc, error)
 }
 
 pub async fn receipts(token: str, q: str) -> (doc.Doc, error) {
-    return await get(token, "/till/receipts?q=\(browser.escaped(q))")
+    return await get(token, "/till/receipts?q=\(window.escaped(q))")
 }
 
 pub async fn receipt(token: str, id: str) -> (doc.Doc, error) {
@@ -348,7 +349,7 @@ pub async fn lanes(token: str) -> (doc.Doc, error) {
 }
 
 pub async fn products(token: str, q: str) -> (doc.Doc, error) {
-    return await get(token, "/catalog/products?q=\(browser.escaped(q))")
+    return await get(token, "/catalog/products?q=\(window.escaped(q))")
 }
 
 pub async fn inventory(token: str) -> (doc.Doc, error) {
@@ -465,7 +466,7 @@ pub async fn add_barcode(token: str, product_id: str, body: doc.Doc) -> (doc.Doc
 }
 
 pub async fn drop_barcode(token: str, barcode: str) -> (doc.Doc, error) {
-    return await remove(token, "/catalog/barcodes/\(browser.escaped(barcode))")
+    return await remove(token, "/catalog/barcodes/\(window.escaped(barcode))")
 }
 
 pub async fn save_category(token: str, id: str, body: doc.Doc) -> (doc.Doc, error) {
@@ -570,7 +571,7 @@ pub async fn adjust_stock(token: str, body: doc.Doc) -> (doc.Doc, error) {
 }
 
 pub async fn movements(token: str, from: int, product_id: str) -> (doc.Doc, error) {
-    return await get(token, "/inventory/movements?from=\(from)&product_id=\(browser.escaped(product_id))")
+    return await get(token, "/inventory/movements?from=\(from)&product_id=\(window.escaped(product_id))")
 }
 
 pub async fn shift(token: str, id: str) -> (doc.Doc, error) {

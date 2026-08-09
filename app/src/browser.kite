@@ -1,78 +1,60 @@
-//! Storage, the clock, the address bar — the host, behind a typed door.
+//! What the browser has that `std/window` does not.
 //!
-//! Everything above this file talks about sessions and routes and never about
-//! `localStorage`. `JsValue` does not leave this module, for the same reason it
-//! does not leave `doc.kite`: the field is unmarked, so outside here a handle
-//! can be held and passed but not read.
+//! Storage, the address bar, timers and the wall clock come from `std/window`
+//! now, and the calendar from `std/time` — every one of them used to be
+//! written out in this file over `std/js`. What is left is this shop's own:
+//! the parts of a page a till touches, a receipt printed by printing the page,
+//! and the two transfers that carry a credential.
+//!
+//! The wrappers that remain over `std/window` are here for one reason each,
+//! and it is always the same reason: the standard library hands an error back
+//! and **this application's answer is to write it down and carry on**. A till
+//! with a queue at it does not stop because a browser refused to remember
+//! something. That decision belongs in one place rather than at each of the
+//! twenty call sites Kite would otherwise make test it.
 
 use std/js
 use std/math
 use std/dom
+use std/time
+use std/window
 
-fn window() -> JsValue {
-    return js.global("window")
-}
+// ---- the clock ---------------------------------------------------------------
+//
+// **The API speaks seconds and `std/window` speaks milliseconds**, so the
+// conversion lives here rather than being remembered at each call site.
+//
+// Every reading below is rendered in the device's own zone, which is the
+// shop's. `std/time` takes that as a parameter rather than reading it, so it
+// is passed in once here — and the reports now agree with the screen about
+// which day it is. They did not: `iso_day` was `toISOString`, which is UTC,
+// while `day_of` and `clock_of` read local fields. A sale rung up after seven
+// in the evening in Yangon was shown on one day and filed under the next.
 
-// ---- the clock -------------------------------------------------------------
-
-/// A no-argument method call whose answer is a number, or 0.
-///
-/// The host is untyped and every crossing can fail, so the checking is done
-/// once here rather than four times in each of the date functions below. Kite
-/// will not let a `(T, error)` be used before the error is tested and will not
-/// let the error be dropped with `_`, which is what made writing it any other
-/// way impossible — correctly.
-fn number_from(target: JsValue, method: str) -> int {
-    let (value, err) = js.call0(target, method)
-    if err != nil {
-        return 0
-    }
-    let (n, nerr) = js.as_num(value)
-    if nerr != nil {
-        return 0
-    }
-    return math.round_to(n)
-}
-
-fn date_at(epoch: int) -> Option<JsValue> {
-    let (date, err) = js.new1("Date", js.of_num((epoch * 1000) as float))
-    if err != nil {
-        return nil
-    }
-    return date
+/// Minutes east of UTC, as the device believes them.
+fn here() -> int {
+    return window.timezone_offset()
 }
 
 /// Seconds since the epoch, which is the unit the API speaks in.
 pub fn now() -> int {
-    return math.trunc_to(ticks() as float / 1000.0)
+    return window.epoch_ms() / 1000
 }
 
-/// Milliseconds, for measuring a gap rather than naming a moment.
-pub fn ticks() -> int {
-    return number_from(js.global("Date"), "now")
-}
-
-/// `hh:mm` in the device's own timezone, which is the shop's.
+/// `hh:mm` in the shop's own timezone.
 pub fn clock_of(epoch: int) -> str {
-    let date = date_at(epoch)
-    if date == nil {
-        return ""
-    }
-    let h = number_from(date, "getHours")
-    let m = number_from(date, "getMinutes")
-    return "\(pad2(h)):\(pad2(m))"
+    return time.hhmm(epoch * 1000, here())
 }
 
 /// `dd Mon`, for a status bar that has no room for a year.
+///
+/// The month names stay here rather than going into `std/time`, which formats
+/// no month it would have to choose a language for.
 pub fn day_of(epoch: int) -> str {
-    let date = date_at(epoch)
-    if date == nil {
-        return ""
-    }
+    let at = time.civil_of(epoch * 1000, here())
     let names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-    let index = clamp(number_from(date, "getMonth"), 0, 11)
-    return "\(number_from(date, "getDate")) \(names[index])"
+    return "\(at.day) \(names[clamp(at.month - 1, 0, 11)])"
 }
 
 /// A date the operator has to check an ID against, spelled out.
@@ -80,18 +62,8 @@ pub fn day_of(epoch: int) -> str {
 /// The dialog shows the minimum age *and this*, so nobody is doing arithmetic
 /// at the counter with a queue waiting.
 pub fn date_of(epoch: int) -> str {
-    let date = date_at(epoch)
-    if date == nil {
-        return ""
-    }
-    return "\(day_of(epoch)) \(number_from(date, "getFullYear"))"
+    return "\(day_of(epoch)) \(time.civil_of(epoch * 1000, here()).year)"
 }
-
-fn pad2(value: int) -> str {
-    return pad_start("\(value)", 2, "0")
-}
-
-// ---- listeners -------------------------------------------------------------
 
 /// `YYYY-MM-DD`, which is what a filename wants.
 ///
@@ -100,54 +72,112 @@ fn pad2(value: int) -> str {
 /// found again months later, so its name sorts in the only order that is
 /// unambiguous in every locale.
 pub fn iso_day(epoch: int) -> str {
-    let date = date_at(epoch)
-    if date == nil {
-        return "unknown"
-    }
-    let (value, err) = js.call0(date, "toISOString")
-    if err != nil {
-        return "unknown"
-    }
-    let (text, terr) = js.as_str(value)
-    if terr != nil {
-        return "unknown"
-    }
-    return text.slice(0, 10)
+    return time.iso_day(epoch * 1000, here())
 }
 
+/// The first and last second of a month written `2026-08`.
+pub fn month_bounds(month: str) -> [int] {
+    let parts = split(month.trim(), "-")
+    if parts.len() != 2 {
+        return []
+    }
+    let parsed_year = parse_int(parts[0])
+    let parsed_index = parse_int(parts[1])
+    if parsed_year == nil {
+        return []
+    }
+    if parsed_index == nil {
+        return []
+    }
+    // Narrowed by the tests above; bound to plain ints so the arithmetic below
+    // is ordinary arithmetic.
+    let year = parsed_year
+    let index = parsed_index
+    if index < 1 || index > 12 {
+        return []
+    }
+    return [
+        time.month_start(year, index, here()) / 1000,
+        time.month_end(year, index, here()) / 1000,
+    ]
+}
+
+// ---- listeners and timers ------------------------------------------------------
+
+/// Listen to the window, and let the page carry on if it refuses.
 pub fn on_window(name: str, handler: fn()) {
-    let bound = js.func(|raw: JsValue| { handler() })
-    let (_, err) = js.call2(window(), "addEventListener", js.of_str(name), bound)
+    let (_, err) = window.on(name, handler)
     if err != nil {
         io.error("browser: no \(name) listener: \(err.message())")
     }
 }
 
-/// Run something later.
-///
-/// `setTimeout` and never `requestAnimationFrame`: a background tab does not
-/// run frame callbacks, so a "a frame is already booked" flag set in one is
-/// never cleared and every later call is dropped — in a tab somebody comes back
-/// to and finds frozen. A till is left on a counter all day; this matters.
-pub fn after(ms: int, handler: fn()) {
-    let bound = js.func(|raw: JsValue| { handler() })
-    let (_, err) = js.call2(window(), "setTimeout", bound, js.of_num(ms as float))
-    if err != nil {
-        io.error("browser: could not defer: \(err.message())")
-    }
-}
-
 /// Run something on a fixed interval, for the heartbeat that keeps a lane's
 /// "last seen" honest in the back office.
+///
+/// The timer is dropped rather than kept, because this one runs for as long as
+/// the page does — there is no moment at which the back office stops wanting
+/// to know which lanes are awake.
 pub fn every(ms: int, handler: fn()) {
-    let bound = js.func(|raw: JsValue| { handler() })
-    let (_, err) = js.call2(window(), "setInterval", bound, js.of_num(ms as float))
+    let (_, err) = window.every(ms, handler)
     if err != nil {
         io.error("browser: could not set an interval: \(err.message())")
     }
 }
 
+// ---- remembering, and where we are ---------------------------------------------
+//
+// Reading needs no wrapper — `window.kept` and `window.hash` are called
+// directly wherever they are wanted. Writing does, because each of these can
+// fail and none of them is worth a failed sale.
+
+pub fn keep(key: str, value: str) {
+    let err = window.keep(key, value)
+    if err != nil {
+        io.error("browser: could not keep \(key)")
+    }
+}
+
+pub fn drop_kept(key: str) {
+    let err = window.drop_kept(key)
+    if err != nil {
+        io.error("browser: could not drop \(key)")
+    }
+}
+
+pub fn set_hash(fragment: str) {
+    let err = window.set_hash(fragment)
+    if err != nil {
+        io.error("browser: could not navigate")
+    }
+}
+
+/// The browser's own print dialog.
+///
+/// A receipt is printed by printing the page: `@media print` in the stylesheet
+/// drops the rail, the header and every card except the receipt itself, so
+/// there is nothing here to build.
+pub fn print_page() {
+    let err = window.print_page()
+    if err != nil {
+        io.error("browser: could not print")
+    }
+}
+
+/// Ask the browser to install the service worker.
+pub fn register_worker(path: str) {
+    let err = window.register_worker(path)
+    if err != nil {
+        io.error("browser: no service worker: \(err.message())")
+    }
+}
+
+// ---- the page a till touches -----------------------------------------------------
+
 /// The nearest ancestor matching a selector, including the element itself.
+///
+/// Not in `std/dom`, which has no `closest` — the one function of the twelve
+/// both applications shared that still has no home in the standard library.
 pub fn closest(e: dom.Element, selector: str) -> Option<dom.Element> {
     let (found, err) = js.call1(dom.raw(e), "closest", js.of_str(selector))
     if err != nil {
@@ -218,198 +248,6 @@ pub fn set_document_lang(tag: str) {
     let serr = js.set(root, "lang", js.of_str(tag))
     if serr != nil {
         io.error("browser: could not set the document language")
-    }
-}
-
-/// The browser's own print dialog.
-///
-/// A receipt is printed by printing the page: `@media print` in the stylesheet
-/// drops the rail, the header and every card except the receipt itself, so
-/// there is nothing here to build.
-pub fn print_page() {
-    let (_, err) = js.call0(window(), "print")
-    if err != nil {
-        io.error("browser: could not print")
-    }
-}
-
-/// The first and last second of a month written `2026-08`.
-///
-/// Done by the host's own calendar rather than by counting days, because month
-/// lengths and the shop's timezone are exactly the arithmetic nobody should
-/// write twice.
-pub fn month_bounds(month: str) -> [int] {
-    let parts = split(month.trim(), "-")
-    if parts.len() != 2 {
-        return []
-    }
-    let parsed_year = parse_int(parts[0])
-    let parsed_index = parse_int(parts[1])
-    if parsed_year == nil {
-        return []
-    }
-    if parsed_index == nil {
-        return []
-    }
-    // Narrowed by the tests above; bound to plain ints so the arithmetic below
-    // is ordinary arithmetic.
-    let year = parsed_year
-    let index = parsed_index
-    if index < 1 || index > 12 {
-        return []
-    }
-    let (from, ferr) = js.new3("Date", js.of_num(year as float),
-        js.of_num((index - 1) as float), js.of_num(1.0))
-    if ferr != nil {
-        return []
-    }
-    let (to, terr) = js.new3("Date", js.of_num(year as float),
-        js.of_num(index as float), js.of_num(1.0))
-    if terr != nil {
-        return []
-    }
-    let starts = number_from(from, "getTime")
-    let ends = number_from(to, "getTime")
-    return [math.trunc_to(starts as float / 1000.0), math.trunc_to(ends as float / 1000.0) - 1]
-}
-
-/// Percent-encoded, for a query string.
-pub fn escaped(text: str) -> str {
-    let (value, err) = js.call1(js.global("globalThis"), "encodeURIComponent", js.of_str(text))
-    if err != nil {
-        return ""
-    }
-    let (body, terr) = js.as_str(value)
-    if terr != nil {
-        return ""
-    }
-    return body
-}
-
-// ---- where we are ----------------------------------------------------------
-
-fn location() -> JsValue {
-    return js.global("location")
-}
-
-pub fn hash() -> str {
-    let (value, err) = js.get(location(), "hash")
-    if err != nil {
-        return ""
-    }
-    let (body, terr) = js.as_str(value)
-    if terr != nil {
-        return ""
-    }
-    return body
-}
-
-pub fn set_hash(fragment: str) {
-    let err = js.set(location(), "hash", js.of_str(fragment))
-    if err != nil {
-        io.error("browser: could not navigate")
-    }
-}
-
-pub fn go_to(url: str) {
-    let (_, err) = js.call1(location(), "assign", js.of_str(url))
-    if err != nil {
-        io.error("browser: could not leave")
-    }
-}
-
-// ---- storage ---------------------------------------------------------------
-//
-// `localStorage` rather than `sessionStorage`, unlike a reader's cache: a till
-// is a device that belongs to the shop, and a cashier who reloads the page
-// mid-shift should not have to sign in again. The session token has a server
-// expiry, which is the thing actually bounding it.
-
-fn storage() -> Option<JsValue> {
-    let value = js.global("localStorage")
-    if js.is_nothing(value) {
-        return nil
-    }
-    return value
-}
-
-pub fn kept(key: str) -> Option<str> {
-    let store = storage()
-    if store == nil {
-        return nil
-    }
-    let (value, err) = js.call1(store, "getItem", js.of_str(key))
-    if err != nil {
-        return nil
-    }
-    if js.is_nothing(value) {
-        return nil
-    }
-    let (body, terr) = js.as_str(value)
-    if terr != nil {
-        return nil
-    }
-    return body
-}
-
-pub fn keep(key: str, value: str) {
-    let store = storage()
-    if store == nil {
-        return
-    }
-    let (_, err) = js.call2(store, "setItem", js.of_str(key), js.of_str(value))
-    if err != nil {
-        // A full or disabled store is not worth stopping a sale over.
-        io.error("browser: could not keep \(key)")
-    }
-}
-
-pub fn drop_kept(key: str) {
-    let store = storage()
-    if store == nil {
-        return
-    }
-    let (_, err) = js.call1(store, "removeItem", js.of_str(key))
-    if err != nil {
-        io.error("browser: could not drop \(key)")
-    }
-}
-
-// ---- the network -----------------------------------------------------------
-
-/// Whether the device believes it has a connection.
-///
-/// `navigator.onLine` is famously optimistic — it says true for a device
-/// attached to a router with no internet behind it — so this is the *cheap*
-/// signal and never the authority. What the status dot actually reports is
-/// whether the last request to the Worker succeeded, which `api.kite` records.
-pub fn seems_online() -> bool {
-    let (value, err) = js.get(js.global("navigator"), "onLine")
-    if err != nil {
-        return true
-    }
-    let (online, berr) = js.as_bool(value)
-    if berr != nil {
-        return true
-    }
-    return online
-}
-
-/// Ask the browser to install the service worker.
-///
-/// Registered from Kite rather than from a `<script>` in the page, so the whole
-/// program including its offline story is in one language.
-pub fn register_worker(path: str) {
-    let (workers, err) = js.get(js.global("navigator"), "serviceWorker")
-    if err != nil {
-        return
-    }
-    if js.is_nothing(workers) {
-        return
-    }
-    let (_, rerr) = js.call1(workers, "register", js.of_str(path))
-    if rerr != nil {
-        io.error("browser: no service worker: \(rerr.message())")
     }
 }
 
@@ -561,7 +399,7 @@ pub fn upload_photo(url: str, token: str, input: dom.Element,
         return
     }
 
-    let (promise, perr) = js.call2(window(), "fetch", js.of_str(url), init)
+    let (promise, perr) = js.call2(window.raw(), "fetch", js.of_str(url), init)
     if perr != nil {
         failed("the request did not go out")
         return

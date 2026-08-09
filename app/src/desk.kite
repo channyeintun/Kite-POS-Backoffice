@@ -19,6 +19,7 @@
 
 use std/dom
 use std/html
+use std/window
 use doc
 use i18n
 use model
