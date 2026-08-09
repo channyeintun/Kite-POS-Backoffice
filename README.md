@@ -403,6 +403,17 @@ Stated rather than implied:
   an idempotency key that was written and never read. All fixed, each with a
   regression check. Worth reading before extending this: the same mistakes are
   the ones easiest to make again.
+- **A dispatch table is a `match`; a condition stays an `if`.** A sweep over
+  every Kite file found 65 chains and 203 branches, and forty of them were
+  conditions wearing a chain's shape — nil checks, length tests, `starts_with`
+  predicates. Two of the large ones survive as `if` deliberately: `pressed()`
+  and `clicked()` each have arms that do not return, and converting them drops
+  a command silently. Two rules the compiler taught rather than the spec: a
+  bare `return` is a statement, so an arm that leaves the function must be a
+  block; and an arm ending in a call to an `async fn` yields that call's
+  `Task<()>`, which will not unify with a sibling arm's `()` — keeping the
+  arm's `return` is what makes it diverge instead.
+
 - **`npm run check` validates the emitted WebAssembly**, not just the types.
   `kitec` checking clean is not the same as a module the engine will load — this
   build hit a codegen bug where it wasn't, and nothing caught it until the page

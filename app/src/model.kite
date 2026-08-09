@@ -21,13 +21,13 @@ pub enum Role {
 }
 
 pub fn role_of(code: str) -> Role {
-    if code == "owner" {
-        return Role.Owner
+    return match code {
+        "owner" => Role.Owner,
+        "manager" => Role.Manager,
+        // The least privilege is the default, so an unknown role can only ever
+        // lose a command rather than gain one.
+        _ => Role.SaleStaff,
     }
-    if code == "manager" {
-        return Role.Manager
-    }
-    return Role.SaleStaff
 }
 
 pub fn is_manager(r: Role) -> bool {

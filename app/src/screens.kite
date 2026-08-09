@@ -388,7 +388,11 @@ pub fn tills(answer: doc.Doc, audit: doc.Doc, l: i18n.Lang, c: money.Currency) -
                 id: doc.text(lane, "id", ""),
                 name: doc.text(lane, "name", ""),
                 state: lane_state_of(l, state),
-                tone: if state == "open" { "ok" } else if state == "offline" { "warn" } else { "" },
+                tone: match state {
+                    "open" => "ok",
+                    "offline" => "warn",
+                    _ => "",
+                },
                 initials: if operator.len() > 0 { desk.initials_of(operator) } else { "—" },
                 operator: if operator.len() > 0 { operator } else { words.t(l, "tills.unattended") },
                 since: if open {
@@ -1021,7 +1025,11 @@ pub fn purchasing(sheet: doc.Doc, orders: doc.Doc, payables: doc.Doc,
                     "\(doc.int_of(o, "lines", 0))",
                     cash(o, "total", c),
                     browser.day_of(doc.int_of(o, "created_at", 0)),
-                ], if status == "received" { "ok" } else if status == "draft" { "" } else { "warn" },
+                ], match status {
+                    "received" => "ok",
+                    "draft" => "",
+                    _ => "warn",
+                },
                 "open-order", doc.text(o, "id", "")))
     }
 
@@ -1129,7 +1137,11 @@ pub fn order_detail(answer: doc.Doc, l: i18n.Lang, c: money.Currency) -> [desk.B
         desk.Fact{ label: words.t(l, "common.supplier"),
             value: doc.text(order, "supplier_name", ""), tone: "" },
         desk.Fact{ label: words.t(l, "common.status"), value: order_status_of(l, status),
-            tone: if status == "received" { "ok" } else if status == "draft" { "" } else { "warn" } },
+            tone: match status {
+                "received" => "ok",
+                "draft" => "",
+                _ => "warn",
+            } },
         desk.Fact{ label: words.t(l, "common.total"), value: cash(order, "total", c), tone: "" },
         desk.Fact{ label: words.t(l, "purchasing.raised"),
             value: browser.day_of(doc.int_of(order, "created_at", 0)), tone: "" },
@@ -1255,7 +1267,11 @@ pub fn staff(answer: doc.Doc, l: i18n.Lang) -> [desk.Block] {
                     allowance_of(l, may),
                     allowance_of(l, doc.text(m, "manager", "")),
                     confirm_of(l, doc.text(m, "confirm", "")),
-                ], if may == "no" { "stop" } else if may == "pin" { "warn" } else { "ok" }))
+                ], match may {
+                    "no" => "stop",
+                    "pin" => "warn",
+                    _ => "ok",
+                }))
     }
     return [
         desk.Block.Note(heading: words.t(l, "nav.staff_access"),
@@ -1622,13 +1638,14 @@ fn books_chrome(view: str, win: str, l: i18n.Lang) -> [desk.Block] {
     // Two buttons that belong to one sheet each rather than to the chrome: a
     // filter with nothing to filter, and an opening balance offered from a
     // trial balance, are both noise.
-    if view == "journal" {
-        actions.push(desk.action(words.t(l, "accounting.filter_the_journal"),
-                "books-filter", "", "soft"))
-    }
-    if view == "summary" {
-        actions.push(desk.action(words.t(l, "accounting.opening_balances"),
-                "books-opening", "", "quiet"))
+    match view {
+        "journal" => actions.push(desk.action(words.t(l, "accounting.filter_the_journal"),
+                "books-filter", "", "soft")),
+        "summary" => actions.push(desk.action(words.t(l, "accounting.opening_balances"),
+                "books-opening", "", "quiet")),
+        // Every other sheet gets neither, which is what the two `if`s said by
+        // not having an `else`.
+        _ => {},
     }
     actions.push(desk.action(words.t(l, "common.print"), "print", "", "quiet"))
     actions.push(desk.action(words.t(l, "accounting.export_this_sheet"),
@@ -2037,25 +2054,21 @@ fn books_periods(summary: doc.Doc, l: i18n.Lang, c: money.Currency) -> [desk.Blo
 pub fn accounting(view: str, win: str, data: doc.Doc, code: str,
     l: i18n.Lang, c: money.Currency) -> [desk.Block] {
     var blocks = books_chrome(view, win, l)
-    var body: [desk.Block] = []
-    if view == "pl" {
-        body = books_pl(doc.field(data, "pl"), win, l, c)
-    } else if view == "balance" {
-        body = books_balance(doc.field(data, "sheet"), l, c)
-    } else if view == "trial" {
-        body = books_trial(doc.field(data, "trial"), win, l, c)
-    } else if view == "ledger" {
-        body = books_ledger(doc.field(data, "ledger"), code, win, l, c)
-    } else if view == "journal" {
-        body = books_journal(doc.field(data, "journal"), win, l, c)
-    } else if view == "accounts" {
-        body = books_accounts(doc.field(data, "accounts"), l, c)
-    } else if view == "periods" {
-        body = books_periods(doc.field(data, "summary"), l, c)
-    } else {
-        body = books_summary(doc.field(data, "summary"), doc.field(data, "pl"),
+    // Every arm is one call, so this is a value-position match with expression
+    // arms — `body` is bound once rather than assigned in eight branches.
+    let body = match view {
+        "pl" => books_pl(doc.field(data, "pl"), win, l, c),
+        "balance" => books_balance(doc.field(data, "sheet"), l, c),
+        "trial" => books_trial(doc.field(data, "trial"), win, l, c),
+        "ledger" => books_ledger(doc.field(data, "ledger"), code, win, l, c),
+        "journal" => books_journal(doc.field(data, "journal"), win, l, c),
+        "accounts" => books_accounts(doc.field(data, "accounts"), l, c),
+        "periods" => books_periods(doc.field(data, "summary"), l, c),
+        // Summary is the default sheet, so it is also the sheet an unknown
+        // view falls to rather than an empty page.
+        _ => books_summary(doc.field(data, "summary"), doc.field(data, "pl"),
             doc.field(data, "sheet"), doc.field(data, "health"),
-            doc.field(data, "payables"), win, l, c)
+            doc.field(data, "payables"), win, l, c),
     }
     for b in body {
         blocks.push(b)

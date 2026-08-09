@@ -203,24 +203,29 @@ fn settle(app: store.App, answer: doc.Doc) {
     // A 422 is a step in the sale rather than a failure of one: the till is
     // being told it needs ID, or a price, before this item can go on.
     let needs = doc.text(answer, "needs", "")
-    if needs == "age_check" {
-        let product = doc.field(answer, "product")
-        store.show(app, store.Overlay.AgeCheck(
-                name: doc.text(product, "name", ""),
-                min_age: doc.int_of(answer, "min_age", 18),
-                born_before: doc.int_of(answer, "born_on_or_before", 0),
-                code: "",
-                product_id: doc.text(product, "id", "")))
-        repaint(app)
-        return
-    }
-    if needs == "price" {
-        let product = doc.field(answer, "product")
-        store.show(app, store.Overlay.AskPrice(
-                name: doc.text(product, "name", ""),
-                product_id: doc.text(product, "id", "")))
-        repaint(app)
-        return
+    // The tail below is the no-tag path and stays outside: an answer with no
+    // `needs` on it is an ordinary basket, and both arms above end the call.
+    match needs {
+        "age_check" => {
+            let product = doc.field(answer, "product")
+            store.show(app, store.Overlay.AgeCheck(
+                    name: doc.text(product, "name", ""),
+                    min_age: doc.int_of(answer, "min_age", 18),
+                    born_before: doc.int_of(answer, "born_on_or_before", 0),
+                    code: "",
+                    product_id: doc.text(product, "id", "")))
+            repaint(app)
+            return
+        },
+        "price" => {
+            let product = doc.field(answer, "product")
+            store.show(app, store.Overlay.AskPrice(
+                    name: doc.text(product, "name", ""),
+                    product_id: doc.text(product, "id", "")))
+            repaint(app)
+            return
+        },
+        _ => {},
     }
 
     store.took_basket(app, model.basket_of(answer))
@@ -423,70 +428,82 @@ async fn do_pay(app: store.App) {
 // ---- what a touch means ----------------------------------------------------
 
 fn command(app: store.App, id: str) {
-    if id == "hold" {
-        store.show(app, store.Overlay.Confirm(purpose: "hold",
-                message: i18n.t(app.lang, "label")))
-        repaint(app)
-        return
-    }
-    if id == "held" {
-        load_held(app)
-        return
-    }
-    if id == "price_check" {
-        let code = field_value("#scan")
-        if code.len() == 0 {
-            store.went_wrong(app, i18n.t(app.lang, "scan_hint"))
+    // **Every arm returns.** Not decoration: an arm whose last expression is a
+    // call to an `async fn` yields that call's `Task<()>`, and a `match` needs
+    // one type across its arms — so `load_held(app)` alone made this arm a
+    // `Task<()>` against the others' `()`. A returning arm diverges instead,
+    // which unifies with anything and is the shape the spec's own `fn area`
+    // example uses. The nested guards inside `price_check` and `discount` are
+    // their own — they belong to those arms, not to the table.
+    match id {
+        "hold" => {
+            store.show(app, store.Overlay.Confirm(purpose: "hold",
+                    message: i18n.t(app.lang, "label")))
             repaint(app)
             return
-        }
-        browser.clear_and_focus("#scan")
-        do_price_check(app, code)
-        return
-    }
-    if id == "void_sale" {
-        store.show(app, store.Overlay.Confirm(purpose: "void_sale",
-                message: i18n.t(app.lang, "reason")))
-        repaint(app)
-        return
-    }
-    if id == "discount" {
-        let line = last(app.basket.lines)
-        if line == nil {
+        },
+        "held" => {
+            load_held(app)
             return
-        }
-        store.show(app, store.Overlay.Keypad(purpose: "discount", line_id: line.id,
-                title: "\(i18n.t(app.lang, "discount")) · \(line.name)"))
-        repaint(app)
-        return
-    }
-    if id == "customer" {
-        store.show(app, store.Overlay.Customers)
-        repaint(app)
-        browser.focus("#who")
-        load_customers(app, "")
-        return
-    }
-    if id == "return" {
-        store.show(app, store.Overlay.Receipts)
-        repaint(app)
-        browser.focus("#receipt")
-        load_receipts(app, "")
-        return
-    }
-    if id == "no_sale" {
-        // Manager-only and logged to the shift: the drawer coming open outside
-        // a transaction is the single most useful line in an audit trail.
-        store.show(app, store.Overlay.Confirm(purpose: "no_sale",
-                message: i18n.t(app.lang, "why")))
-        repaint(app)
-        return
-    }
-    if id == "close_lane" {
-        store.show(app, store.Overlay.Keypad(purpose: "close_lane", line_id: "",
-                title: i18n.t(app.lang, "counted")))
-        repaint(app)
-        return
+        },
+        "price_check" => {
+            let code = field_value("#scan")
+            if code.len() == 0 {
+                store.went_wrong(app, i18n.t(app.lang, "scan_hint"))
+                repaint(app)
+                return
+            }
+            browser.clear_and_focus("#scan")
+            do_price_check(app, code)
+            return
+        },
+        "void_sale" => {
+            store.show(app, store.Overlay.Confirm(purpose: "void_sale",
+                    message: i18n.t(app.lang, "reason")))
+            repaint(app)
+            return
+        },
+        "discount" => {
+            let line = last(app.basket.lines)
+            if line == nil {
+                return
+            }
+            store.show(app, store.Overlay.Keypad(purpose: "discount", line_id: line.id,
+                    title: "\(i18n.t(app.lang, "discount")) · \(line.name)"))
+            repaint(app)
+            return
+        },
+        "customer" => {
+            store.show(app, store.Overlay.Customers)
+            repaint(app)
+            browser.focus("#who")
+            load_customers(app, "")
+            return
+        },
+        "return" => {
+            store.show(app, store.Overlay.Receipts)
+            repaint(app)
+            browser.focus("#receipt")
+            load_receipts(app, "")
+            return
+        },
+        "no_sale" => {
+            // Manager-only and logged to the shift: the drawer coming open outside
+            // a transaction is the single most useful line in an audit trail.
+            store.show(app, store.Overlay.Confirm(purpose: "no_sale",
+                    message: i18n.t(app.lang, "why")))
+            repaint(app)
+            return
+        },
+        "close_lane" => {
+            store.show(app, store.Overlay.Keypad(purpose: "close_lane", line_id: "",
+                    title: i18n.t(app.lang, "counted")))
+            repaint(app)
+            return
+        },
+        // A command the matrix names but this build does not handle yet does
+        // nothing, which is what falling off the end of the chain did.
+        _ => {},
     }
 }
 
@@ -675,17 +692,16 @@ fn clicked(app: store.App, e: dom.Event) {
         return
     }
     if name == "tender" {
-        if id == "cash" {
-            store.choose_tender(app, model.Tender.Cash)
-        }
-        if id == "card" {
-            store.choose_tender(app, model.Tender.Card)
-        }
-        if id == "wallet" {
-            store.choose_tender(app, model.Tender.Wallet)
-        }
-        if id == "store_credit" {
-            store.choose_tender(app, model.Tender.StoreCredit)
+        // **The repaint stays outside.** These four arms do not return — the
+        // tail below runs whichever fires, and for an id none of them names it
+        // runs alone. Moving the repaint into the arms would stop an
+        // unrecognised tender redrawing at all, which is a real change.
+        match id {
+            "cash" => store.choose_tender(app, model.Tender.Cash),
+            "card" => store.choose_tender(app, model.Tender.Card),
+            "wallet" => store.choose_tender(app, model.Tender.Wallet),
+            "store_credit" => store.choose_tender(app, model.Tender.StoreCredit),
+            _ => {},
         }
         repaint(app)
         return
@@ -730,32 +746,39 @@ fn clicked(app: store.App, e: dom.Event) {
         if typed == nil {
             return
         }
-        if purpose == "qty" {
-            store.dismiss(app)
-            repaint(app)
-            do_qty(app, id, typed as float)
-            return
-        }
-        if purpose == "discount" {
-            // A discount is the "PIN" row of the command matrix: a cashier may
-            // take one with a manager's PIN entered at the lane, and a manager
-            // needs nobody. The till asks either way and the server decides.
-            store.show(app, store.Overlay.ManagerPin(purpose: "discount", line_id: id,
-                    amount: typed))
-            repaint(app)
-            return
-        }
-        if purpose == "override" {
-            store.show(app, store.Overlay.ManagerPin(purpose: "override", line_id: id,
-                    amount: typed))
-            repaint(app)
-            return
-        }
-        if purpose == "close_lane" {
-            store.show(app, store.Overlay.ManagerPin(purpose: "close_lane", line_id: "",
-                    amount: typed))
-            repaint(app)
-            return
+        // `typed` is narrowed by the guard above and every arm uses it, so it
+        // stays there. Note `close_lane` passes no line id — it is a drawer
+        // count, not a line amount.
+        match purpose {
+            "qty" => {
+                store.dismiss(app)
+                repaint(app)
+                do_qty(app, id, typed as float)
+                return
+            },
+            "discount" => {
+                // A discount is the "PIN" row of the command matrix: a cashier
+                // may take one with a manager's PIN entered at the lane, and a
+                // manager needs nobody. The till asks either way and the server
+                // decides.
+                store.show(app, store.Overlay.ManagerPin(purpose: "discount", line_id: id,
+                        amount: typed))
+                repaint(app)
+                return
+            },
+            "override" => {
+                store.show(app, store.Overlay.ManagerPin(purpose: "override", line_id: id,
+                        amount: typed))
+                repaint(app)
+                return
+            },
+            "close_lane" => {
+                store.show(app, store.Overlay.ManagerPin(purpose: "close_lane", line_id: "",
+                        amount: typed))
+                repaint(app)
+                return
+            },
+            _ => {},
         }
         return
     }
@@ -764,26 +787,36 @@ fn clicked(app: store.App, e: dom.Event) {
         let value = or_else(parse_int(or_else(dom.attribute(acted, "data-amount"), "0")), 0)
         store.dismiss(app)
         repaint(app)
-        if purpose == "void_sale" {
-            do_void_sale(app, "voided at the lane", pin)
-            return
+        // **The default is not a no-op.** Everything this does not name — today
+        // "discount" and "override" — goes to `do_adjust` with `purpose` as the
+        // kind, so the wildcard has to forward the scrutinee rather than fall
+        // silent. Spelling those two out instead would drop any adjust kind the
+        // server grows later.
+        match purpose {
+            "void_sale" => {
+                do_void_sale(app, "voided at the lane", pin)
+                return
+            },
+            "return" => {
+                // The reason was parked in `notice` when the operator confirmed
+                // the lines; it is the only thing that has to survive the PIN
+                // dialog.
+                do_return(app, id, app.notice, pin)
+                return
+            },
+            "no_sale" => {
+                do_no_sale(app, app.notice, pin)
+                return
+            },
+            "close_lane" => {
+                do_close_lane(app, value, pin)
+                return
+            },
+            _ => {
+                do_adjust(app, id, purpose, value, pin)
+                return
+            },
         }
-        if purpose == "return" {
-            // The reason was parked in `notice` when the operator confirmed the
-            // lines; it is the only thing that has to survive the PIN dialog.
-            do_return(app, id, app.notice, pin)
-            return
-        }
-        if purpose == "no_sale" {
-            do_no_sale(app, app.notice, pin)
-            return
-        }
-        if purpose == "close_lane" {
-            do_close_lane(app, value, pin)
-            return
-        }
-        do_adjust(app, id, purpose, value, pin)
-        return
     }
     if name == "confirm-ok" {
         let typed = field_value("#reason")
@@ -886,47 +919,54 @@ fn typed(app: store.App, e: dom.Event) {
     }
     let field = or_else(dom.attribute(hit, "id"), "")
 
-    if key == "Enter" {
-        if field == "scan" {
-            _ = dom.prevent_default(e)
-            scan_typed(app)
-            return
-        }
-        if field == "find" {
-            _ = dom.prevent_default(e)
-            do_search(app, field_value("#find"))
-            return
-        }
-        if field == "reason" {
-            return
-        }
-        return
-    }
-    if key == "Escape" {
-        store.dismiss(app)
-        repaint(app)
-        return
-    }
-    // Xstore maps every menu button to a function key, and a counter with a
-    // keyboard is faster for it. F2 is the commit, which is the one worth
-    // having under a finger.
-    if key == "F2" {
-        _ = dom.prevent_default(e)
-        if app.basket.lines.len() > 0 && app.mode == store.Mode.Sale {
-            store.go_to_mode(app, store.Mode.Tender)
+    // `prevent_default` is called per arm and deliberately not everywhere:
+    // Escape and every unnamed key are left to the browser, and so is Enter
+    // inside the reason box — which is why "reason" is its own empty arm rather
+    // than folded into the default.
+    match key {
+        "Enter" => {
+            match field {
+                "scan" => {
+                    _ = dom.prevent_default(e)
+                    scan_typed(app)
+                    return
+                },
+                "find" => {
+                    _ = dom.prevent_default(e)
+                    do_search(app, field_value("#find"))
+                    return
+                },
+                "reason" => { return },
+                _ => { return },
+            }
+        },
+        "Escape" => {
+            store.dismiss(app)
             repaint(app)
-        }
-        return
-    }
-    if key == "F3" {
-        _ = dom.prevent_default(e)
-        command(app, "hold")
-        return
-    }
-    if key == "F4" {
-        _ = dom.prevent_default(e)
-        command(app, "held")
-        return
+            return
+        },
+        // Xstore maps every menu button to a function key, and a counter with a
+        // keyboard is faster for it. F2 is the commit, which is the one worth
+        // having under a finger.
+        "F2" => {
+            _ = dom.prevent_default(e)
+            if app.basket.lines.len() > 0 && app.mode == store.Mode.Sale {
+                store.go_to_mode(app, store.Mode.Tender)
+                repaint(app)
+            }
+            return
+        },
+        "F3" => {
+            _ = dom.prevent_default(e)
+            command(app, "hold")
+            return
+        },
+        "F4" => {
+            _ = dom.prevent_default(e)
+            command(app, "held")
+            return
+        },
+        _ => {},
     }
 }
 

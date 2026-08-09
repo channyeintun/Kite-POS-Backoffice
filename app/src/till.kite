@@ -377,14 +377,14 @@ fn keypad(app: store.App, suffix: str) -> html.Node {
     ]
     for row in rows {
         for k in row {
-            if k == "back" {
-                keys.push(html.keyed("back\(suffix)", button("⌫", "key util",
-                            [html.data("action", "key"), html.data("id", "back")])))
-            } else if k == "clear" {
-                keys.push(html.keyed("clear\(suffix)", button(t(app, "clear"), "key util",
-                            [html.data("action", "key"), html.data("id", "clear")])))
-            } else {
-                keys.push(key_button(k, suffix, "key"))
+            match k {
+                "back" => keys.push(html.keyed("back\(suffix)", button("⌫", "key util",
+                            [html.data("action", "key"), html.data("id", "back")]))),
+                "clear" => keys.push(html.keyed("clear\(suffix)", button(t(app, "clear"),
+                            "key util",
+                            [html.data("action", "key"), html.data("id", "clear")]))),
+                // Everything else in `rows` is a digit.
+                _ => keys.push(key_button(k, suffix, "key")),
             }
         }
     }
