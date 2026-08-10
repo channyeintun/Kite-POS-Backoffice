@@ -432,11 +432,6 @@ Stated rather than implied:
   rest of the tablet work, so they are written down rather than half-done. The
   stacking rule at `max-width: 1331px` in `style.css` exists only because of
   the second one, and its comment says so.
-- **Phone landscape (844 × 390) is not a supported viewport.** Horizontal
-  overflow there is down to zero, but the status bar renders as a floating stub
-  because `#app { flex-direction: row }` leaves it a `flex: none` sibling. The
-  four tablet viewports and phone portrait are the ones that were verified.
-
 - **The currency defaults to MMK** with zero minor units, from the design
   documents. `currency.minor_units` changes it, but only before there is
   trading — it reinterprets every integer already stored, so it is a migration

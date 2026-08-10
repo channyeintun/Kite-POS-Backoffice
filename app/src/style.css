@@ -877,7 +877,21 @@ main.lane { display: flex; flex: 1; min-width: 0; min-height: 0; }
     overflow-x: hidden;
     overflow-y: auto;
   }
-  #app { flex-direction: row; }
+  /* The commands become a left rail here because a horizontal strip would eat
+   * a third of a 390 px-tall screen. But `#app` in `row` makes *every* child a
+   * column — and `.status` is one of them, so the status bar rendered as a
+   * 349 x 34 stub floating beside the rail instead of a bar across the top.
+   * The regions are never allowed to reorder, and that one had.
+   *
+   * Wrapping fixes it without touching the markup: the status takes a whole
+   * line to itself, and the rail and the work area share the next. Their
+   * height is stated rather than left to `align-content`, which distributes
+   * free space between lines and would leave a gap under the rail. */
+  #app { flex-direction: row; flex-wrap: wrap; }
+  .status { order: -2; width: 100%; flex: none; }
+  .commands, main.lane {
+    height: calc(100dvh - 34px - env(safe-area-inset-top));
+  }
   .command { min-width: 0; width: 100%; height: 52px; font-size: 11px; }
   .command-group { flex-direction: column; width: 100%; }
   .command-group.restricted { padding-left: 0; padding-top: 8px; border-left: 0; border-top: 1px solid var(--line); }
