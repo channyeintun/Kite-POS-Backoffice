@@ -656,6 +656,10 @@ pub async fn journal_filtered(token: str, from: int, to: int, ref_type: str,
         "/accounting/journal?from=\(from)&to=\(to)&ref_type=\(ref_type)&account_code=\(code)&q=\(q)")
 }
 
+pub async fn remove_category(token: str, id: str) -> (doc.Doc, error) {
+    return await send(token, "DELETE", "/catalog/categories/\(id)", "")
+}
+
 pub async fn cancel_invoice(token: str, id: str, body: doc.Doc) -> (doc.Doc, error) {
     return await post(token, "/purchasing/invoices/\(id)/cancel", body)
 }

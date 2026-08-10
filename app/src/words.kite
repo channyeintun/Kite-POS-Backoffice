@@ -308,6 +308,9 @@ fn english_ago(key: str) -> str {
 
 fn english_categories(key: str) -> str {
     return match key {
+        "categories.nothing_empty" => "Every category has something in it",
+        "categories.only_empty_can_go" => "Only a category with nothing in it can be removed. Move its products first — a receipt records the product, never the category it was filed under.",
+        "categories.remove_a_category" => "Remove a category",
         "categories.add_a_category" => "Add a category",
         "categories.add_category" => "Add category",
         "categories.colour" => "Colour",
@@ -880,6 +883,7 @@ fn english_product_detail(key: str) -> str {
 
 fn english_products(key: str) -> str {
     return match key {
+        "products.reorder_level" => "Reorder at",
         "products.take_photo" => "Take a photo",
         "products.save_first_for_a_photo" => "Save the product, then add a picture",
         "products.adjust_the_filters_or_add_your_first" => "Adjust the filters, or add your first product to get selling.",
@@ -1748,6 +1752,7 @@ fn english_title(key: str) -> str {
 
 fn english_toast(key: str) -> str {
     return match key {
+        "toast.category_removed" => "Category removed",
         "toast.photo_saved" => "Picture saved",
         "toast.account_deactivated" => "Account deactivated",
         "toast.account_reactivated" => "Account reactivated",
@@ -2087,6 +2092,9 @@ fn burmese_ago(key: str) -> str {
 
 fn burmese_categories(key: str) -> str {
     return match key {
+        "categories.nothing_empty" => "အမျိုးအစားတိုင်းတွင် ကုန်ပစ္စည်း ရှိနေသည်",
+        "categories.only_empty_can_go" => "ဘာမှမရှိသော အမျိုးအစားကိုသာ ဖယ်ရှားနိုင်သည်။ ၎င်းအတွင်းရှိ ကုန်ပစ္စည်းများကို အရင်ရွှေ့ပါ — ဘောက်ချာတွင် ကုန်ပစ္စည်းကိုသာ မှတ်တမ်းတင်ပြီး အမျိုးအစားကို မမှတ်ပါ။",
+        "categories.remove_a_category" => "အမျိုးအစား ဖယ်ရှားရန်",
         "categories.add_a_category" => "အမျိုးအစား ထည့်ရန်",
         "categories.add_category" => "အမျိုးအစား ထည့်ရန်",
         "categories.colour" => "အရောင်",
@@ -2659,6 +2667,7 @@ fn burmese_product_detail(key: str) -> str {
 
 fn burmese_products(key: str) -> str {
     return match key {
+        "products.reorder_level" => "ပြန်မှာရမည့် လက်ကျန်",
         "products.take_photo" => "ဓာတ်ပုံ ရိုက်ရန်",
         "products.save_first_for_a_photo" => "ကုန်ပစ္စည်းကို သိမ်းပြီးမှ ဓာတ်ပုံ ထည့်ပါ",
         "products.adjust_the_filters_or_add_your_first" => "စစ်ထုတ်မှုများကို ချိန်ညှိပါ သို့မဟုတ် ပထမဆုံး ကုန်ပစ္စည်းကို ထည့်ပြီး စတင်ရောင်းချပါ။",
@@ -3521,6 +3530,7 @@ fn burmese_title(key: str) -> str {
 
 fn burmese_toast(key: str) -> str {
     return match key {
+        "toast.category_removed" => "အမျိုးအစား ဖယ်ရှားပြီး",
         "toast.photo_saved" => "ဓာတ်ပုံ သိမ်းပြီး",
         "toast.account_deactivated" => "အကောင့် ပိတ်လိုက်ပါပြီ",
         "toast.account_reactivated" => "အကောင့် ပြန်ဖွင့်လိုက်ပါပြီ",

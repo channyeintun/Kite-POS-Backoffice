@@ -75,7 +75,7 @@ out).
 | Tills | every lane as a card: who is on it, what the drawer should hold, what it is ringing, and the authorisations taken at it today |
 | Sales | seven days of receipts, with what came back |
 | Shifts | every drawer session and its over/short |
-| Products | the catalogue, flagged low and out, each with a picture taken at the counter or chosen from the device |
+| Products | the catalogue, flagged low and out, each with a picture taken at the counter or chosen from the device; categories add and — once empty — remove |
 | Inventory | valuation at cost and retail, what needs attention, and value by category |
 | Purchasing | the reorder worksheet from what actually sold, purchase orders, and payables aged into buckets by supplier — with an invoice raised in error cancellable rather than payable |
 | Customers | visits, spend, points and store credit |

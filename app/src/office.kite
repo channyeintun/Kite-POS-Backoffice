@@ -888,6 +888,11 @@ fn pressed(app: desk.App, what: str, id: str) {
         repaint(app)
         return
     }
+    if what == "form-remove-category" {
+        desk.open_form(app, forms.remove_category(desk.lang_of(app), app.ref_categories))
+        repaint(app)
+        return
+    }
     if what == "form-cancel-invoice" {
         desk.open_form(app, forms.cancel_invoice(desk.lang_of(app), app.ref_invoices,
                 desk.currency_of(app)))
@@ -1212,6 +1217,10 @@ async fn do_submit(app: desk.App, id: str, subject: str) {
             doc.put_text(body, "kind", value_of("kind"))
             let (_, err) = await api.add_register(token, body)
             settle(app, err, words.t(l, "toast.lane_added"))
+        },
+        "remove-category" => {
+            let (_, err) = await api.remove_category(token, value_of("category_id"))
+            settle(app, err, words.t(l, "toast.category_removed"))
         },
         "cancel-invoice" => {
             doc.put_text(body, "reason", value_of("reason"))

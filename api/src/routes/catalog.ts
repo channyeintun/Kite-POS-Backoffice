@@ -3,7 +3,7 @@ import type { Ctx } from "../env.js";
 import { now } from "../env.js";
 import { all, batch, need, one, run, stmt } from "../lib/db.js";
 import { newId } from "../lib/crypto.js";
-import { badRequest, bool, conflict, int, num, optInt, optStr, str } from "../lib/http.js";
+import { badRequest, bool, conflict, int, notFound, num, optInt, optStr, str } from "../lib/http.js";
 
 export const catalog = new Hono<Ctx>();
 
@@ -266,6 +266,38 @@ catalog.patch("/categories/:id", async (c) => {
     optStr(body, "name_my"),
     optInt(body, "sort", 0),
   );
+  return c.json({ ok: true });
+});
+
+/**
+ * Removing a category.
+ *
+ * A real delete, unlike a product's — and the difference is what the row is.
+ * A product is referenced by `sale_items` and deleting one breaks a receipt
+ * somebody may reprint years later, so it retires instead. A category is an
+ * organising label with no history hanging off it: the only thing pointing at
+ * it is `products.category_id`, and a receipt records the product, never the
+ * category it happened to be filed under.
+ *
+ * **Refused while anything is still in it**, rather than orphaning those
+ * products or silently reassigning them. The count comes back with the refusal
+ * so the shopkeeper knows how much moving there is to do.
+ */
+catalog.delete("/categories/:id", async (c) => {
+  const id = c.req.param("id");
+  const held = await one<{ n: number }>(
+    c.env.DB,
+    "SELECT COUNT(*) AS n FROM products WHERE category_id = ?1",
+    id,
+  );
+  const count = held?.n ?? 0;
+  if (count > 0) {
+    throw conflict("not_empty", "move what is in that category before removing it", {
+      products: count,
+    });
+  }
+  const gone = await run(c.env.DB, "DELETE FROM categories WHERE id = ?1", id);
+  if (gone.meta.changes === 0) throw notFound("that category is not here");
   return c.json({ ok: true });
 });
 

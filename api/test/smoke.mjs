@@ -993,6 +993,21 @@ const run = async () => {
   const unlinked = await call("GET", `/api/catalog/products/${colaId}`, { token: owner });
   check("and the product no longer points at it", unlinked.json.product?.photo_key, null);
 
+  // A category is an organising label with no history hanging off it, so it
+  // deletes rather than retires — but only when it is empty, because the
+  // alternative is orphaning the products filed under it.
+  const spareShelf = await call("POST", "/api/catalog/categories", {
+    token: owner, body: { name: `Spare ${Math.random().toString(36).slice(2, 7)}`, sort: 9 },
+  });
+  check("a category can be added", spareShelf.status, 201);
+  const emptied = await call("DELETE", `/api/catalog/categories/${spareShelf.json.id}`, { token: owner });
+  check("and removed once nothing is in it", emptied.status, 200);
+  const busy = await call("DELETE", `/api/catalog/categories/${cat.json.id}`, { token: owner });
+  check("one with products in it is refused", busy.json.error?.code, "not_empty");
+  check("and says how many there are to move", busy.json.error?.products > 0, true);
+  const ghostCat = await call("DELETE", "/api/catalog/categories/cat_nope", { token: owner });
+  check("removing one that is not there is a 404", ghostCat.status, 404);
+
   console.log("\n— the books —");
 
   // The check that earns its keep. Posting a sale used to credit the *gross*

@@ -804,7 +804,7 @@ pub fn product_detail(answer: doc.Doc, l: i18n.Lang, c: money.Currency) -> [desk
             tone: if margin <= 0 { "stop" } else { "" } },
         desk.Fact{ label: words.t(l, "products.on_the_shelf"), value: money.quantity(stock),
             tone: if stock <= 0.0 { "stop" } else { "" } },
-        desk.Fact{ label: words.t(l, "common.reorder_at"),
+        desk.Fact{ label: words.t(l, "products.reorder_level"),
             value: qty(p, "reorder_point"), tone: "" },
         desk.Fact{ label: words.t(l, "common.supplier"),
             value: doc.text(p, "supplier_name", "—"), tone: "" },
@@ -875,6 +875,8 @@ pub fn categories(answer: doc.Doc, l: i18n.Lang) -> [desk.Block] {
     return [
         desk.Block.Buttons(items: [
                 desk.action(words.t(l, "categories.add_a_category"), "form-category", "", "filled"),
+                desk.action(words.t(l, "categories.remove_a_category"),
+                    "form-remove-category", "", "quiet"),
                 desk.action(words.t(l, "categories.back_to_products"), "go", "products", "quiet"),
             ]),
         // "မြန်မာ" names its own column in both languages, the way "English"
@@ -954,7 +956,7 @@ pub fn inventory(answer: doc.Doc, l: i18n.Lang, c: money.Currency) -> [desk.Bloc
         table(words.t(l, "accounting.needs_attention"),
             words.t(l, "inventory.low_or_out_touch_a_row"),
             [words.t(l, "common.product"), words.t(l, "products.sku"),
-                words.t(l, "products.stock"), words.t(l, "common.reorder_at"),
+                words.t(l, "products.stock"), words.t(l, "products.reorder_level"),
                 words.t(l, "products.reorder_qty"), words.t(l, "common.supplier")], attention),
         desk.Block.Meters(heading: words.t(l, "reports.by_category"),
             note: words.t(l, "purchasing.at_cost"),

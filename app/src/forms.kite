@@ -116,7 +116,7 @@ pub fn product(existing: doc.Doc, id: str, categories: [doc.Doc], suppliers: [do
         toggle_field("ask_price", words.t(l, "products.price_at_till"),
             doc.int_of(existing, "ask_price", 0) == 1,
             words.t(l, "products.ask_for_a_price_at_the_till")),
-        qty_field("reorder_point", words.t(l, "common.reorder_at"),
+        qty_field("reorder_point", words.t(l, "products.reorder_level"),
             doc.num_of(existing, "reorder_point", 0.0)),
         qty_field("reorder_qty", words.t(l, "products.reorder_quantity"),
             doc.num_of(existing, "reorder_qty", 0.0)),
@@ -607,6 +607,33 @@ pub fn cancel_invoice(l: i18n.Lang, invoices: [doc.Doc], c: money.Currency) -> d
                 desk.required(text_field("reason", words.t(l, "common.why"), "")),
             ]),
         words.t(l, "payables.cancelling_reverses_the_accrual"))
+}
+
+/// Remove a category.
+///
+/// A picker, and only of the empty ones — for the same reason the invoice
+/// cancel is a picker: a `desk.Row` carries one action, and on the categories
+/// table that action is *edit*, which is what a shopkeeper reaches for far more
+/// often than remove.
+pub fn remove_category(l: i18n.Lang, categories: [doc.Doc]) -> desk.Form {
+    var ids: [str] = []
+    var names: [str] = []
+    for cat in categories {
+        if doc.int_of(cat, "products", 0) == 0 {
+            ids.push(doc.text(cat, "id", ""))
+            names.push(doc.text(cat, "name", ""))
+        }
+    }
+    if ids.len() == 0 {
+        ids = [""]
+        names = [words.t(l, "categories.nothing_empty")]
+    }
+    return desk.explained(
+        desk.form("remove-category", words.t(l, "categories.remove_a_category"),
+            words.t(l, "common.remove"), [
+                choice_field("category_id", words.t(l, "common.category"), ids, names, ids[0]),
+            ]),
+        words.t(l, "categories.only_empty_can_go"))
 }
 
 pub fn opening_balances(l: i18n.Lang, c: money.Currency) -> desk.Form {
