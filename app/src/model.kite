@@ -1,13 +1,39 @@
 //! The values: what the server says, and who is at the lane.
 //!
-//! Every struct here is built from a [`doc.Doc`] by a function in this file and
-//! nowhere else, so there is exactly one place that knows what the API's field
-//! names are. Nothing above this reads a JSON document.
+//! Every struct here is built from JSON in this file and nowhere else, so there
+//! is exactly one place that knows what the API's field names are. Nothing above
+//! this reads a JSON document.
 //!
 //! There are no optionals for things the server always sends. A missing field
 //! becomes its empty value rather than an `Option` every call site has to
 //! unwrap — the API is ours and its shape is a contract, not a guess.
+//!
+//! ## Two of these decode themselves, and the rest cannot
+//!
+//! `@derive(Decode)` writes a decoder that reads each field under **its own
+//! name**, gives it **no default**, and returns an error the moment one is
+//! missing, `null`, or the wrong type. That is the right decoder for a payload
+//! whose columns are all `NOT NULL` and whose names already match — [`Category`]
+//! and [`Customer`], and only those two.
+//!
+//! Every other struct here is doing work a derived decoder cannot do, and the
+//! hand-written converter stays. The reason is written above each one; they come
+//! down to four kinds:
+//!
+//!   * a **renamed** field (`labelMy`, `promoSaved`, `hold_label`),
+//!   * a **flattened** one ([`Basket`] reads three levels of `sale` into a flat
+//!     struct),
+//!   * a **coded** one (`tone == "danger"`, `ask_price == 1`), and
+//!   * a **nullable** one, where the server's column permits null and the screen
+//!     wants the empty value rather than a failed load.
+//!
+//! There is a fifth difference that shows up nowhere yet but is worth knowing:
+//! a derived decoder reads an `int` with `json.int_of`, which **truncates**,
+//! while [`doc.int_of`] rounds. Today the Worker rounds every amount of money to
+//! whole minor units before it is serialised, so the two agree on every field
+//! either one reads. They stop agreeing the day something fractional crosses.
 
+use std/json
 use doc
 use money
 use i18n
@@ -48,6 +74,10 @@ pub struct Session {
     pub currency: money.Currency
 }
 
+/// Not derived, and it never could be: the token is not in the document. It came
+/// back in the same answer but is passed in separately, and a derived decoder
+/// takes the document and nothing else. The rest is flattening `user` and `shop`
+/// and mapping a role code to an enum.
 pub fn session_of(d: doc.Doc, token: str) -> Session {
     let user = doc.field(d, "user")
     let shop = doc.field(d, "shop")
@@ -91,6 +121,9 @@ pub struct Line {
     pub age_checked: bool
 }
 
+/// Not derived: `sale_items.product_id` is a nullable reference, and a line
+/// whose product has been removed still has to draw. A derived decoder would
+/// fail the whole basket over it.
 pub fn line_of(d: doc.Doc) -> Line {
     return Line{
         id: doc.text(d, "id", ""),
@@ -144,6 +177,10 @@ pub fn empty_basket() -> Basket {
     }
 }
 
+/// Not derived, and the furthest from it: this reads `sale.id`, `sale.customer.
+/// name` and six of `sale`'s own totals into one flat struct, and `promoSaved`
+/// arrives camel-cased. A derived decoder reads one field per field, at the top
+/// level, under its own name.
 pub fn basket_of(d: doc.Doc) -> Basket {
     let sale = doc.field(d, "sale")
     let customer = doc.field(sale, "customer")
@@ -184,6 +221,10 @@ pub struct Command {
     pub confirm: str
 }
 
+/// Not derived: `labelMy` and `needsApproval` are camel-cased on the wire,
+/// `danger` is read off a `tone` string, and `allowed` defaults to **true** — a
+/// command that arrives without the flag is one the operator may use, which is
+/// the opposite of what a zero value would say.
 pub fn command_of(d: doc.Doc) -> Command {
     return Command{
         id: doc.text(d, "id", ""),
@@ -221,6 +262,9 @@ pub struct Product {
     pub photo_key: str
 }
 
+/// Not derived: `ask_price` is an `INTEGER` column read as a bool, and
+/// `category_id` is a nullable reference — an uncategorised product is legal and
+/// has to appear in the grid rather than fail the catalogue.
 pub fn product_of(d: doc.Doc) -> Product {
     return Product{
         id: doc.text(d, "id", ""),
@@ -238,18 +282,17 @@ pub fn product_of(d: doc.Doc) -> Product {
     }
 }
 
+/// A shelf heading, exactly as the `categories` table holds it.
+///
+/// The one struct on this page whose JSON is a straight row: three columns, all
+/// `NOT NULL`, all named what the field is named. `@derive(Decode)` writes the
+/// same reads a hand-written converter did, so there is no converter — the extra
+/// `sort` the query also selects is simply ignored.
+@derive(Decode)
 pub struct Category {
     pub id: str
     pub name: str
     pub name_my: str
-}
-
-pub fn category_of(d: doc.Doc) -> Category {
-    return Category{
-        id: doc.text(d, "id", ""),
-        name: doc.text(d, "name", ""),
-        name_my: doc.text(d, "name_my", ""),
-    }
 }
 
 /// The name a *line* shows. Falls back to the receipt's snapshot, which is what
@@ -279,6 +322,8 @@ pub struct Held {
     pub created_at: int
 }
 
+/// Not derived: `label` is the `hold_label` column, and renaming a field is the
+/// one thing a derived decoder has no way to express.
 pub fn held_of(d: doc.Doc) -> Held {
     return Held{
         id: doc.text(d, "id", ""),
@@ -336,22 +381,20 @@ pub struct Payment {
 
 // ---- returns and customers -------------------------------------------------
 
+/// Somebody with an account, as the customer search returns them.
+///
+/// Derived for the same reason as [`Category`]: `/till/customers` selects these
+/// five columns and no others, and every one of them is `NOT NULL` — `phone`,
+/// `points` and `credit` all carry a default in the schema rather than a null.
+/// `credit` is money and would truncate rather than round, which matters only if
+/// the server ever sends a fraction of a kyat; it does not.
+@derive(Decode)
 pub struct Customer {
     pub id: str
     pub name: str
     pub phone: str
     pub points: int
     pub credit: int
-}
-
-pub fn customer_of(d: doc.Doc) -> Customer {
-    return Customer{
-        id: doc.text(d, "id", ""),
-        name: doc.text(d, "name", ""),
-        phone: doc.text(d, "phone", ""),
-        points: doc.int_of(d, "points", 0),
-        credit: doc.int_of(d, "credit", 0),
-    }
 }
 
 pub struct Receipt {
@@ -363,6 +406,12 @@ pub struct Receipt {
     pub completed_at: int
 }
 
+/// Not derived, and it is the close call on this page. The names all match, but
+/// `sales.number` and `sales.completed_at` are both **nullable** columns: the
+/// query filters to completed sales, which today always have them, and nothing
+/// in the schema says so. Looking up a receipt is how a customer gets a refund,
+/// and the search failing outright over a null is worse than a receipt listed as
+/// `#0`.
 pub fn receipt_of(d: doc.Doc) -> Receipt {
     return Receipt{
         id: doc.text(d, "id", ""),
@@ -384,6 +433,9 @@ pub struct ReturnLine {
     pub taking: float
 }
 
+/// Not derived: `taking` is not in the document at all. It is how much of the
+/// line the operator has dialled up so far, and it starts at nothing — a derived
+/// decoder would demand the server send it.
 pub fn return_line_of(d: doc.Doc) -> ReturnLine {
     return ReturnLine{
         id: doc.text(d, "id", ""),

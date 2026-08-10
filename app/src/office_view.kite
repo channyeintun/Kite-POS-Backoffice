@@ -558,7 +558,7 @@ fn field_of(f: desk.Field, l: i18n.Lang) -> html.Node {
     let i18n_photo_remove = words.t(l, "products.remove_photo")
     let id = "f-\(f.name)"
     var control = match f.kind {
-        Text => html.empty("input", [
+        OneLine => html.empty("input", [
                 html.id(id), html.data("field", f.name), html.class("field"), html.attr("type", "text"),
                 html.attr("value", f.value), html.attr("autocomplete", "off"),
             ]),

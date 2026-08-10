@@ -14,6 +14,7 @@
 use std/dom
 use std/html
 use std/window
+use std/json
 use api
 use browser
 use desk
@@ -471,8 +472,12 @@ async fn load_accounting(app: desk.App) {
     let from = span[0]
     let to = span[1]
 
-    let data = doc.object()
-    doc.put(data, "summary", summary)
+    // A bundle rather than a struct: the sheets each read their own corner of
+    // it, and a document assembled here is one thing to pass down. Anything
+    // that failed is simply absent, which is what every reader below already
+    // treats as "not loaded".
+    var data: { str: json.Json } = { }
+    data["summary"] = or_else(summary, json.Json.Null)
 
     if view == "summary" || view == "pl" {
         let (pl, perr) = await api.profit_and_loss(token, from, to)
@@ -480,22 +485,22 @@ async fn load_accounting(app: desk.App) {
             failed(app, perr.message())
             return
         }
-        doc.put(data, "pl", pl)
+        data["pl"] = or_else(pl, json.Json.Null)
     }
     if view == "summary" || view == "balance" {
         let (sheet, berr) = await api.balance_sheet(token, to)
         if berr == nil {
-            doc.put(data, "sheet", sheet)
+            data["sheet"] = or_else(sheet, json.Json.Null)
         }
     }
     if view == "summary" {
         let (health, herr) = await api.books_health(token)
         if herr == nil {
-            doc.put(data, "health", health)
+            data["health"] = or_else(health, json.Json.Null)
         }
         let (owing, oerr) = await api.payables(token)
         if oerr == nil {
-            doc.put(data, "payables", owing)
+            data["payables"] = or_else(owing, json.Json.Null)
         }
     }
     if view == "trial" {
@@ -504,7 +509,7 @@ async fn load_accounting(app: desk.App) {
             failed(app, terr.message())
             return
         }
-        doc.put(data, "trial", trial)
+        data["trial"] = or_else(trial, json.Json.Null)
     }
     if view == "journal" {
         let (journal, jerr) = await api.journal_filtered(token, from, to,
@@ -513,7 +518,7 @@ async fn load_accounting(app: desk.App) {
             failed(app, jerr.message())
             return
         }
-        doc.put(data, "journal", journal)
+        data["journal"] = or_else(journal, json.Json.Null)
     }
     if view == "accounts" {
         let (accounts, aerr) = await api.accounts(token)
@@ -521,7 +526,7 @@ async fn load_accounting(app: desk.App) {
             failed(app, aerr.message())
             return
         }
-        doc.put(data, "accounts", accounts)
+        data["accounts"] = or_else(accounts, json.Json.Null)
     }
     if view == "ledger" && app.books_account.len() > 0 {
         let (ledger, lerr) = await api.general_ledger(token, app.books_account, from, to)
@@ -529,11 +534,11 @@ async fn load_accounting(app: desk.App) {
             failed(app, lerr.message())
             return
         }
-        doc.put(data, "ledger", ledger)
+        data["ledger"] = or_else(ledger, json.Json.Null)
     }
 
-    done(app, screens.accounting(view, app.books_window, data, app.books_account,
-            desk.lang_of(app), desk.currency_of(app)))
+    done(app, screens.accounting(view, app.books_window, json.Json.Object(data),
+            app.books_account, desk.lang_of(app), desk.currency_of(app)))
 }
 
 /// Save the open sheet as a file.
@@ -783,10 +788,19 @@ fn qty_of(name: str) -> float {
     return or_else(parse_float(value_of(name)), 0.0)
 }
 
-fn put_text_if(body: doc.Doc, key: str, value: str) {
-    if value.len() > 0 {
-        doc.put_text(body, key, value)
+/// A field written only when the operator filled it in.
+///
+/// Returns the map rather than mutating one through a parameter: a `var`
+/// parameter is a copy here — a map handed to a function and written to inside
+/// it leaves the caller's map alone — so the only way to add a key from a
+/// helper is to give the map back.
+fn text_if(body: { str: json.Json }, key: str, value: str) -> { str: json.Json } {
+    if value.len() == 0 {
+        return body
     }
+    var out = body
+    out[key] = json.Json.Text(value)
+    return out
 }
 
 // ---- what a press means ----------------------------------------------------
@@ -1045,11 +1059,15 @@ fn first_unreadable(app: desk.App, open: desk.Form) -> str {
 /// have to be found before a field can be traced from the form that asked for
 /// it to the call that sends it. Every arm reads its own fields by name and
 /// ends in one API call.
+///
+/// `body` is a plain map that each arm fills and wraps once, at the call. It
+/// cannot be a document handed round and written into: `Json.Object(m)` copies
+/// `m`, so a write after the wrap would not show through.
 async fn do_submit(app: desk.App, id: str, subject: str) {
     let token = desk.token_of(app)
     let c = desk.currency_of(app)
     let l = desk.lang_of(app)
-    let body = doc.object()
+    var body: { str: json.Json } = { }
 
     // **The default is a tail, not an else.** Every arm below used to end in
     // `return`, which is the only reason the refusal underneath was reached
@@ -1058,80 +1076,80 @@ async fn do_submit(app: desk.App, id: str, subject: str) {
     // also refuse its own form and repaint over its own toast.
     match id {
         "product" => {
-            doc.put_text(body, "sku", value_of("sku"))
-            doc.put_text(body, "name", value_of("name"))
-            doc.put_text(body, "name_my", value_of("name_my"))
-            doc.put_text(body, "category_id", value_of("category_id"))
-            doc.put_text(body, "supplier_id", value_of("supplier_id"))
-            doc.put_int(body, "price", money_of(app, "price"))
-            doc.put_int(body, "cost", money_of(app, "cost"))
-            doc.put_int(body, "tax_bp", whole_of("tax_bp"))
-            doc.put_int(body, "min_age", whole_of("min_age"))
-            doc.put_text(body, "unit", value_of("unit"))
-            doc.put_bool(body, "ask_price", checked("ask_price"))
-            doc.put_num(body, "reorder_point", qty_of("reorder_point"))
-            doc.put_num(body, "reorder_qty", qty_of("reorder_qty"))
-            doc.put_int(body, "quick_key", whole_of("quick_key"))
-            doc.put_bool(body, "active", checked("active"))
+            body["sku"] = json.Json.Text(value_of("sku"))
+            body["name"] = json.Json.Text(value_of("name"))
+            body["name_my"] = json.Json.Text(value_of("name_my"))
+            body["category_id"] = json.Json.Text(value_of("category_id"))
+            body["supplier_id"] = json.Json.Text(value_of("supplier_id"))
+            body["price"] = json.Json.Number(money_of(app, "price") as float)
+            body["cost"] = json.Json.Number(money_of(app, "cost") as float)
+            body["tax_bp"] = json.Json.Number(whole_of("tax_bp") as float)
+            body["min_age"] = json.Json.Number(whole_of("min_age") as float)
+            body["unit"] = json.Json.Text(value_of("unit"))
+            body["ask_price"] = json.Json.Bool(checked("ask_price"))
+            body["reorder_point"] = json.Json.Number(qty_of("reorder_point"))
+            body["reorder_qty"] = json.Json.Number(qty_of("reorder_qty"))
+            body["quick_key"] = json.Json.Number(whole_of("quick_key") as float)
+            body["active"] = json.Json.Bool(checked("active"))
             let open = app.form
             if open != nil {
-                doc.put_text(body, "photo_key", field_value_of(open, "photo_key"))
+                body["photo_key"] = json.Json.Text(field_value_of(open, "photo_key"))
             }
-            let (_, err) = await api.save_product(token, subject, body)
+            let (_, err) = await api.save_product(token, subject, json.Json.Object(body))
             settle(app, err, words.t(l, "toast.saved"))
         },
         "barcode" => {
-            doc.put_text(body, "barcode", value_of("barcode"))
-            doc.put_num(body, "pack_size", qty_of("pack_size"))
-            doc.put_text(body, "label", value_of("label"))
-            let (_, err) = await api.add_barcode(token, subject, body)
+            body["barcode"] = json.Json.Text(value_of("barcode"))
+            body["pack_size"] = json.Json.Number(qty_of("pack_size"))
+            body["label"] = json.Json.Text(value_of("label"))
+            let (_, err) = await api.add_barcode(token, subject, json.Json.Object(body))
             settle(app, err, words.t(l, "toast.barcode_added"))
         },
         "category" => {
-            doc.put_text(body, "name", value_of("name"))
-            doc.put_text(body, "name_my", value_of("name_my"))
-            doc.put_int(body, "sort", whole_of("sort"))
-            let (_, err) = await api.save_category(token, subject, body)
+            body["name"] = json.Json.Text(value_of("name"))
+            body["name_my"] = json.Json.Text(value_of("name_my"))
+            body["sort"] = json.Json.Number(whole_of("sort") as float)
+            let (_, err) = await api.save_category(token, subject, json.Json.Object(body))
             settle(app, err, words.t(l, "toast.saved"))
         },
         "supplier" => {
-            doc.put_text(body, "name", value_of("name"))
-            doc.put_text(body, "phone", value_of("phone"))
-            doc.put_text(body, "email", value_of("email"))
-            doc.put_text(body, "address", value_of("address"))
-            doc.put_int(body, "lead_days", whole_of("lead_days"))
-            doc.put_bool(body, "active", checked("active"))
-            let (_, err) = await api.save_supplier(token, subject, body)
+            body["name"] = json.Json.Text(value_of("name"))
+            body["phone"] = json.Json.Text(value_of("phone"))
+            body["email"] = json.Json.Text(value_of("email"))
+            body["address"] = json.Json.Text(value_of("address"))
+            body["lead_days"] = json.Json.Number(whole_of("lead_days") as float)
+            body["active"] = json.Json.Bool(checked("active"))
+            let (_, err) = await api.save_supplier(token, subject, json.Json.Object(body))
             settle(app, err, words.t(l, "toast.saved"))
         },
         "promotion" => {
-            doc.put_text(body, "name", value_of("name"))
-            doc.put_text(body, "name_my", value_of("name_my"))
-            doc.put_text(body, "kind", value_of("kind"))
-            doc.put_int(body, "value", whole_of("value"))
-            doc.put_int(body, "n", whole_of("n"))
-            doc.put_text(body, "scope", value_of("scope"))
-            put_text_if(body, "product_id", value_of("product_id"))
-            put_text_if(body, "category_id", value_of("category_id"))
-            doc.put_int(body, "priority", whole_of("priority"))
-            doc.put_bool(body, "active", checked("active"))
-            let (_, err) = await api.save_promotion(token, subject, body)
+            body["name"] = json.Json.Text(value_of("name"))
+            body["name_my"] = json.Json.Text(value_of("name_my"))
+            body["kind"] = json.Json.Text(value_of("kind"))
+            body["value"] = json.Json.Number(whole_of("value") as float)
+            body["n"] = json.Json.Number(whole_of("n") as float)
+            body["scope"] = json.Json.Text(value_of("scope"))
+            body = text_if(body, "product_id", value_of("product_id"))
+            body = text_if(body, "category_id", value_of("category_id"))
+            body["priority"] = json.Json.Number(whole_of("priority") as float)
+            body["active"] = json.Json.Bool(checked("active"))
+            let (_, err) = await api.save_promotion(token, subject, json.Json.Object(body))
             settle(app, err, words.t(l, "toast.saved"))
         },
         "customer" => {
-            doc.put_text(body, "name", value_of("name"))
-            doc.put_text(body, "phone", value_of("phone"))
-            doc.put_text(body, "note", value_of("note"))
-            let (_, err) = await api.save_customer(token, subject, body)
+            body["name"] = json.Json.Text(value_of("name"))
+            body["phone"] = json.Json.Text(value_of("phone"))
+            body["note"] = json.Json.Text(value_of("note"))
+            let (_, err) = await api.save_customer(token, subject, json.Json.Object(body))
             settle(app, err, words.t(l, "toast.saved"))
         },
         "staff" => {
-            doc.put_text(body, "name", value_of("name"))
-            doc.put_text(body, "role", value_of("role"))
-            put_text_if(body, "pin", value_of("pin"))
-            put_text_if(body, "username", value_of("username"))
-            put_text_if(body, "password", value_of("password"))
-            let (_, err) = await api.save_staff(token, "", body)
+            body["name"] = json.Json.Text(value_of("name"))
+            body["role"] = json.Json.Text(value_of("role"))
+            body = text_if(body, "pin", value_of("pin"))
+            body = text_if(body, "username", value_of("username"))
+            body = text_if(body, "password", value_of("password"))
+            let (_, err) = await api.save_staff(token, "", json.Json.Object(body))
             settle(app, err, words.t(l, "toast.added"))
         },
         "staff-pin" => {
@@ -1143,56 +1161,56 @@ async fn do_submit(app: desk.App, id: str, subject: str) {
             settle(app, err, words.t(l, "toast.password_set"))
         },
         "staff-edit" => {
-            doc.put_text(body, "name", value_of("name"))
-            doc.put_bool(body, "active", checked("active"))
-            let (_, err) = await api.save_staff(token, subject, body)
+            body["name"] = json.Json.Text(value_of("name"))
+            body["active"] = json.Json.Bool(checked("active"))
+            let (_, err) = await api.save_staff(token, subject, json.Json.Object(body))
             settle(app, err, words.t(l, "toast.saved"))
         },
         "adjust" => {
-            doc.put_text(body, "product_id", subject)
-            doc.put_num(body, "counted", qty_of("counted"))
-            doc.put_text(body, "reason", value_of("reason"))
-            doc.put_text(body, "note", value_of("note"))
-            let (_, err) = await api.adjust_stock(token, body)
+            body["product_id"] = json.Json.Text(subject)
+            body["counted"] = json.Json.Number(qty_of("counted"))
+            body["reason"] = json.Json.Text(value_of("reason"))
+            body["note"] = json.Json.Text(value_of("note"))
+            let (_, err) = await api.adjust_stock(token, json.Json.Object(body))
             settle(app, err, words.t(l, "toast.stock_was_adjusted"))
         },
         "receive" => {
-            let lines = doc.array()
-            let line = doc.object()
-            doc.put_text(line, "item_id", subject)
-            doc.put_num(line, "qty", qty_of("qty"))
-            doc.put_int(line, "unit_cost", money_of(app, "unit_cost"))
-            doc.push(lines, line)
-            doc.put(body, "lines", lines)
-            let (_, err) = await api.receive_order(token, order_id_of(app), body)
+            var lines: [json.Json] = []
+            var line: { str: json.Json } = { }
+            line["item_id"] = json.Json.Text(subject)
+            line["qty"] = json.Json.Number(qty_of("qty"))
+            line["unit_cost"] = json.Json.Number(money_of(app, "unit_cost") as float)
+            lines.push(json.Json.Object(line))
+            body["lines"] = json.Json.Array(lines)
+            let (_, err) = await api.receive_order(token, order_id_of(app), json.Json.Object(body))
             settle(app, err, words.t(l, "common.received"))
         },
         "invoice" => {
-            doc.put_text(body, "supplier_id", value_of("supplier_id"))
-            put_text_if(body, "po_id", subject)
-            doc.put_text(body, "reference", value_of("reference"))
-            doc.put_int(body, "total", money_of(app, "total"))
-            doc.put_int(body, "issued_at", browser.now())
-            doc.put_int(body, "due_at", browser.now() + whole_of("due_days") * day())
-            let (_, err) = await api.add_invoice(token, body)
+            body["supplier_id"] = json.Json.Text(value_of("supplier_id"))
+            body = text_if(body, "po_id", subject)
+            body["reference"] = json.Json.Text(value_of("reference"))
+            body["total"] = json.Json.Number(money_of(app, "total") as float)
+            body["issued_at"] = json.Json.Number(browser.now() as float)
+            body["due_at"] = json.Json.Number((browser.now() + whole_of("due_days") * day()) as float)
+            let (_, err) = await api.add_invoice(token, json.Json.Object(body))
             settle(app, err, words.t(l, "toast.invoice_recorded"))
         },
         "pay-invoice" => {
-            doc.put_int(body, "amount", money_of(app, "amount"))
-            doc.put_text(body, "method", value_of("method"))
-            let (_, err) = await api.pay_invoice(token, subject, body)
+            body["amount"] = json.Json.Number(money_of(app, "amount") as float)
+            body["method"] = json.Json.Text(value_of("method"))
+            let (_, err) = await api.pay_invoice(token, subject, json.Json.Object(body))
             settle(app, err, words.t(l, "payables.paid"))
         },
         "expense" => {
-            doc.put_text(body, "account_code", value_of("account_code"))
-            doc.put_text(body, "category", value_of("category"))
-            doc.put_text(body, "payee", value_of("payee"))
-            put_text_if(body, "reference", value_of("reference"))
-            doc.put_int(body, "amount", money_of(app, "amount"))
-            doc.put_int(body, "tax", money_of(app, "tax"))
-            doc.put_text(body, "method", value_of("method"))
-            doc.put_text(body, "note", value_of("note"))
-            let (_, err) = await api.add_expense(token, body)
+            body["account_code"] = json.Json.Text(value_of("account_code"))
+            body["category"] = json.Json.Text(value_of("category"))
+            body["payee"] = json.Json.Text(value_of("payee"))
+            body = text_if(body, "reference", value_of("reference"))
+            body["amount"] = json.Json.Number(money_of(app, "amount") as float)
+            body["tax"] = json.Json.Number(money_of(app, "tax") as float)
+            body["method"] = json.Json.Text(value_of("method"))
+            body["note"] = json.Json.Text(value_of("note"))
+            let (_, err) = await api.add_expense(token, json.Json.Object(body))
             settle(app, err, words.t(l, "toast.recorded"))
         },
         "open-shift" => {
@@ -1206,16 +1224,16 @@ async fn do_submit(app: desk.App, id: str, subject: str) {
             settle(app, err, words.t(l, "toast.drawer_closed"))
         },
         "movement" => {
-            doc.put_text(body, "kind", value_of("kind"))
-            doc.put_int(body, "amount", money_of(app, "amount"))
-            doc.put_text(body, "reason", value_of("reason"))
-            let (_, err) = await api.shift_movement(token, subject, body)
+            body["kind"] = json.Json.Text(value_of("kind"))
+            body["amount"] = json.Json.Number(money_of(app, "amount") as float)
+            body["reason"] = json.Json.Text(value_of("reason"))
+            let (_, err) = await api.shift_movement(token, subject, json.Json.Object(body))
             settle(app, err, words.t(l, "toast.recorded"))
         },
         "register" => {
-            doc.put_text(body, "name", value_of("name"))
-            doc.put_text(body, "kind", value_of("kind"))
-            let (_, err) = await api.add_register(token, body)
+            body["name"] = json.Json.Text(value_of("name"))
+            body["kind"] = json.Json.Text(value_of("kind"))
+            let (_, err) = await api.add_register(token, json.Json.Object(body))
             settle(app, err, words.t(l, "toast.lane_added"))
         },
         "remove-category" => {
@@ -1223,8 +1241,8 @@ async fn do_submit(app: desk.App, id: str, subject: str) {
             settle(app, err, words.t(l, "toast.category_removed"))
         },
         "cancel-invoice" => {
-            doc.put_text(body, "reason", value_of("reason"))
-            let (_, err) = await api.cancel_invoice(token, value_of("invoice_id"), body)
+            body["reason"] = json.Json.Text(value_of("reason"))
+            let (_, err) = await api.cancel_invoice(token, value_of("invoice_id"), json.Json.Object(body))
             settle(app, err, words.t(desk.lang_of(app), "payables.cancelled"))
         },
         "journal-filter" => {
@@ -1233,33 +1251,33 @@ async fn do_submit(app: desk.App, id: str, subject: str) {
             load(app)
         },
         "opening-balances" => {
-            doc.put_int(body, "cash_in_safe", money_of(app, "cash_in_safe"))
-            doc.put_int(body, "cash_in_drawer", money_of(app, "cash_in_drawer"))
-            let (_, err) = await api.post_opening_balances(token, body)
+            body["cash_in_safe"] = json.Json.Number(money_of(app, "cash_in_safe") as float)
+            body["cash_in_drawer"] = json.Json.Number(money_of(app, "cash_in_drawer") as float)
+            let (_, err) = await api.post_opening_balances(token, json.Json.Object(body))
             settle(app, err, words.t(desk.lang_of(app), "accounting.opening_balances"))
         },
         "reverse-entry" => {
-            doc.put_text(body, "reason", value_of("reason"))
-            let (_, err) = await api.reverse_entry(token, subject, body)
+            body["reason"] = json.Json.Text(value_of("reason"))
+            let (_, err) = await api.reverse_entry(token, subject, json.Json.Object(body))
             settle(app, err, words.t(l, "toast.correction_posted"))
         },
         "refund" => {
-            let lines = doc.array()
+            var lines: [json.Json] = []
             for line in app.subject_lines {
                 let line_id = doc.text(line, "id", "")
                 let wanted = qty_of("line:\(line_id)")
                 if wanted > 0.0 {
-                    let entry = doc.object()
-                    doc.put_text(entry, "sale_item_id", line_id)
-                    doc.put_num(entry, "qty", wanted)
-                    doc.push(lines, entry)
+                    var entry: { str: json.Json } = { }
+                    entry["sale_item_id"] = json.Json.Text(line_id)
+                    entry["qty"] = json.Json.Number(wanted)
+                    lines.push(json.Json.Object(entry))
                 }
             }
-            doc.put(body, "lines", lines)
-            doc.put_text(body, "reason", value_of("reason"))
-            doc.put_text(body, "method", value_of("method"))
-            doc.put_bool(body, "restock", checked("restock"))
-            let (_, err) = await api.refund_sale(token, subject, body)
+            body["lines"] = json.Json.Array(lines)
+            body["reason"] = json.Json.Text(value_of("reason"))
+            body["method"] = json.Json.Text(value_of("method"))
+            body["restock"] = json.Json.Bool(checked("restock"))
+            let (_, err) = await api.refund_sale(token, subject, json.Json.Object(body))
             settle(app, err, words.t(l, "common.refunded"))
         },
         "settings" => {
@@ -1269,9 +1287,9 @@ async fn do_submit(app: desk.App, id: str, subject: str) {
                 "currency.symbol_first", "tax.inclusive", "tax.default_bp", "locale.default",
                 "loyalty.points_per_unit", "accounting.enabled",
             ] {
-                doc.put_text(body, key, value_of(key))
+                body[key] = json.Json.Text(value_of(key))
             }
-            let (_, err) = await api.save_settings(token, body)
+            let (_, err) = await api.save_settings(token, json.Json.Object(body))
             settle(app, err, words.t(l, "toast.saved"))
         },
         "close-period" => {
@@ -1282,9 +1300,9 @@ async fn do_submit(app: desk.App, id: str, subject: str) {
                 repaint(app)
                 return
             }
-            doc.put_int(body, "starts_at", bounds[0])
-            doc.put_int(body, "ends_at", bounds[1])
-            let (_, err) = await api.close_period(token, body)
+            body["starts_at"] = json.Json.Number(bounds[0] as float)
+            body["ends_at"] = json.Json.Number(bounds[1] as float)
+            let (_, err) = await api.close_period(token, json.Json.Object(body))
             settle(app, err, words.t(l, "toast.month_closed"))
         },
         _ => {
@@ -1424,20 +1442,20 @@ async fn do_receive_all(app: desk.App, id: str) {
         failed(app, err.message())
         return
     }
-    let body = doc.object()
-    let lines = doc.array()
+    var body: { str: json.Json } = { }
+    var lines: [json.Json] = []
     for l in doc.items(doc.field(answer, "lines")) {
         let left = doc.num_of(l, "qty", 0.0) - doc.num_of(l, "qty_received", 0.0)
         if left > 0.0 {
-            let entry = doc.object()
-            doc.put_text(entry, "item_id", doc.text(l, "id", ""))
-            doc.put_num(entry, "qty", left)
-            doc.put_int(entry, "unit_cost", doc.int_of(l, "unit_cost", 0))
-            doc.push(lines, entry)
+            var entry: { str: json.Json } = { }
+            entry["item_id"] = json.Json.Text(doc.text(l, "id", ""))
+            entry["qty"] = json.Json.Number(left)
+            entry["unit_cost"] = json.Json.Number(doc.int_of(l, "unit_cost", 0) as float)
+            lines.push(json.Json.Object(entry))
         }
     }
-    doc.put(body, "lines", lines)
-    let (_, rerr) = await api.receive_order(token, id, body)
+    body["lines"] = json.Json.Array(lines)
+    let (_, rerr) = await api.receive_order(token, id, json.Json.Object(body))
     if rerr != nil {
         failed(app, rerr.message())
         return
@@ -1475,21 +1493,21 @@ async fn do_raise_orders(app: desk.App) {
 
     var raised = 0
     for supplier in suppliers {
-        let body = doc.object()
-        doc.put_text(body, "supplier_id", supplier)
-        doc.put_text(body, "status", "draft")
-        let items = doc.array()
+        var body: { str: json.Json } = { }
+        body["supplier_id"] = json.Json.Text(supplier)
+        body["status"] = json.Json.Text("draft")
+        var items: [json.Json] = []
         for l in lines {
             if doc.text(l, "supplier_id", "") == supplier && doc.num_of(l, "suggested", 0.0) > 0.0 {
-                let entry = doc.object()
-                doc.put_text(entry, "product_id", doc.text(l, "id", ""))
-                doc.put_num(entry, "qty", doc.num_of(l, "suggested", 0.0))
-                doc.put_int(entry, "unit_cost", doc.int_of(l, "cost", 0))
-                doc.push(items, entry)
+                var entry: { str: json.Json } = { }
+                entry["product_id"] = json.Json.Text(doc.text(l, "id", ""))
+                entry["qty"] = json.Json.Number(doc.num_of(l, "suggested", 0.0))
+                entry["unit_cost"] = json.Json.Number(doc.int_of(l, "cost", 0) as float)
+                items.push(json.Json.Object(entry))
             }
         }
-        doc.put(body, "lines", items)
-        let (_, oerr) = await api.raise_order(token, body)
+        body["lines"] = json.Json.Array(items)
+        let (_, oerr) = await api.raise_order(token, json.Json.Object(body))
         if oerr == nil {
             raised = raised + 1
         }

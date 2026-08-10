@@ -316,7 +316,14 @@ pub struct Fact {
 /// number of minor units, a quantity, a choice from a list, and a yes or no —
 /// and anything that does not fit one of those is a screen rather than a field.
 pub enum FieldKind {
-    Text
+    /// One line of text — and **not** called `Text`, which is what it was until
+    /// this app moved onto `std/json`. A bare variant pattern resolves against
+    /// every variant in the compilation rather than against the enum being
+    /// matched, so a `Text` here reaches inside `std/json` and makes its own
+    /// `Json.Text` arms resolve to that module's private `struct Text`, with
+    /// four errors reported against stdlib source that this app cannot edit.
+    /// A compiler bug; the rename is what costs nothing to work around it.
+    OneLine
     /// Multi-line, for a note or an address.
     Lines
     /// An amount, entered the way a person writes one and parsed as digits.

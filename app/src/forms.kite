@@ -23,7 +23,7 @@ use screens
 use words
 
 fn text_field(name: str, label: str, value: str) -> desk.Field {
-    return desk.field(name, label, desk.FieldKind.Text, value)
+    return desk.field(name, label, desk.FieldKind.OneLine, value)
 }
 
 fn money_field(name: str, label: str, value: int, c: money.Currency) -> desk.Field {

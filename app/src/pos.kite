@@ -152,28 +152,29 @@ fn load_everything(app: store.App) {
 }
 
 async fn load_catalogue(app: store.App) {
-    let (answer, err) = await api.grid(store.token_of(app))
+    // `.0` is the products and `.1` the categories — see `api.grid`, which is
+    // where the two lists are named and where a heading that will not decode
+    // becomes this `err`.
+    let (catalogue, err) = await api.grid(store.token_of(app))
     if err != nil {
         store.reachable(app, false)
         repaint(app)
         return
     }
-    store.took_catalogue(app,
-        map(doc.items(doc.field(answer, "products")), model.product_of),
-        map(doc.items(doc.field(answer, "categories")), model.category_of))
+    store.took_catalogue(app, catalogue.0, catalogue.1)
     store.reachable(app, true)
     repaint(app)
 }
 
 async fn refresh(app: store.App) {
-    let (answer, err) = await api.basket(store.token_of(app))
+    let (basket, err) = await api.basket(store.token_of(app))
     if err != nil {
         store.reachable(app, false)
         store.went_wrong(app, err.message())
         repaint(app)
         return
     }
-    store.took_basket(app, model.basket_of(answer))
+    store.took_basket(app, basket)
     repaint(app)
 }
 
@@ -323,23 +324,23 @@ async fn do_void_sale(app: store.App, reason: str, manager_pin: str) {
 }
 
 async fn load_held(app: store.App) {
-    let (answer, err) = await api.held(store.token_of(app))
+    let (parked, err) = await api.held(store.token_of(app))
     if err != nil {
         store.went_wrong(app, err.message())
         repaint(app)
         return
     }
-    store.took_held(app, map(doc.items(doc.field(answer, "held")), model.held_of))
+    store.took_held(app, parked)
     store.show(app, store.Overlay.Held)
     repaint(app)
 }
 
 async fn do_search(app: store.App, q: str) {
-    let (answer, err) = await api.search(store.token_of(app), q)
+    let (found, err) = await api.search(store.token_of(app), q)
     if err != nil {
         return
     }
-    store.found_products(app, map(doc.items(doc.field(answer, "products")), model.product_of))
+    store.found_products(app, found)
     repaint(app)
 }
 
@@ -512,12 +513,12 @@ fn command(app: store.App, id: str) {
 // ---- customers, returns, the drawer ----------------------------------------
 
 async fn load_customers(app: store.App, q: str) {
-    let (answer, err) = await api.customers_at_till(store.token_of(app), q)
+    let (who, err) = await api.customers_at_till(store.token_of(app), q)
     if err != nil {
         failed(app, err.message())
         return
     }
-    store.took_customers(app, map(doc.items(doc.field(answer, "customers")), model.customer_of))
+    store.took_customers(app, who)
     repaint(app)
 }
 
@@ -540,12 +541,12 @@ async fn do_new_customer(app: store.App, name: str, phone: str) {
 }
 
 async fn load_receipts(app: store.App, q: str) {
-    let (answer, err) = await api.receipts(store.token_of(app), q)
+    let (found, err) = await api.receipts(store.token_of(app), q)
     if err != nil {
         failed(app, err.message())
         return
     }
-    store.took_receipts(app, map(doc.items(doc.field(answer, "receipts")), model.receipt_of))
+    store.took_receipts(app, found)
     repaint(app)
 }
 
