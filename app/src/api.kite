@@ -4,29 +4,42 @@
 //! having said what happens when the lane was offline. What is *not* collapsed
 //! into that error is a refusal the till has to act on: a 422 asking for ID or
 //! for a price is a normal step in ringing a sale, not a failure, so it comes
-//! back as a document with `needs` in it and the caller branches.
+//! back as an [`Answer`] — an enum whose variants *are* the branches, rather
+//! than a document the caller has to fish a `needs` string out of.
 //!
 //! There is no client object. A [`model.Session`] carries the token and is
 //! passed in; a signed-out call takes nothing, because there is no session yet
 //! by definition.
 //!
-//! ## What `T` is, and why it is usually still a document
+//! ## What `T` is
 //!
-//! A handful of endpoints answer with something [`model`] has a name for, and
-//! those functions return the named thing — the conversion happens once, here,
-//! rather than at every call site. That is the whole list: the basket, the grid,
-//! the search, the parked baskets, the customer lookup and the receipt search.
+//! Every endpoint that answers something [`model`] has a name for returns the
+//! named thing. The conversion happens **once, here** — a screen is handed a
+//! value with fields, not a document it has to know the key names of, and the
+//! decision about which of those fields may arrive null was taken in
+//! [`model`] against the schema rather than guessed at a call site.
 //!
-//! Everything else answers `(doc.Doc, error)` and will keep doing so. The back
-//! office's reports and lists are read ad hoc by the screen that asked for them,
-//! and giving each one a struct would be deciding a schema this end does not
-//! own.
+//! The till's two-answer family — `scan`, `set_qty`, `void_line`,
+//! `adjust_line`, `hold`, `recall`, `void_sale` and `set_customer` — used to be
+//! the largest exception: each answers *either* a basket *or* a 422 `needs`
+//! document, and a struct cannot say "one of two things", so all eight handed
+//! back a raw document and every call site re-derived which it had. They now
+//! answer [`Answer`], and the deciding is done once, in `answer_of`. (`basket`
+//! has no 422 at all, so it stays a plain [`model.Basket`].)
 //!
-//! There is a second reason a till endpoint stays a document even when its happy
-//! path is a basket: **the 422s.** `scan`, `set_qty`, `adjust_line` and the rest
-//! all answer either a basket or a `needs` document, and only the caller knows
-//! which question it is being asked. `basket` itself has no 422, which is why it
-//! is the one of that family that could be typed.
+//! Three kinds of answer still stay a document, and each for its own reason:
+//!
+//!   * **The transport itself.** `send`, `get`, `post`, `patch` and `remove`
+//!     cannot know what shape a body is, exactly as `JSON.parse` cannot.
+//!   * **`/settings`.** A key→value map of setting names, every value optional
+//!     with a per-key default. A struct would encode the Worker's allow list a
+//!     second time and no field of it could derive.
+//!   * **Writes whose answer nobody reads**, and the two whose answer has no
+//!     shape in [`model`] — a refund's `{ id, total, tax }`, and the
+//!     `{ ok: true }` that every edit and every delete replies with. A `PATCH`
+//!     and a `POST` to the same `save_*` do not even answer alike: the one
+//!     sends `{ ok: true }` and the other `{ id }`, so a decoder strict enough
+//!     to be worth having would refuse half its own call sites.
 
 use std/http
 use std/errors
@@ -107,12 +120,48 @@ pub fn empty() -> json.Json {
     return json.Json.Object(none)
 }
 
+/// A whole answer, ready for a derived decoder.
+///
+/// `decode` takes a `json.Json` while a response is a `doc.Doc`, which is an
+/// `Option` of one. An answer that was not there at all becomes an empty object
+/// rather than an error invented here: the derived decoder then names the field
+/// it wanted, which is a better sentence than anything this line could write.
+fn body_of(d: doc.Doc) -> json.Json {
+    return or_else(d, empty())
+}
+
+/// The array under `name`, as values a derived decoder can read.
+fn list_of(d: doc.Doc, name: str) -> [json.Json] {
+    return json.items(json.field(d, name))
+}
+
+/// The `{ "id": … }` every create answers with.
+///
+/// One reader for a dozen endpoints, because they all answer alike and the
+/// only thing that differs is the sentence for when they do not.
+fn made_of(answer: doc.Doc, said: str) -> (model.Created, error) {
+    let (made, err) = model.Created.decode(body_of(answer))
+    check errors.wrap(err, said)
+    return made, nil
+}
+
+/// The four figures a counted drawer answers with — the same shape from all
+/// three doors that close one.
+fn counted_of(answer: doc.Doc) -> (model.DrawerCount, error) {
+    let (count, err) = model.DrawerCount.decode(body_of(answer))
+    check errors.wrap(err, "that drawer was closed but the count would not read")
+    return count, nil
+}
+
 /// One request.
 ///
-/// A 422 is answered as a **document rather than an error**, because the two
-/// 422s this API sends — "this needs ID" and "this product has no shelf price"
-/// — are steps in a sale rather than failures of one. Everything else that is
-/// not a 2xx becomes an error carrying the server's own sentence.
+/// A 422 is answered as an **ordinary answer rather than an error**, because
+/// the two 422s this API sends — "this needs ID" and "this product has no shelf
+/// price" — are steps in a sale rather than failures of one. It stays a
+/// document at this level: `send` is the transport and does not know which
+/// endpoint it is carrying. Naming the two is [`answer_of`]'s job, one layer
+/// up. Everything else that is not a 2xx becomes an error carrying the server's
+/// own sentence.
 pub async fn send(token: str, method: str, path: str, body: str) -> (doc.Doc, error) {
     let (response, err) = await http.send(method, "\(base())\(path)", body, headers_for(token, body))
     check errors.wrap(err, "the lane is offline")
@@ -191,19 +240,111 @@ pub async fn whoami(token: str) -> (model.Session, error) {
 
 // ---- the till --------------------------------------------------------------
 
+/// What a basket-changing call answers: the basket, or the question that has to
+/// be answered before there can be one.
+///
+/// Eight endpoints — `scan`, `set_qty`, `void_line`, `adjust_line`, `hold`,
+/// `recall`, `void_sale` and `set_customer` — reply *either* with the whole
+/// basket *or*, with a 422, with a step in the sale rather than a failure of
+/// one. A struct cannot say "one of two things"; an enum can. So the branch is
+/// taken on a **variant** rather than on a string pulled out of a document,
+/// and a caller that forgets a case is a compile error instead of a basket
+/// silently read as empty.
+///
+/// The two questions are `POST /till/scan`'s alone today — see the two `422`
+/// branches in `api/src/routes/till.ts`. The other seven are typed as answering
+/// an `Answer` anyway, because which of them may ask is the Worker's to change
+/// and this file should not have to be re-shaped when it does.
+///
+/// The two 422 variants are `NeedsAgeCheck` and `NeedsPrice` rather than the
+/// `AgeCheck`/`AskPrice` the dialogs are called, and that is not a style
+/// choice. [`store.Overlay`] already owns those two names, and **a Kite pattern
+/// is written unqualified**: a variant name shared by two enums in one program
+/// makes every existing `AgeCheck(...)` arm ambiguous. The compiler's own
+/// suggestion — qualify it, `Overlay.AgeCheck(...)` — is a trap here, because a
+/// qualified pattern is not a variant test at all. It is a **wildcard**: it
+/// matches every value, binds nothing, satisfies exhaustiveness on its own and
+/// draws no diagnostic. In `till.kite`'s `overlay_of` that would have rendered
+/// the age-check dialog over the tender screen. Distinct names cost nothing.
+pub enum Answer {
+    /// The ordinary answer, and the only one the other seven send today.
+    Basket(basket: model.Basket)
+
+    /// `needs: "age_check"` — an age-restricted item stopped the sale.
+    ///
+    /// `born_before` is a Unix timestamp the **Worker** computed from the
+    /// product's `min_age`, so nobody is doing date arithmetic at the counter
+    /// with a queue waiting. `min_age` and `born_on_or_before` sit at the top
+    /// level of that 422 while `id` and `name` are nested under `product`,
+    /// which is exactly why this is worth converting once, here.
+    NeedsAgeCheck(name: str, min_age: int, born_before: int, product_id: str)
+
+    /// `needs: "price"` — the shelf price is not in the system, so the operator
+    /// is asked for it.
+    ///
+    /// The tag on the wire is `"price"`, not `"ask_price"` — `ask_price` is the
+    /// column on the product that causes it, and the two are easy to confuse.
+    /// That string is now written once, in `answer_of`, instead of at every
+    /// call site that had to guess which of the two the Worker meant.
+    ///
+    /// `unit` is on the wire (`product: { id, name, unit }`, and the column is
+    /// `TEXT NOT NULL DEFAULT 'each'`, so it always arrives) and is carried
+    /// here even though today's dialog does not draw it. What the Worker sends
+    /// is this type's business; a field dropped at the boundary is a field no
+    /// screen can later put back without another trip through this file. A
+    /// price asked for "per kg" is a different question from one asked for
+    /// "each", and the answer is money.
+    NeedsPrice(name: str, product_id: str, unit: str)
+}
+
+/// One 422, or one basket.
+///
+/// **An answer with no `needs` on it is an ordinary basket** — that is the
+/// common path, every reply from the other seven endpoints and every successful
+/// scan. So is an answer carrying a `needs` tag this build does not recognise:
+/// that is what the till did before this enum existed and it is preserved
+/// deliberately rather than by omission. It is not obviously the right answer —
+/// an unknown tag converts to a basket with no lines and a zero total, which on
+/// a till reads as "the sale is empty" — but changing it is a behaviour change
+/// on the money path and belongs in its own commit, not in a refactor.
+fn answer_of(d: doc.Doc) -> Answer {
+    // Both 422s nest the product; neither of the two top-level age fields is
+    // under it. Bound once because only one of the arms below can be taken.
+    let product = doc.field(d, "product")
+    match doc.text(d, "needs", "") {
+        "age_check" => {
+            return Answer.NeedsAgeCheck(
+                name: doc.text(product, "name", ""),
+                min_age: doc.int_of(d, "min_age", 18),
+                born_before: doc.int_of(d, "born_on_or_before", 0),
+                product_id: doc.text(product, "id", ""))
+        },
+        "price" => {
+            return Answer.NeedsPrice(
+                name: doc.text(product, "name", ""),
+                product_id: doc.text(product, "id", ""),
+                unit: doc.text(product, "unit", ""))
+        },
+        _ => {},
+    }
+    return Answer.Basket(basket: model.basket_of(d))
+}
+
 /// What is on the lane right now.
 ///
 /// The one basket-shaped endpoint with no 422 in it — there is no item being
-/// added, so there is nothing to be asked for — which is why this one converts
-/// and the others hand the caller a document to branch on.
+/// added, so there is nothing to be asked for — which is why this one answers a
+/// [`model.Basket`] flat rather than an [`Answer`] the caller has to match.
 pub async fn basket(token: str) -> (model.Basket, error) {
     let (answer, err) = await get(token, "/till/basket")
     check err
     return model.basket_of(answer), nil
 }
 
+/// Ring an item. **The only endpoint that sends a 422 today**, and so the only
+/// one whose [`Answer`] is ever `NeedsAgeCheck` or `NeedsPrice`.
 pub async fn scan(token: str, code: str, product_id: str, qty: float, age_checked: bool,
-    price: int, ask_price: bool) -> (doc.Doc, error) {
+    price: int, ask_price: bool) -> (Answer, error) {
     var body: { str: json.Json } = { }
     if code.len() > 0 {
         body["code"] = json.Json.Text(code)
@@ -220,21 +361,27 @@ pub async fn scan(token: str, code: str, product_id: str, qty: float, age_checke
     if ask_price {
         body["price"] = json.Json.Number(price as float)
     }
-    return await post(token, "/till/scan", json.Json.Object(body))
+    let (answer, err) = await post(token, "/till/scan", json.Json.Object(body))
+    check err
+    return answer_of(answer), nil
 }
 
-pub async fn set_qty(token: str, line_id: str, qty: float) -> (doc.Doc, error) {
+pub async fn set_qty(token: str, line_id: str, qty: float) -> (Answer, error) {
     var body: { str: json.Json } = { }
     body["qty"] = json.Json.Number(qty)
-    return await patch(token, "/till/line/\(line_id)", json.Json.Object(body))
+    let (answer, err) = await patch(token, "/till/line/\(line_id)", json.Json.Object(body))
+    check err
+    return answer_of(answer), nil
 }
 
-pub async fn void_line(token: str, line_id: str) -> (doc.Doc, error) {
-    return await remove(token, "/till/line/\(line_id)")
+pub async fn void_line(token: str, line_id: str) -> (Answer, error) {
+    let (answer, err) = await remove(token, "/till/line/\(line_id)")
+    check err
+    return answer_of(answer), nil
 }
 
 pub async fn adjust_line(token: str, line_id: str, kind: str, amount: int,
-    manager_pin: str) -> (doc.Doc, error) {
+    manager_pin: str) -> (Answer, error) {
     var body: { str: json.Json } = { }
     body["kind"] = json.Json.Text(kind)
     if kind == "discount" {
@@ -246,13 +393,17 @@ pub async fn adjust_line(token: str, line_id: str, kind: str, amount: int,
     if manager_pin.len() > 0 {
         body["manager_pin"] = json.Json.Text(manager_pin)
     }
-    return await post(token, "/till/line/\(line_id)/adjust", json.Json.Object(body))
+    let (answer, err) = await post(token, "/till/line/\(line_id)/adjust", json.Json.Object(body))
+    check err
+    return answer_of(answer), nil
 }
 
-pub async fn hold(token: str, label: str) -> (doc.Doc, error) {
+pub async fn hold(token: str, label: str) -> (Answer, error) {
     var body: { str: json.Json } = { }
     body["label"] = json.Json.Text(label)
-    return await post(token, "/till/hold", json.Json.Object(body))
+    let (answer, err) = await post(token, "/till/hold", json.Json.Object(body))
+    check err
+    return answer_of(answer), nil
 }
 
 pub async fn held(token: str) -> ([model.Held], error) {
@@ -261,17 +412,21 @@ pub async fn held(token: str) -> ([model.Held], error) {
     return map(doc.items(doc.field(answer, "held")), model.held_of), nil
 }
 
-pub async fn recall(token: str, id: str) -> (doc.Doc, error) {
-    return await post(token, "/till/held/\(id)/recall", empty())
+pub async fn recall(token: str, id: str) -> (Answer, error) {
+    let (answer, err) = await post(token, "/till/held/\(id)/recall", empty())
+    check err
+    return answer_of(answer), nil
 }
 
-pub async fn void_sale(token: str, reason: str, manager_pin: str) -> (doc.Doc, error) {
+pub async fn void_sale(token: str, reason: str, manager_pin: str) -> (Answer, error) {
     var body: { str: json.Json } = { }
     body["reason"] = json.Json.Text(reason)
     if manager_pin.len() > 0 {
         body["manager_pin"] = json.Json.Text(manager_pin)
     }
-    return await post(token, "/till/void", json.Json.Object(body))
+    let (answer, err) = await post(token, "/till/void", json.Json.Object(body))
+    check err
+    return answer_of(answer), nil
 }
 
 /// Finish the sale.
@@ -280,7 +435,7 @@ pub async fn void_sale(token: str, reason: str, manager_pin: str) -> (doc.Doc, e
 /// once per attempt rather than per retry — which is the whole point: a lane
 /// that loses the answer and asks again lands on the same sale instead of
 /// ringing a second one.
-pub async fn pay(token: str, payments: [model.Payment], client_id: str) -> (doc.Doc, error) {
+pub async fn pay(token: str, payments: [model.Payment], client_id: str) -> (model.Paid, error) {
     var body: { str: json.Json } = { }
     body["client_id"] = json.Json.Text(client_id)
     var list: [json.Json] = []
@@ -295,7 +450,9 @@ pub async fn pay(token: str, payments: [model.Payment], client_id: str) -> (doc.
         list.push(json.Json.Object(entry))
     }
     body["payments"] = json.Json.Array(list)
-    return await post(token, "/till/pay", json.Json.Object(body))
+    let (answer, err) = await post(token, "/till/pay", json.Json.Object(body))
+    check err
+    return model.paid_of(answer), nil
 }
 
 /// Everything the till holds: the products, and the headings they file under.
@@ -328,8 +485,10 @@ pub async fn search(token: str, q: str) -> ([model.Product], error) {
     return map(doc.items(doc.field(answer, "products")), model.product_of), nil
 }
 
-pub async fn price_check(token: str, code: str) -> (doc.Doc, error) {
-    return await get(token, "/till/price/\(window.escaped(code))")
+pub async fn price_check(token: str, code: str) -> (model.PriceCheck, error) {
+    let (answer, err) = await get(token, "/till/price/\(window.escaped(code))")
+    check err
+    return model.price_check_of(answer), nil
 }
 
 // ---- the rest of the till's command bar ------------------------------------
@@ -346,17 +505,21 @@ pub async fn customers_at_till(token: str, q: str) -> ([model.Customer], error) 
     return out, nil
 }
 
-pub async fn set_customer(token: str, customer_id: str) -> (doc.Doc, error) {
+pub async fn set_customer(token: str, customer_id: str) -> (Answer, error) {
     var body: { str: json.Json } = { }
     body["customer_id"] = json.Json.Text(customer_id)
-    return await post(token, "/till/customer", json.Json.Object(body))
+    let (answer, err) = await post(token, "/till/customer", json.Json.Object(body))
+    check err
+    return answer_of(answer), nil
 }
 
-pub async fn new_customer(token: str, name: str, phone: str) -> (doc.Doc, error) {
+pub async fn new_customer(token: str, name: str, phone: str) -> (model.Created, error) {
     var body: { str: json.Json } = { }
     body["name"] = json.Json.Text(name)
     body["phone"] = json.Json.Text(phone)
-    return await post(token, "/till/customers", json.Json.Object(body))
+    let (answer, err) = await post(token, "/till/customers", json.Json.Object(body))
+    check err
+    return made_of(answer, "that customer was added but came back without an id")
 }
 
 pub async fn receipts(token: str, q: str) -> ([model.Receipt], error) {
@@ -365,8 +528,10 @@ pub async fn receipts(token: str, q: str) -> ([model.Receipt], error) {
     return map(doc.items(doc.field(answer, "receipts")), model.receipt_of), nil
 }
 
-pub async fn receipt(token: str, id: str) -> (doc.Doc, error) {
-    return await get(token, "/till/receipts/\(id)")
+pub async fn receipt(token: str, id: str) -> (model.ReceiptDetail, error) {
+    let (answer, err) = await get(token, "/till/receipts/\(id)")
+    check err
+    return model.receipt_detail_of(answer), nil
 }
 
 pub async fn take_return(token: str, sale_id: str, lines: [model.ReturnLine],
@@ -399,13 +564,15 @@ pub async fn no_sale(token: str, reason: str, manager_pin: str) -> (doc.Doc, err
     return await post(token, "/till/no-sale", json.Json.Object(body))
 }
 
-pub async fn close_lane(token: str, counted: int, manager_pin: str) -> (doc.Doc, error) {
+pub async fn close_lane(token: str, counted: int, manager_pin: str) -> (model.DrawerCount, error) {
     var body: { str: json.Json } = { }
     body["counted_total"] = json.Json.Number(counted as float)
     if manager_pin.len() > 0 {
         body["manager_pin"] = json.Json.Text(manager_pin)
     }
-    return await post(token, "/till/close-lane", json.Json.Object(body))
+    let (answer, err) = await post(token, "/till/close-lane", json.Json.Object(body))
+    check err
+    return counted_of(answer)
 }
 
 pub async fn sign_out(token: str) -> (doc.Doc, error) {
@@ -414,104 +581,212 @@ pub async fn sign_out(token: str) -> (doc.Doc, error) {
 
 // ---- the back office -------------------------------------------------------
 
-pub async fn overview(token: str) -> (doc.Doc, error) {
-    return await get(token, "/reports/overview")
+pub async fn overview(token: str) -> (model.Overview, error) {
+    let (answer, err) = await get(token, "/reports/overview")
+    check err
+    return model.overview_of(answer)
 }
 
-pub async fn lanes(token: str) -> (doc.Doc, error) {
-    return await get(token, "/tills")
+/// Every lane, and what its drawer is doing.
+///
+/// The `stale_after` the same answer carries is the number of seconds after
+/// which the Worker calls a lane offline. It is not returned: the `state` it
+/// decides is already on every lane, and nothing at this end recomputes it.
+pub async fn lanes(token: str) -> ([model.Lane], error) {
+    let (answer, err) = await get(token, "/tills")
+    check err
+    return map(doc.items(doc.field(answer, "lanes")), model.lane_of), nil
 }
 
-pub async fn products(token: str, q: str) -> (doc.Doc, error) {
-    return await get(token, "/catalog/products?q=\(window.escaped(q))")
+pub async fn products(token: str, q: str) -> ([model.CatalogProduct], error) {
+    let (answer, err) = await get(token, "/catalog/products?q=\(window.escaped(q))")
+    check err
+    return map(doc.items(doc.field(answer, "products")), model.catalog_product_of), nil
 }
 
-pub async fn inventory(token: str) -> (doc.Doc, error) {
-    return await get(token, "/inventory")
+pub async fn inventory(token: str) -> (model.Inventory, error) {
+    let (answer, err) = await get(token, "/inventory")
+    check err
+    return model.inventory_of(answer)
 }
 
-pub async fn sales_history(token: str, from: int, to: int) -> (doc.Doc, error) {
-    return await get(token, "/sales?from=\(from)&to=\(to)")
+pub async fn sales_history(token: str, from: int, to: int) -> ([model.SaleRow], error) {
+    let (answer, err) = await get(token, "/sales?from=\(from)&to=\(to)")
+    check err
+    return map(doc.items(doc.field(answer, "sales")), model.sale_row_of), nil
 }
 
-pub async fn shifts(token: str) -> (doc.Doc, error) {
-    return await get(token, "/shifts")
+pub async fn shifts(token: str) -> ([model.ShiftRow], error) {
+    let (answer, err) = await get(token, "/shifts")
+    check err
+    return map(doc.items(doc.field(answer, "shifts")), model.shift_row_of), nil
 }
 
-pub async fn staff(token: str) -> (doc.Doc, error) {
-    return await get(token, "/staff")
+/// The staff list, and the command table the till builds its bar from.
+///
+/// Two lists in one answer because they come from one request, and a tuple
+/// rather than a struct for the same reason [`grid`] is one: there is no third
+/// thing worth naming. The rules **decode** where the people do not — a rule is
+/// four strings the Worker builds from its own table, with no column behind any
+/// of them, while `users.username` and `last_seen_at` are nullable.
+pub async fn staff(token: str) -> (([model.Staff], [model.CommandRule]), error) {
+    let (answer, err) = await get(token, "/staff")
+    check err
+    var matrix: [model.CommandRule] = []
+    for item in list_of(answer, "matrix") {
+        let (one, derr) = model.CommandRule.decode(item)
+        check errors.wrap(derr, "the command table has a row we could not read")
+        matrix.push(one)
+    }
+    let people = map(doc.items(doc.field(answer, "staff")), model.staff_of)
+    return (people, matrix), nil
 }
 
-pub async fn audit(token: str, from: int) -> (doc.Doc, error) {
-    return await get(token, "/sales/audit/log?from=\(from)")
+pub async fn audit(token: str, from: int) -> ([model.AuditEntry], error) {
+    let (answer, err) = await get(token, "/sales/audit/log?from=\(from)")
+    check err
+    return map(doc.items(doc.field(answer, "entries")), model.audit_entry_of), nil
 }
 
-pub async fn product_report(token: str, from: int, to: int) -> (doc.Doc, error) {
-    return await get(token, "/reports/products?from=\(from)&to=\(to)")
+pub async fn product_report(token: str, from: int, to: int) -> (model.ProductReport, error) {
+    let (answer, err) = await get(token, "/reports/products?from=\(from)&to=\(to)")
+    check err
+    return model.product_report_of(answer)
 }
 
-pub async fn sales_report(token: str, from: int, to: int) -> (doc.Doc, error) {
-    return await get(token, "/reports/sales?from=\(from)&to=\(to)")
+pub async fn sales_report(token: str, from: int, to: int) -> (model.SalesReport, error) {
+    let (answer, err) = await get(token, "/reports/sales?from=\(from)&to=\(to)")
+    check err
+    let (report, derr) = model.SalesReport.decode(body_of(answer))
+    check errors.wrap(derr, "the sales report would not read")
+    return report, nil
 }
 
-pub async fn worksheet(token: str, days: int) -> (doc.Doc, error) {
-    return await get(token, "/purchasing/worksheet?days=\(days)")
+/// What to reorder, over a window.
+///
+/// The `days` the answer echoes back is the window the Worker resolved, and it
+/// is not returned: the caller passed it in and nothing draws it.
+pub async fn worksheet(token: str, days: int) -> ([model.WorksheetLine], error) {
+    let (answer, err) = await get(token, "/purchasing/worksheet?days=\(days)")
+    check err
+    return map(doc.items(doc.field(answer, "lines")), model.worksheet_line_of), nil
 }
 
-pub async fn purchase_orders(token: str) -> (doc.Doc, error) {
-    return await get(token, "/purchasing/orders")
+pub async fn purchase_orders(token: str) -> ([model.PurchaseOrder], error) {
+    let (answer, err) = await get(token, "/purchasing/orders")
+    check err
+    return map(doc.items(doc.field(answer, "orders")), model.purchase_order_of), nil
 }
 
-pub async fn suppliers(token: str) -> (doc.Doc, error) {
-    return await get(token, "/catalog/suppliers")
+pub async fn suppliers(token: str) -> ([model.Supplier], error) {
+    let (answer, err) = await get(token, "/catalog/suppliers")
+    check err
+    return map(doc.items(doc.field(answer, "suppliers")), model.supplier_of), nil
 }
 
-pub async fn categories(token: str) -> (doc.Doc, error) {
-    return await get(token, "/catalog/categories")
+pub async fn categories(token: str) -> ([model.CatalogCategory], error) {
+    let (answer, err) = await get(token, "/catalog/categories")
+    check err
+    var out: [model.CatalogCategory] = []
+    for item in list_of(answer, "categories") {
+        let (one, derr) = model.CatalogCategory.decode(item)
+        check errors.wrap(derr, "the catalogue has a heading we could not read")
+        out.push(one)
+    }
+    return out, nil
 }
 
-pub async fn customers(token: str) -> (doc.Doc, error) {
-    return await get(token, "/customers")
+pub async fn customers(token: str) -> ([model.CustomerAccount], error) {
+    let (answer, err) = await get(token, "/customers")
+    check err
+    return map(doc.items(doc.field(answer, "customers")), model.customer_account_of), nil
 }
 
-pub async fn promotions(token: str) -> (doc.Doc, error) {
-    return await get(token, "/promotions")
+/// Every offer, and the moment the server judged them at.
+///
+/// `now` comes back with the list because whether an offer is *running* is a
+/// comparison against the clock, and the clock that matters is the one pricing
+/// a line. A back office in another time zone — or on a laptop whose clock has
+/// drifted — must not draw an offer as live that the till will not apply.
+pub async fn promotions(token: str) -> (([model.Promotion], int), error) {
+    let (answer, err) = await get(token, "/promotions")
+    check err
+    let offers = map(doc.items(doc.field(answer, "promotions")), model.promotion_of)
+    // This lane's own clock only if the server sent none — which it always
+    // does. A zero here would read as 1970 and draw every scheduled offer as
+    // not yet started.
+    return (offers, doc.int_of(answer, "now", browser.now())), nil
 }
 
-pub async fn promotion_performance(token: str, from: int) -> (doc.Doc, error) {
-    return await get(token, "/promotions/performance?from=\(from)")
+pub async fn promotion_performance(token: str, from: int) -> ([model.PromotionResult], error) {
+    let (answer, err) = await get(token, "/promotions/performance?from=\(from)")
+    check err
+    var out: [model.PromotionResult] = []
+    for item in list_of(answer, "performance") {
+        let (one, derr) = model.PromotionResult.decode(item)
+        check errors.wrap(derr, "an offer's figures would not read")
+        out.push(one)
+    }
+    return out, nil
 }
 
-pub async fn accounting_summary(token: str) -> (doc.Doc, error) {
-    return await get(token, "/accounting/summary")
+pub async fn accounting_summary(token: str) -> (model.BooksSummary, error) {
+    let (answer, err) = await get(token, "/accounting/summary")
+    check err
+    return model.books_summary_of(answer), nil
 }
 
-pub async fn profit_and_loss(token: str, from: int, to: int) -> (doc.Doc, error) {
-    return await get(token, "/accounting/profit-and-loss?from=\(from)&to=\(to)")
+pub async fn profit_and_loss(token: str, from: int, to: int) -> (model.ProfitAndLoss, error) {
+    let (answer, err) = await get(token, "/accounting/profit-and-loss?from=\(from)&to=\(to)")
+    check err
+    let (sheet, derr) = model.ProfitAndLoss.decode(body_of(answer))
+    check errors.wrap(derr, "the profit and loss would not read")
+    return sheet, nil
 }
 
-pub async fn balance_sheet(token: str, as_at: int) -> (doc.Doc, error) {
-    return await get(token, "/accounting/balance-sheet?as_at=\(as_at)")
+pub async fn balance_sheet(token: str, as_at: int) -> (model.BalanceSheet, error) {
+    let (answer, err) = await get(token, "/accounting/balance-sheet?as_at=\(as_at)")
+    check err
+    let (sheet, derr) = model.BalanceSheet.decode(body_of(answer))
+    check errors.wrap(derr, "the balance sheet would not read")
+    return sheet, nil
 }
 
-pub async fn trial_balance(token: str, from: int, to: int) -> (doc.Doc, error) {
-    return await get(token, "/accounting/trial-balance?from=\(from)&to=\(to)")
+pub async fn trial_balance(token: str, from: int, to: int) -> (model.TrialBalance, error) {
+    let (answer, err) = await get(token, "/accounting/trial-balance?from=\(from)&to=\(to)")
+    check err
+    let (sheet, derr) = model.TrialBalance.decode(body_of(answer))
+    check errors.wrap(derr, "the trial balance would not read")
+    return sheet, nil
 }
 
-pub async fn journal(token: str, from: int, to: int) -> (doc.Doc, error) {
-    return await get(token, "/accounting/journal?from=\(from)&to=\(to)")
+pub async fn journal(token: str, from: int, to: int) -> (model.Journal, error) {
+    let (answer, err) = await get(token, "/accounting/journal?from=\(from)&to=\(to)")
+    check err
+    return model.journal_of(answer)
 }
 
-pub async fn expenses(token: str, from: int, to: int) -> (doc.Doc, error) {
-    return await get(token, "/accounting/expenses?from=\(from)&to=\(to)")
+pub async fn expenses(token: str, from: int, to: int) -> (model.ExpenseReport, error) {
+    let (answer, err) = await get(token, "/accounting/expenses?from=\(from)&to=\(to)")
+    check err
+    return model.expense_report_of(answer)
 }
 
+/// The shop's own settings, and the one read that stays a document.
+///
+/// A key→value map of setting names, every value optional and every one with a
+/// per-key default at the other end. A struct here would be the Worker's allow
+/// list written down a second time, and not one field of it could derive.
 pub async fn settings(token: str) -> (doc.Doc, error) {
     return await get(token, "/settings")
 }
 
-pub async fn shrinkage(token: str, from: int, to: int) -> (doc.Doc, error) {
-    return await get(token, "/reports/shrinkage?from=\(from)&to=\(to)")
+pub async fn shrinkage(token: str, from: int, to: int) -> (model.ShrinkageReport, error) {
+    let (answer, err) = await get(token, "/reports/shrinkage?from=\(from)&to=\(to)")
+    check err
+    let (report, derr) = model.ShrinkageReport.decode(body_of(answer))
+    check errors.wrap(derr, "the shrinkage report would not read")
+    return report, nil
 }
 
 // ---- the back office's writes ----------------------------------------------
@@ -531,8 +806,10 @@ pub async fn retire_product(token: str, id: str) -> (doc.Doc, error) {
     return await remove(token, "/catalog/products/\(id)")
 }
 
-pub async fn product(token: str, id: str) -> (doc.Doc, error) {
-    return await get(token, "/catalog/products/\(id)")
+pub async fn product(token: str, id: str) -> (model.ProductPage, error) {
+    let (answer, err) = await get(token, "/catalog/products/\(id)")
+    check err
+    return model.product_page_of(answer)
 }
 
 pub async fn add_barcode(token: str, product_id: str, body: json.Json) -> (doc.Doc, error) {
@@ -585,12 +862,16 @@ pub async fn save_customer(token: str, id: str, body: json.Json) -> (doc.Doc, er
     return await post(token, "/customers", body)
 }
 
-pub async fn raise_order(token: str, body: json.Json) -> (doc.Doc, error) {
-    return await post(token, "/purchasing/orders", body)
+pub async fn raise_order(token: str, body: json.Json) -> (model.Created, error) {
+    let (answer, err) = await post(token, "/purchasing/orders", body)
+    check err
+    return made_of(answer, "that order was raised but came back without an id")
 }
 
-pub async fn order(token: str, id: str) -> (doc.Doc, error) {
-    return await get(token, "/purchasing/orders/\(id)")
+pub async fn order(token: str, id: str) -> (model.OrderPage, error) {
+    let (answer, err) = await get(token, "/purchasing/orders/\(id)")
+    check err
+    return model.order_page_of(answer)
 }
 
 pub async fn send_order(token: str, id: str) -> (doc.Doc, error) {
@@ -601,20 +882,28 @@ pub async fn receive_order(token: str, id: str, body: json.Json) -> (doc.Doc, er
     return await post(token, "/purchasing/orders/\(id)/receive", body)
 }
 
-pub async fn add_invoice(token: str, body: json.Json) -> (doc.Doc, error) {
-    return await post(token, "/purchasing/invoices", body)
+pub async fn add_invoice(token: str, body: json.Json) -> (model.Created, error) {
+    let (answer, err) = await post(token, "/purchasing/invoices", body)
+    check err
+    return made_of(answer, "that invoice was recorded but came back without an id")
 }
 
-pub async fn pay_invoice(token: str, id: str, body: json.Json) -> (doc.Doc, error) {
-    return await post(token, "/purchasing/invoices/\(id)/pay", body)
+pub async fn pay_invoice(token: str, id: str, body: json.Json) -> (model.Created, error) {
+    let (answer, err) = await post(token, "/purchasing/invoices/\(id)/pay", body)
+    check err
+    return made_of(answer, "that payment was recorded but came back without an id")
 }
 
-pub async fn add_expense(token: str, body: json.Json) -> (doc.Doc, error) {
-    return await post(token, "/accounting/expenses", body)
+pub async fn add_expense(token: str, body: json.Json) -> (model.Created, error) {
+    let (answer, err) = await post(token, "/accounting/expenses", body)
+    check err
+    return made_of(answer, "that expense was recorded but came back without an id")
 }
 
-pub async fn close_period(token: str, body: json.Json) -> (doc.Doc, error) {
-    return await post(token, "/accounting/periods/close", body)
+pub async fn close_period(token: str, body: json.Json) -> (model.Created, error) {
+    let (answer, err) = await post(token, "/accounting/periods/close", body)
+    check err
+    return made_of(answer, "that month was closed but came back without an id")
 }
 
 pub async fn save_staff(token: str, id: str, body: json.Json) -> (doc.Doc, error) {
@@ -644,53 +933,69 @@ pub async fn adjust_stock(token: str, body: json.Json) -> (doc.Doc, error) {
     return await post(token, "/inventory/adjust", body)
 }
 
-pub async fn movements(token: str, from: int, product_id: str) -> (doc.Doc, error) {
-    return await get(token, "/inventory/movements?from=\(from)&product_id=\(window.escaped(product_id))")
+pub async fn movements(token: str, from: int, product_id: str) -> ([model.StockMovement], error) {
+    let (answer, err) = await get(token,
+        "/inventory/movements?from=\(from)&product_id=\(window.escaped(product_id))")
+    check err
+    return map(doc.items(doc.field(answer, "movements")), model.stock_movement_of), nil
 }
 
-pub async fn shift(token: str, id: str) -> (doc.Doc, error) {
-    return await get(token, "/shifts/\(id)")
+pub async fn shift(token: str, id: str) -> (model.ShiftPage, error) {
+    let (answer, err) = await get(token, "/shifts/\(id)")
+    check err
+    return model.shift_page_of(answer)
 }
 
 pub async fn shift_movement(token: str, id: str, body: json.Json) -> (doc.Doc, error) {
     return await post(token, "/shifts/\(id)/movement", body)
 }
 
-pub async fn close_shift(token: str, id: str, counted: int, note: str) -> (doc.Doc, error) {
+pub async fn close_shift(token: str, id: str, counted: int, note: str) -> (model.DrawerCount, error) {
     var body: { str: json.Json } = { }
     body["counted_total"] = json.Json.Number(counted as float)
     body["note"] = json.Json.Text(note)
-    return await post(token, "/shifts/\(id)/close", json.Json.Object(body))
+    let (answer, err) = await post(token, "/shifts/\(id)/close", json.Json.Object(body))
+    check err
+    return counted_of(answer)
 }
 
-pub async fn sale(token: str, id: str) -> (doc.Doc, error) {
-    return await get(token, "/sales/\(id)")
+pub async fn sale(token: str, id: str) -> (model.SalePage, error) {
+    let (answer, err) = await get(token, "/sales/\(id)")
+    check err
+    return model.sale_page_of(answer)
 }
 
 pub async fn refund_sale(token: str, id: str, body: json.Json) -> (doc.Doc, error) {
     return await post(token, "/sales/\(id)/refund", body)
 }
 
-pub async fn add_register(token: str, body: json.Json) -> (doc.Doc, error) {
-    return await post(token, "/tills", body)
+pub async fn add_register(token: str, body: json.Json) -> (model.Created, error) {
+    let (answer, err) = await post(token, "/tills", body)
+    check err
+    return made_of(answer, "that lane was added but came back without an id")
 }
 
 pub async fn retire_register(token: str, id: str) -> (doc.Doc, error) {
     return await remove(token, "/tills/\(id)")
 }
 
-pub async fn open_shift(token: str, register_id: str, float_amount: int) -> (doc.Doc, error) {
+pub async fn open_shift(token: str, register_id: str, float_amount: int) -> (model.Created, error) {
     var body: { str: json.Json } = { }
     body["register_id"] = json.Json.Text(register_id)
     body["opening_float"] = json.Json.Number(float_amount as float)
-    return await post(token, "/shifts/open", json.Json.Object(body))
+    let (answer, err) = await post(token, "/shifts/open", json.Json.Object(body))
+    check err
+    return made_of(answer, "that drawer was opened but came back without an id")
 }
 
 /// Close a lane from the back office, which needs the lane named.
-pub async fn force_close_lane(token: str, register_id: str, counted: int) -> (doc.Doc, error) {
+pub async fn force_close_lane(token: str, register_id: str,
+    counted: int) -> (model.DrawerCount, error) {
     var body: { str: json.Json } = { }
     body["counted_total"] = json.Json.Number(counted as float)
-    return await post(token, "/tills/\(register_id)/close", json.Json.Object(body))
+    let (answer, err) = await post(token, "/tills/\(register_id)/close", json.Json.Object(body))
+    check err
+    return counted_of(answer)
 }
 
 /// A response read as text rather than as a document.
@@ -708,26 +1013,57 @@ pub async fn fetch_text(token: str, path: str) -> (str, error) {
 
 // ---- the books -------------------------------------------------------------
 
-pub async fn books_health(token: str) -> (doc.Doc, error) {
-    return await get(token, "/accounting/health")
+pub async fn books_health(token: str) -> (model.Health, error) {
+    let (answer, err) = await get(token, "/accounting/health")
+    check err
+    let (sweep, derr) = model.Health.decode(body_of(answer))
+    check errors.wrap(derr, "the ledger health check would not read")
+    return sweep, nil
 }
 
-pub async fn accounts(token: str) -> (doc.Doc, error) {
-    return await get(token, "/accounting/accounts")
+pub async fn accounts(token: str) -> ([model.Account], error) {
+    let (answer, err) = await get(token, "/accounting/accounts")
+    check err
+    var out: [model.Account] = []
+    for item in list_of(answer, "accounts") {
+        let (one, derr) = model.Account.decode(item)
+        check errors.wrap(derr, "the chart has an account we could not read")
+        out.push(one)
+    }
+    return out, nil
 }
 
-pub async fn expense_accounts(token: str) -> (doc.Doc, error) {
-    return await get(token, "/accounting/expense-accounts")
+/// The accounts a running cost may be booked to.
+///
+/// Two fields, not four: this endpoint selects only the code and the name, so
+/// it cannot be read as an [`model.Account`], which wants a `kind` that is not
+/// on the wire here.
+pub async fn expense_accounts(token: str) -> ([model.AccountOption], error) {
+    let (answer, err) = await get(token, "/accounting/expense-accounts")
+    check err
+    var out: [model.AccountOption] = []
+    for item in list_of(answer, "accounts") {
+        let (one, derr) = model.AccountOption.decode(item)
+        check errors.wrap(derr, "the expense accounts have a row we could not read")
+        out.push(one)
+    }
+    return out, nil
 }
 
-pub async fn general_ledger(token: str, code: str, from: int, to: int) -> (doc.Doc, error) {
-    return await get(token, "/accounting/ledger?account_code=\(code)&from=\(from)&to=\(to)")
+pub async fn general_ledger(token: str, code: str, from: int,
+    to: int) -> (model.Ledger, error) {
+    let (answer, err) = await get(token,
+        "/accounting/ledger?account_code=\(code)&from=\(from)&to=\(to)")
+    check err
+    return model.ledger_of(answer)
 }
 
 pub async fn journal_filtered(token: str, from: int, to: int, ref_type: str,
-    code: str, q: str) -> (doc.Doc, error) {
-    return await get(token,
+    code: str, q: str) -> (model.Journal, error) {
+    let (answer, err) = await get(token,
         "/accounting/journal?from=\(from)&to=\(to)&ref_type=\(ref_type)&account_code=\(code)&q=\(q)")
+    check err
+    return model.journal_of(answer)
 }
 
 pub async fn remove_category(token: str, id: str) -> (doc.Doc, error) {
@@ -754,14 +1090,22 @@ pub async fn reopen_period(token: str, id: str) -> (doc.Doc, error) {
     return await post(token, "/accounting/periods/\(id)/reopen", empty())
 }
 
-pub async fn dead_stock(token: str, days: int) -> (doc.Doc, error) {
-    return await get(token, "/reports/dead-stock?days=\(days)")
+pub async fn dead_stock(token: str, days: int) -> (model.DeadStockReport, error) {
+    let (answer, err) = await get(token, "/reports/dead-stock?days=\(days)")
+    check err
+    return model.dead_stock_report_of(answer), nil
 }
 
-pub async fn tax_report(token: str, from: int, to: int) -> (doc.Doc, error) {
-    return await get(token, "/reports/tax?from=\(from)&to=\(to)")
+pub async fn tax_report(token: str, from: int, to: int) -> (model.TaxReport, error) {
+    let (answer, err) = await get(token, "/reports/tax?from=\(from)&to=\(to)")
+    check err
+    let (report, derr) = model.TaxReport.decode(body_of(answer))
+    check errors.wrap(derr, "the tax report would not read")
+    return report, nil
 }
 
-pub async fn payables(token: str) -> (doc.Doc, error) {
-    return await get(token, "/purchasing/payables")
+pub async fn payables(token: str) -> (model.Payables, error) {
+    let (answer, err) = await get(token, "/purchasing/payables")
+    check err
+    return model.payables_of(answer)
 }

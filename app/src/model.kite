@@ -8,17 +8,17 @@
 //! becomes its empty value rather than an `Option` every call site has to
 //! unwrap — the API is ours and its shape is a contract, not a guess.
 //!
-//! ## Two of these decode themselves, and the rest cannot
+//! ## Which of these decode themselves, and which cannot
 //!
 //! `@derive(Decode)` writes a decoder that reads each field under **its own
 //! name**, gives it **no default**, and returns an error the moment one is
 //! missing, `null`, or the wrong type. That is the right decoder for a payload
-//! whose columns are all `NOT NULL` and whose names already match — [`Category`]
-//! and [`Customer`], and only those two.
+//! whose columns are all `NOT NULL` and whose names already match, and it is
+//! used here wherever that is true of every field.
 //!
-//! Every other struct here is doing work a derived decoder cannot do, and the
-//! hand-written converter stays. The reason is written above each one; they come
-//! down to four kinds:
+//! Every other struct is doing work a derived decoder cannot do, and the
+//! hand-written converter earns its place. The reason is written above each one;
+//! they come down to four kinds:
 //!
 //!   * a **renamed** field (`labelMy`, `promoSaved`, `hold_label`),
 //!   * a **flattened** one ([`Basket`] reads three levels of `sale` into a flat
@@ -27,13 +27,29 @@
 //!   * a **nullable** one, where the server's column permits null and the screen
 //!     wants the empty value rather than a failed load.
 //!
-//! There is a fifth difference that shows up nowhere yet but is worth knowing:
-//! a derived decoder reads an `int` with `json.int_of`, which **truncates**,
-//! while [`doc.int_of`] rounds. Today the Worker rounds every amount of money to
-//! whole minor units before it is serialised, so the two agree on every field
-//! either one reads. They stop agreeing the day something fractional crosses.
+//! The last is much the commonest, and the rule it follows is worth stating
+//! once: **a decoder that rejects a row the server is entitled to send is worse
+//! than one that fills in a blank.** A product with no supplier, an order with
+//! no delivery date and a shift that is still open are all ordinary, and each
+//! one arrives as an explicit `null` that a derived decoder refuses.
+//!
+//! ## A strict row inside a lenient answer
+//!
+//! Several answers are a mixture: `/catalog/products/:id` sends a `product`
+//! that cannot be derived beside `barcodes` that can. Those wrappers convert
+//! **fallibly** — `-> (T, error)` — reading the lenient parts with `doc.*` and
+//! `check`ing the strict ones, which is exactly what [`api.grid`] already does
+//! with the till's categories. A malformed row of a clean shape is a fault at
+//! the other end and says so; a null in a nullable column is not.
+//!
+//! There is one more difference, and it is quiet: a derived decoder reads an
+//! `int` with `json.int_of`, which **truncates**, while [`doc.int_of`] rounds.
+//! Today the Worker rounds every amount of money to whole minor units before it
+//! is serialised, so the two agree on every field either one reads. They stop
+//! agreeing the day something fractional crosses.
 
 use std/json
+use std/errors
 use doc
 use money
 use i18n
@@ -284,10 +300,11 @@ pub fn product_of(d: doc.Doc) -> Product {
 
 /// A shelf heading, exactly as the `categories` table holds it.
 ///
-/// The one struct on this page whose JSON is a straight row: three columns, all
-/// `NOT NULL`, all named what the field is named. `@derive(Decode)` writes the
-/// same reads a hand-written converter did, so there is no converter — the extra
-/// `sort` the query also selects is simply ignored.
+/// Three columns, all `NOT NULL`, all named what the field is named.
+/// `@derive(Decode)` writes the same reads a hand-written converter did, so
+/// there is no converter — the extra `sort` the query also selects is simply
+/// ignored, which is how the same struct reads a row meant for a bigger one.
+/// [`CatalogCategory`] is that bigger one, for the back office's own list.
 @derive(Decode)
 pub struct Category {
     pub id: str
@@ -445,4 +462,2426 @@ pub fn return_line_of(d: doc.Doc) -> ReturnLine {
         returnable: doc.num_of(d, "returnable", 0.0),
         taking: 0.0,
     }
+}
+
+/// A receipt as the returns screen opens it — `GET /till/receipts/:id`.
+///
+/// Not derived: the sale's five fields sit under `sale` and the lines beside it,
+/// and this is the flat pair the screen wants. A narrow projection, so there is
+/// no tax and no promotion here: what a return needs is the number to quote and
+/// how much of each line is still returnable.
+pub struct ReceiptDetail {
+    pub id: str
+    pub number: int
+    pub total: int
+    pub completed_at: int
+    pub cashier: str
+    pub lines: [ReturnLine]
+}
+
+pub fn receipt_detail_of(d: doc.Doc) -> ReceiptDetail {
+    let sale = doc.field(d, "sale")
+    return ReceiptDetail{
+        id: doc.text(sale, "id", ""),
+        number: doc.int_of(sale, "number", 0),
+        total: doc.int_of(sale, "total", 0),
+        completed_at: doc.int_of(sale, "completed_at", 0),
+        cashier: doc.text(sale, "cashier", ""),
+        lines: map(doc.items(doc.field(d, "lines")), return_line_of),
+    }
+}
+
+// ---- what the till is told mid-sale ----------------------------------------
+
+/// What a scan came back asking for.
+///
+/// A 422 from `/till/scan` is a **step in ringing a sale**, not a failure: the
+/// product has no shelf price, or it is age-restricted and nobody has looked at
+/// the customer yet. The two shapes share one struct because the till branches
+/// on `kind` and reads only what that branch needs.
+///
+/// Not derived, and could not be: the two payloads have different key sets, and
+/// `product` is a nested object flattened into the three fields the dialog
+/// draws. `min_age` defaults to 18 because a restricted line with no age on it
+/// is the one case where guessing low is the harmful direction.
+pub struct Needs {
+    pub kind: str
+    pub product_id: str
+    pub product_name: str
+    pub min_age: int
+    pub born_on_or_before: int
+}
+
+pub fn needs_of(d: doc.Doc) -> Needs {
+    let product = doc.field(d, "product")
+    return Needs{
+        kind: doc.text(d, "needs", ""),
+        product_id: doc.text(product, "id", ""),
+        product_name: doc.text(product, "name", ""),
+        min_age: doc.int_of(d, "min_age", 18),
+        born_on_or_before: doc.int_of(d, "born_on_or_before", 0),
+    }
+}
+
+/// What a price check answers — `GET /till/price/:code`.
+///
+/// Not derived: `product` is a nested object and the price beside it is at the
+/// top level, so this is a flattening. `qty` is the barcode's pack size and is
+/// **not 1** for a tray or a case; `total` is what that whole pack costs under
+/// the best live offer.
+pub struct PriceCheck {
+    pub product_id: str
+    pub name: str
+    pub name_my: str
+    pub sku: str
+    pub unit: str
+    pub stock: float
+    pub min_age: int
+    pub qty: float
+    pub list_price: int
+    pub promo_name: str
+    pub promo_saved: int
+    pub total: int
+}
+
+pub fn price_check_of(d: doc.Doc) -> PriceCheck {
+    let product = doc.field(d, "product")
+    return PriceCheck{
+        product_id: doc.text(product, "id", ""),
+        name: doc.text(product, "name", ""),
+        name_my: doc.text(product, "name_my", ""),
+        sku: doc.text(product, "sku", ""),
+        unit: doc.text(product, "unit", "each"),
+        stock: doc.num_of(product, "stock", 0.0),
+        min_age: doc.int_of(product, "min_age", 0),
+        qty: doc.num_of(d, "qty", 1.0),
+        list_price: doc.int_of(d, "list_price", 0),
+        promo_name: doc.text(d, "promo_name", ""),
+        promo_saved: doc.int_of(d, "promo_saved", 0),
+        total: doc.int_of(d, "total", 0),
+    }
+}
+
+/// A finished sale — `POST /till/pay`.
+///
+/// Not derived: **`replayed` is absent** on the first successful call and
+/// present as `true` only when the idempotency key had already been used, so a
+/// derived decoder would reject every ordinary sale. `number` and
+/// `completed_at` are written by the same statement that completes the sale and
+/// are sound on both paths.
+pub struct Paid {
+    pub sale_id: str
+    pub number: int
+    pub total: int
+    pub change: int
+    pub completed_at: int
+    pub replayed: bool
+}
+
+pub fn paid_of(d: doc.Doc) -> Paid {
+    return Paid{
+        sale_id: doc.text(d, "sale_id", ""),
+        number: doc.int_of(d, "number", 0),
+        total: doc.int_of(d, "total", 0),
+        change: doc.int_of(d, "change", 0),
+        completed_at: doc.int_of(d, "completed_at", 0),
+        replayed: doc.bool_of(d, "replayed", false),
+    }
+}
+
+/// A counted drawer.
+///
+/// One struct for three doors that answer identically: `/till/close-lane`,
+/// `/tills/:id/close` (by lane) and `/shifts/:id/close` (by shift). `variance`
+/// is `counted - expected` and is **signed** — negative is short.
+///
+/// Derived: four fields, all computed, none of them nullable.
+@derive(Decode)
+pub struct DrawerCount {
+    pub ok: bool
+    pub expected: int
+    pub counted: int
+    pub variance: int
+}
+
+/// What a create answers.
+///
+/// Every POST in this API that makes a row answers `{ "id": … }` and nothing
+/// else — not the row it made. Derived: one field, `NOT NULL`, and named `id`.
+@derive(Decode)
+pub struct Created {
+    pub id: str
+}
+
+/// The object under `name`, ready for a derived decoder.
+///
+/// `decode` takes a `json.Json` while every accessor in [`doc`] takes and
+/// returns an `Option` of one, so a nested object has to be unwrapped before it
+/// can be decoded. An absent key becomes an empty object rather than an error
+/// invented here: the derived decoder then says which field it wanted, which is
+/// a better sentence than anything this line could write.
+fn object_at(d: doc.Doc, name: str) -> json.Json {
+    let none: { str: json.Json } = { }
+    return or_else(json.field(d, name), json.Json.Object(none))
+}
+
+// ---- the catalogue, as the back office reads it -----------------------------
+
+/// A product, whole.
+///
+/// One struct for two endpoints: `GET /catalog/products` sends `p.*` plus the
+/// two joined names, and `GET /catalog/products/:id` sends **exactly the same
+/// twenty-two fields** under `product`. Every column ships, including ones no
+/// screen draws, because the edit form has to send back what it did not change.
+///
+/// Not derived, for five explicit nulls and two coded booleans:
+/// `products.category_id`, `supplier_id` and `photo_key` are nullable columns,
+/// and `category_name`/`supplier_name` come off LEFT JOINs and are null exactly
+/// when their id is. An uncategorised product is legal and has to list. On top
+/// of that `ask_price` and `active` are `INTEGER 0/1`, not JSON booleans.
+///
+/// `active` falls back to **true**: a row that arrived without the column is one
+/// the catalogue is selling, which is the opposite of what a zero would say.
+pub struct CatalogProduct {
+    pub id: str
+    pub sku: str
+    pub name: str
+    pub name_my: str
+    pub category_id: str
+    pub supplier_id: str
+    pub cost: int
+    pub price: int
+    pub tax_bp: int
+    pub min_age: int
+    pub unit: str
+    pub ask_price: bool
+    pub stock: float
+    pub reorder_point: float
+    pub reorder_qty: float
+    pub quick_key: int
+    pub photo_key: str
+    pub active: bool
+    pub created_at: int
+    pub updated_at: int
+    pub category_name: str
+    pub supplier_name: str
+}
+
+pub fn catalog_product_of(d: doc.Doc) -> CatalogProduct {
+    return CatalogProduct{
+        id: doc.text(d, "id", ""),
+        sku: doc.text(d, "sku", ""),
+        name: doc.text(d, "name", ""),
+        name_my: doc.text(d, "name_my", ""),
+        category_id: doc.text(d, "category_id", ""),
+        supplier_id: doc.text(d, "supplier_id", ""),
+        cost: doc.int_of(d, "cost", 0),
+        price: doc.int_of(d, "price", 0),
+        tax_bp: doc.int_of(d, "tax_bp", 0),
+        min_age: doc.int_of(d, "min_age", 0),
+        unit: doc.text(d, "unit", "each"),
+        ask_price: doc.int_of(d, "ask_price", 0) == 1,
+        stock: doc.num_of(d, "stock", 0.0),
+        reorder_point: doc.num_of(d, "reorder_point", 0.0),
+        reorder_qty: doc.num_of(d, "reorder_qty", 0.0),
+        quick_key: doc.int_of(d, "quick_key", 0),
+        photo_key: doc.text(d, "photo_key", ""),
+        active: doc.int_of(d, "active", 1) == 1,
+        created_at: doc.int_of(d, "created_at", 0),
+        updated_at: doc.int_of(d, "updated_at", 0),
+        category_name: doc.text(d, "category_name", ""),
+        supplier_name: doc.text(d, "supplier_name", ""),
+    }
+}
+
+/// One of the codes that finds a product.
+///
+/// Derived: `barcodes` names its three columns and all three are
+/// `NOT NULL DEFAULT` — `pack_size` is a REAL and a fraction of a unit is a
+/// legitimate value, which is why it is a `float` and not an `int`.
+@derive(Decode)
+pub struct Barcode {
+    pub barcode: str
+    pub pack_size: float
+    pub label: str
+}
+
+/// A movement of stock, as a product's own page lists it.
+///
+/// Derived, and it is the one movement shape that can be: this query **names
+/// its columns** and deliberately leaves out the nullable `user_id`. Everything
+/// it does select is `NOT NULL`, and `ref_type`/`ref_id` are the empty string
+/// rather than null for an adjustment with no document behind it.
+///
+/// Not the same shape as [`StockMovement`], which is `m.*` and carries both the
+/// product and the person.
+@derive(Decode)
+pub struct ProductMovement {
+    pub id: str
+    pub qty_delta: float
+    pub reason: str
+    pub ref_type: str
+    pub ref_id: str
+    pub unit_cost: int
+    pub note: str
+    pub created_at: int
+}
+
+/// What one product sold on one day.
+///
+/// Derived: a `DATE()` over a non-null `completed_at` and two SUMs over
+/// non-empty groups. A day with no sales is simply **absent** from the list
+/// rather than present as a zero, so a screen drawing a bar per day has to
+/// supply the gaps itself.
+@derive(Decode)
+pub struct SoldDay {
+    pub day: str
+    pub qty: float
+    pub revenue: int
+}
+
+/// A product's own page — `GET /catalog/products/:id`.
+///
+/// Fallible, and it is the plainest example of why: the `product` is read
+/// leniently because five of its columns may be null, while the three lists
+/// beside it are clean shapes that decode. A malformed barcode is a fault at the
+/// other end and is reported; a product with no supplier is Tuesday.
+pub struct ProductPage {
+    pub product: CatalogProduct
+    pub barcodes: [Barcode]
+    pub movements: [ProductMovement]
+    pub sold: [SoldDay]
+}
+
+pub fn product_page_of(d: doc.Doc) -> (ProductPage, error) {
+    var barcodes: [Barcode] = []
+    for item in json.items(json.field(d, "barcodes")) {
+        let (one, err) = Barcode.decode(item)
+        check errors.wrap(err, "that product has a barcode we could not read")
+        barcodes.push(one)
+    }
+    var movements: [ProductMovement] = []
+    for item in json.items(json.field(d, "movements")) {
+        let (one, err) = ProductMovement.decode(item)
+        check errors.wrap(err, "that product has a movement we could not read")
+        movements.push(one)
+    }
+    var sold: [SoldDay] = []
+    for item in json.items(json.field(d, "sold")) {
+        let (one, err) = SoldDay.decode(item)
+        check errors.wrap(err, "that product's sales history would not read")
+        sold.push(one)
+    }
+    return ProductPage{
+        product: catalog_product_of(doc.field(d, "product")),
+        barcodes: barcodes,
+        movements: movements,
+        sold: sold,
+    }, nil
+}
+
+/// A shelf heading with its count, as the back office lists them.
+///
+/// Derived: `categories.id` and `name` are `NOT NULL`, `name_my` and `sort`
+/// are `NOT NULL DEFAULT`, and `products` is a COUNT. Not the same struct as
+/// [`Category`], which is the till's three-field subset of the same row.
+///
+/// `products` counts **active** products only, so a category holding nothing
+/// but retired lines reads 0 here and still refuses to be deleted.
+@derive(Decode)
+pub struct CatalogCategory {
+    pub id: str
+    pub name: str
+    pub name_my: str
+    pub sort: int
+    pub products: int
+}
+
+/// Somebody the shop buys from.
+///
+/// Not derived for one reason only: `suppliers.active` is an `INTEGER 0/1` and
+/// not a JSON boolean. Every column here is `NOT NULL DEFAULT` and both computed
+/// figures are aggregates, so nothing else in it can arrive null.
+///
+/// `owed` is every invoice's total less every payment against it and **can be
+/// negative** when a supplier has been overpaid. It also does not filter to open
+/// invoices, so a cancelled one still counts here after it has dropped out of
+/// the payables list — the two figures disagree by exactly that amount.
+pub struct Supplier {
+    pub id: str
+    pub name: str
+    pub phone: str
+    pub email: str
+    pub address: str
+    pub lead_days: int
+    pub active: bool
+    pub products: int
+    pub owed: int
+}
+
+pub fn supplier_of(d: doc.Doc) -> Supplier {
+    return Supplier{
+        id: doc.text(d, "id", ""),
+        name: doc.text(d, "name", ""),
+        phone: doc.text(d, "phone", ""),
+        email: doc.text(d, "email", ""),
+        address: doc.text(d, "address", ""),
+        // Three days, which is what the server writes when a supplier is
+        // created without one.
+        lead_days: doc.int_of(d, "lead_days", 3),
+        active: doc.int_of(d, "active", 1) == 1,
+        products: doc.int_of(d, "products", 0),
+        owed: doc.int_of(d, "owed", 0),
+    }
+}
+
+// ---- what is on the shelf ---------------------------------------------------
+
+/// The shop's stock in one line.
+///
+/// Not derived, and this one is insurance rather than a null: every figure is
+/// COALESCE'd and a bare aggregate always returns a row, so the object is
+/// always there and always whole. But it is typed `T|null` at the other end, and
+/// an empty shop showing zeros beats an empty shop showing an error.
+///
+/// `units` is a SUM over a REAL column: 12.5 kg is a legitimate total.
+pub struct InventoryTotals {
+    pub skus: int
+    pub units: float
+    pub at_cost: int
+    pub at_retail: int
+    pub low: int
+    pub out: int
+}
+
+pub fn inventory_totals_of(d: doc.Doc) -> InventoryTotals {
+    return InventoryTotals{
+        skus: doc.int_of(d, "skus", 0),
+        units: doc.num_of(d, "units", 0.0),
+        at_cost: doc.int_of(d, "at_cost", 0),
+        at_retail: doc.int_of(d, "at_retail", 0),
+        low: doc.int_of(d, "low", 0),
+        out: doc.int_of(d, "out", 0),
+    }
+}
+
+/// What one heading's stock is worth.
+///
+/// Derived: `category` is `COALESCE(c.name, 'Uncategorised')` and so is never
+/// null — which does mean a shop with a real category named "Uncategorised"
+/// merges with the bucket for products that have none.
+@derive(Decode)
+pub struct CategoryValue {
+    pub category: str
+    pub skus: int
+    pub at_cost: int
+}
+
+/// A product that is low or out.
+///
+/// Not derived: `supplier_name` is a LEFT JOIN and is null for anything with no
+/// supplier — which is the single null in the whole `/inventory` answer and the
+/// only reason this row is hand-written.
+pub struct LowStock {
+    pub id: str
+    pub sku: str
+    pub name: str
+    pub stock: float
+    pub reorder_point: float
+    pub reorder_qty: float
+    pub cost: int
+    pub price: int
+    pub unit: str
+    pub supplier_name: str
+}
+
+pub fn low_stock_of(d: doc.Doc) -> LowStock {
+    return LowStock{
+        id: doc.text(d, "id", ""),
+        sku: doc.text(d, "sku", ""),
+        name: doc.text(d, "name", ""),
+        stock: doc.num_of(d, "stock", 0.0),
+        reorder_point: doc.num_of(d, "reorder_point", 0.0),
+        reorder_qty: doc.num_of(d, "reorder_qty", 0.0),
+        cost: doc.int_of(d, "cost", 0),
+        price: doc.int_of(d, "price", 0),
+        unit: doc.text(d, "unit", "each"),
+        supplier_name: doc.text(d, "supplier_name", ""),
+    }
+}
+
+/// The stock screen — `GET /inventory`.
+///
+/// Fallible for the by-category breakdown, which decodes; the totals and the
+/// attention list are read leniently for the reasons written above each.
+/// `attention` is empty on a healthy shop, which is the point of it.
+pub struct Inventory {
+    pub totals: InventoryTotals
+    pub by_category: [CategoryValue]
+    pub attention: [LowStock]
+}
+
+pub fn inventory_of(d: doc.Doc) -> (Inventory, error) {
+    var by_category: [CategoryValue] = []
+    for item in json.items(json.field(d, "by_category")) {
+        let (one, err) = CategoryValue.decode(item)
+        check errors.wrap(err, "the stock summary has a heading we could not read")
+        by_category.push(one)
+    }
+    return Inventory{
+        totals: inventory_totals_of(doc.field(d, "totals")),
+        by_category: by_category,
+        attention: map(doc.items(doc.field(d, "attention")), low_stock_of),
+    }, nil
+}
+
+/// A movement of stock, as the movements log lists it.
+///
+/// Not derived: this is `m.*` rather than a named projection, so it carries
+/// `stock_movements.user_id` — a **nullable** column, because a movement can be
+/// written with no signed-in actor behind it — and `user_name` from a LEFT JOIN
+/// that is null both when the id is and when that person has since been removed.
+/// `product_name` and `sku` come from an INNER JOIN and are sound.
+pub struct StockMovement {
+    pub id: str
+    pub product_id: str
+    pub qty_delta: float
+    pub reason: str
+    pub ref_type: str
+    pub ref_id: str
+    pub unit_cost: int
+    pub note: str
+    pub user_id: str
+    pub created_at: int
+    pub product_name: str
+    pub sku: str
+    pub user_name: str
+}
+
+pub fn stock_movement_of(d: doc.Doc) -> StockMovement {
+    return StockMovement{
+        id: doc.text(d, "id", ""),
+        product_id: doc.text(d, "product_id", ""),
+        qty_delta: doc.num_of(d, "qty_delta", 0.0),
+        reason: doc.text(d, "reason", ""),
+        ref_type: doc.text(d, "ref_type", ""),
+        ref_id: doc.text(d, "ref_id", ""),
+        unit_cost: doc.int_of(d, "unit_cost", 0),
+        note: doc.text(d, "note", ""),
+        user_id: doc.text(d, "user_id", ""),
+        created_at: doc.int_of(d, "created_at", 0),
+        product_name: doc.text(d, "product_name", ""),
+        sku: doc.text(d, "sku", ""),
+        user_name: doc.text(d, "user_name", ""),
+    }
+}
+
+// ---- buying -----------------------------------------------------------------
+
+/// A line of the reordering worksheet.
+///
+/// Not derived, and `days_left` is the field that decides it: the server sets it
+/// to **null** for anything that sold nothing in the window, because dividing
+/// what is on the shelf by a rate of nothing has no answer. On a quiet shop most
+/// lines carry that null. It is read here as **-1**, which the screen already
+/// treats as "not running out", rather than as a zero that would read as "out
+/// today". `supplier_id` and `supplier_name` are the usual nullable pair.
+///
+/// `sold`, `on_order` and `per_day` are floats over REAL quantity columns.
+/// `suggested` is a whole number at the other end — a `ceil` floored at zero —
+/// but it is a **`float`** here because it is a quantity: the screen shows it
+/// with the same formatter as every other quantity, and raising an order sends
+/// it back as `qty`, which is REAL.
+pub struct WorksheetLine {
+    pub id: str
+    pub sku: str
+    pub name: str
+    pub stock: float
+    pub reorder_point: float
+    pub reorder_qty: float
+    pub cost: int
+    pub unit: str
+    pub supplier_id: str
+    pub supplier_name: str
+    pub lead_days: int
+    pub sold: float
+    pub on_order: float
+    pub per_day: float
+    pub days_left: float
+    pub suggested: float
+    pub value: int
+}
+
+pub fn worksheet_line_of(d: doc.Doc) -> WorksheetLine {
+    return WorksheetLine{
+        id: doc.text(d, "id", ""),
+        sku: doc.text(d, "sku", ""),
+        name: doc.text(d, "name", ""),
+        stock: doc.num_of(d, "stock", 0.0),
+        reorder_point: doc.num_of(d, "reorder_point", 0.0),
+        reorder_qty: doc.num_of(d, "reorder_qty", 0.0),
+        cost: doc.int_of(d, "cost", 0),
+        unit: doc.text(d, "unit", "each"),
+        supplier_id: doc.text(d, "supplier_id", ""),
+        supplier_name: doc.text(d, "supplier_name", ""),
+        // COALESCE(s.lead_days, 3) at the other end: never null, even with no
+        // supplier on the product.
+        lead_days: doc.int_of(d, "lead_days", 3),
+        sold: doc.num_of(d, "sold", 0.0),
+        on_order: doc.num_of(d, "on_order", 0.0),
+        per_day: doc.num_of(d, "per_day", 0.0),
+        days_left: doc.num_of(d, "days_left", -1.0),
+        suggested: doc.num_of(d, "suggested", 0.0),
+        value: doc.int_of(d, "value", 0),
+    }
+}
+
+/// A purchase order, as the list shows it.
+///
+/// Not derived: five nullable fields, and the two that matter are ordinary
+/// rather than rare. `expected_at` is null for an order raised without a date,
+/// and `received_at` stays null until the order is **fully** received — so a
+/// draft, a sent order and a part-received one all send null there.
+/// `created_by`, `created_by_name` and even `number` are nullable columns too.
+///
+/// Not the same shape as [`OrderHead`]: this one carries the raiser's name and a
+/// count of lines, and that one carries the supplier's telephone number instead.
+pub struct PurchaseOrder {
+    pub id: str
+    pub number: int
+    pub supplier_id: str
+    pub status: str
+    pub expected_at: int
+    pub total: int
+    pub note: str
+    pub created_by: str
+    pub created_at: int
+    pub received_at: int
+    pub supplier_name: str
+    pub created_by_name: str
+    pub lines: int
+}
+
+pub fn purchase_order_of(d: doc.Doc) -> PurchaseOrder {
+    return PurchaseOrder{
+        id: doc.text(d, "id", ""),
+        number: doc.int_of(d, "number", 0),
+        supplier_id: doc.text(d, "supplier_id", ""),
+        status: doc.text(d, "status", "draft"),
+        expected_at: doc.int_of(d, "expected_at", 0),
+        total: doc.int_of(d, "total", 0),
+        note: doc.text(d, "note", ""),
+        created_by: doc.text(d, "created_by", ""),
+        created_at: doc.int_of(d, "created_at", 0),
+        received_at: doc.int_of(d, "received_at", 0),
+        supplier_name: doc.text(d, "supplier_name", ""),
+        created_by_name: doc.text(d, "created_by_name", ""),
+        lines: doc.int_of(d, "lines", 0),
+    }
+}
+
+/// A purchase order, as its own page opens it.
+///
+/// Not derived, for the same nullable dates as [`PurchaseOrder`].
+/// `supplier_phone` is `NOT NULL DEFAULT ''` — an empty string, never null — and
+/// is here rather than in the list because this is the page somebody rings the
+/// supplier from.
+pub struct OrderHead {
+    pub id: str
+    pub number: int
+    pub supplier_id: str
+    pub status: str
+    pub expected_at: int
+    pub total: int
+    pub note: str
+    pub created_by: str
+    pub created_at: int
+    pub received_at: int
+    pub supplier_name: str
+    pub supplier_phone: str
+}
+
+pub fn order_head_of(d: doc.Doc) -> OrderHead {
+    return OrderHead{
+        id: doc.text(d, "id", ""),
+        number: doc.int_of(d, "number", 0),
+        supplier_id: doc.text(d, "supplier_id", ""),
+        status: doc.text(d, "status", "draft"),
+        expected_at: doc.int_of(d, "expected_at", 0),
+        total: doc.int_of(d, "total", 0),
+        note: doc.text(d, "note", ""),
+        created_by: doc.text(d, "created_by", ""),
+        created_at: doc.int_of(d, "created_at", 0),
+        received_at: doc.int_of(d, "received_at", 0),
+        supplier_name: doc.text(d, "supplier_name", ""),
+        supplier_phone: doc.text(d, "supplier_phone", ""),
+    }
+}
+
+/// One line of a purchase order.
+///
+/// Derived: every `purchase_order_items` column is `NOT NULL`, and
+/// `product_name`, `sku` and `unit` come from an INNER JOIN on a product the
+/// line cannot exist without. `qty` and `qty_received` are REALs — a
+/// part-received line reads 6 and 2.5.
+@derive(Decode)
+pub struct OrderLine {
+    pub id: str
+    pub po_id: str
+    pub product_id: str
+    pub qty: float
+    pub qty_received: float
+    pub unit_cost: int
+    pub product_name: str
+    pub sku: str
+    pub unit: str
+}
+
+/// An order's own page — `GET /purchasing/orders/:id`.
+///
+/// Fallible: the head is read leniently for its nullable dates, the lines
+/// decode.
+pub struct OrderPage {
+    pub order: OrderHead
+    pub lines: [OrderLine]
+}
+
+pub fn order_page_of(d: doc.Doc) -> (OrderPage, error) {
+    var lines: [OrderLine] = []
+    for item in json.items(json.field(d, "lines")) {
+        let (one, err) = OrderLine.decode(item)
+        check errors.wrap(err, "that order has a line we could not read")
+        lines.push(one)
+    }
+    return OrderPage{ order: order_head_of(doc.field(d, "order")), lines: lines }, nil
+}
+
+/// A supplier's invoice, as the payables list shows it.
+///
+/// Not derived: `due_at` is nullable and an invoice with no agreed date is
+/// expected rather than rare — the list is *ordered* around that case. `po_id`
+/// is null for anything keyed in by hand rather than raised off a delivery, and
+/// `cancelled_at` is always null here because the list filters to open ones.
+///
+/// `outstanding` is what is left to pay and can be 0 on an invoice that is fully
+/// paid and still open.
+pub struct Invoice {
+    pub id: str
+    pub supplier_id: str
+    pub po_id: str
+    pub reference: str
+    pub issued_at: int
+    pub due_at: int
+    pub total: int
+    pub created_at: int
+    pub status: str
+    pub cancelled_at: int
+    pub cancel_reason: str
+    pub supplier_name: str
+    pub paid: int
+    pub outstanding: int
+}
+
+pub fn invoice_of(d: doc.Doc) -> Invoice {
+    return Invoice{
+        id: doc.text(d, "id", ""),
+        supplier_id: doc.text(d, "supplier_id", ""),
+        po_id: doc.text(d, "po_id", ""),
+        reference: doc.text(d, "reference", ""),
+        issued_at: doc.int_of(d, "issued_at", 0),
+        due_at: doc.int_of(d, "due_at", 0),
+        total: doc.int_of(d, "total", 0),
+        created_at: doc.int_of(d, "created_at", 0),
+        status: doc.text(d, "status", "open"),
+        cancelled_at: doc.int_of(d, "cancelled_at", 0),
+        cancel_reason: doc.text(d, "cancel_reason", ""),
+        supplier_name: doc.text(d, "supplier_name", ""),
+        paid: doc.int_of(d, "paid", 0),
+        outstanding: doc.int_of(d, "outstanding", 0),
+    }
+}
+
+/// What the shop owes, in four figures.
+///
+/// Derived: computed in the Worker with `Number(… ?? 0)`, so an empty book
+/// answers zeros rather than nulls. `overdue` is everything past its date;
+/// `late_over_30` is the part of that more than thirty days past it — not "over
+/// thirty in value".
+@derive(Decode)
+pub struct PayablesTotals {
+    pub outstanding: int
+    pub overdue: int
+    pub current: int
+    pub late_over_30: int
+}
+
+/// One supplier's debt, banded by how late it is.
+///
+/// Derived: every column is a SUM over a non-empty group or a `NOT NULL`
+/// supplier column. Note the rename the Worker does and this keeps: the aging
+/// table calls the supplier's name **`supplier`** while the invoice list beside
+/// it calls the same value `supplier_name`.
+@derive(Decode)
+pub struct AgingRow {
+    pub supplier_id: str
+    pub supplier: str
+    pub current: int
+    pub d30: int
+    pub d60: int
+    pub d90: int
+    pub d90up: int
+    pub total: int
+}
+
+/// The aging table's foot.
+@derive(Decode)
+pub struct AgingTotals {
+    pub current: int
+    pub d30: int
+    pub d60: int
+    pub d90: int
+    pub d90up: int
+    pub total: int
+}
+
+/// Everything owed, banded — the aging half of `/purchasing/payables`.
+///
+/// Derived whole, rows and foot together.
+@derive(Decode)
+pub struct Aging {
+    pub rows: [AgingRow]
+    pub totals: AgingTotals
+}
+
+/// What the shop owes — `GET /purchasing/payables`.
+///
+/// Fallible: the invoices are read leniently for their nullable dates while the
+/// totals and the aging table decode.
+///
+/// The two halves do **not** have the same scope. `invoices` is the first 200 by
+/// due date; `aging` is summed by the database over every open invoice with no
+/// limit and drops anything already settled. `totals.outstanding` will not equal
+/// the sum of the listed invoices once there are more than 200 of them.
+pub struct Payables {
+    pub invoices: [Invoice]
+    pub totals: PayablesTotals
+    pub aging: Aging
+}
+
+pub fn payables_of(d: doc.Doc) -> (Payables, error) {
+    let (totals, terr) = PayablesTotals.decode(object_at(d, "totals"))
+    check errors.wrap(terr, "the payables summary would not read")
+    let (aging, aerr) = Aging.decode(object_at(d, "aging"))
+    check errors.wrap(aerr, "the aging table would not read")
+    return Payables{
+        invoices: map(doc.items(doc.field(d, "invoices")), invoice_of),
+        totals: totals,
+        aging: aging,
+    }, nil
+}
+
+// ---- sales, as the office reads them ----------------------------------------
+
+/// A sale in the day's list — `GET /sales`.
+///
+/// Not derived: `sales.number` and `completed_at` are only written when a sale
+/// is **paid for**, so a held or voided row sends null for both and the `status`
+/// query makes those rows reachable. `customer` is null on a walk-in and
+/// `register_name` is null when the sale was not rung on a lane.
+///
+/// `refunded` is what has been given back against it, and a row with anything
+/// there is the one a manager is looking for.
+pub struct SaleRow {
+    pub id: str
+    pub number: int
+    pub total: int
+    pub tax: int
+    pub discount: int
+    pub promo_saved: int
+    pub status: str
+    pub completed_at: int
+    pub created_at: int
+    pub void_reason: str
+    pub cashier: str
+    pub customer: str
+    pub register_name: str
+    pub items: int
+    pub refunded: int
+}
+
+pub fn sale_row_of(d: doc.Doc) -> SaleRow {
+    return SaleRow{
+        id: doc.text(d, "id", ""),
+        number: doc.int_of(d, "number", 0),
+        total: doc.int_of(d, "total", 0),
+        tax: doc.int_of(d, "tax", 0),
+        discount: doc.int_of(d, "discount", 0),
+        promo_saved: doc.int_of(d, "promo_saved", 0),
+        status: doc.text(d, "status", ""),
+        completed_at: doc.int_of(d, "completed_at", 0),
+        created_at: doc.int_of(d, "created_at", 0),
+        void_reason: doc.text(d, "void_reason", ""),
+        cashier: doc.text(d, "cashier", ""),
+        customer: doc.text(d, "customer", ""),
+        register_name: doc.text(d, "register_name", ""),
+        items: doc.int_of(d, "items", 0),
+        refunded: doc.int_of(d, "refunded", 0),
+    }
+}
+
+/// One sale, whole — the `sale` of `GET /sales/:id`.
+///
+/// Not derived: this is `SELECT s.*` and seven of its columns are nullable.
+/// `client_id` is written only when a till sent an idempotency key; `number` and
+/// `completed_at` are null until it is paid for; `register_id`, `shift_id` and
+/// `customer_id` are all nullable references. `customer` and `customer_phone`
+/// come from the same LEFT JOIN and go null **together** on a walk-in — the
+/// telephone column is `NOT NULL DEFAULT ''` in its own table, and the outer
+/// join produces null anyway.
+pub struct SaleHead {
+    pub id: str
+    pub client_id: str
+    pub number: int
+    pub register_id: str
+    pub shift_id: str
+    pub user_id: str
+    pub customer_id: str
+    pub status: str
+    pub hold_label: str
+    pub basket_discount: int
+    pub subtotal: int
+    pub promo_saved: int
+    pub discount: int
+    pub tax: int
+    pub total: int
+    pub void_reason: str
+    pub created_at: int
+    pub completed_at: int
+    pub cashier: str
+    pub customer: str
+    pub customer_phone: str
+    pub register_name: str
+}
+
+pub fn sale_head_of(d: doc.Doc) -> SaleHead {
+    return SaleHead{
+        id: doc.text(d, "id", ""),
+        client_id: doc.text(d, "client_id", ""),
+        number: doc.int_of(d, "number", 0),
+        register_id: doc.text(d, "register_id", ""),
+        shift_id: doc.text(d, "shift_id", ""),
+        user_id: doc.text(d, "user_id", ""),
+        customer_id: doc.text(d, "customer_id", ""),
+        status: doc.text(d, "status", ""),
+        hold_label: doc.text(d, "hold_label", ""),
+        basket_discount: doc.int_of(d, "basket_discount", 0),
+        subtotal: doc.int_of(d, "subtotal", 0),
+        promo_saved: doc.int_of(d, "promo_saved", 0),
+        discount: doc.int_of(d, "discount", 0),
+        tax: doc.int_of(d, "tax", 0),
+        total: doc.int_of(d, "total", 0),
+        void_reason: doc.text(d, "void_reason", ""),
+        created_at: doc.int_of(d, "created_at", 0),
+        completed_at: doc.int_of(d, "completed_at", 0),
+        cashier: doc.text(d, "cashier", ""),
+        customer: doc.text(d, "customer", ""),
+        customer_phone: doc.text(d, "customer_phone", ""),
+        register_name: doc.text(d, "register_name", ""),
+    }
+}
+
+/// A line of a sale as the receipt holds it.
+///
+/// Not [`Line`], which is what the till's basket sends: this is `SELECT i.*`
+/// with **no products join**, so there is no `name_my` — a reprinted receipt
+/// reads as it did on the day and the shelf name is not joined into it.
+///
+/// Not derived: `product_id` is nullable, because a line whose product has been
+/// deleted still has to print, and `promo_id` is null wherever no offer applied.
+/// `price_override` and `age_checked` are `INTEGER 0/1` here, where the till's
+/// own basket endpoint converts the same two to real booleans.
+pub struct SaleLine {
+    pub id: str
+    pub sale_id: str
+    pub product_id: str
+    pub name: str
+    pub sku: str
+    pub qty: float
+    pub unit_price: int
+    pub list_price: int
+    pub line_discount: int
+    pub promo_id: str
+    pub promo_name: str
+    pub promo_saved: int
+    pub price_override: bool
+    pub tax_bp: int
+    pub tax: int
+    pub total: int
+    pub cost: int
+    pub min_age: int
+    pub age_checked: bool
+    pub sort: int
+    pub refunded_qty: float
+}
+
+pub fn sale_line_of(d: doc.Doc) -> SaleLine {
+    return SaleLine{
+        id: doc.text(d, "id", ""),
+        sale_id: doc.text(d, "sale_id", ""),
+        product_id: doc.text(d, "product_id", ""),
+        name: doc.text(d, "name", ""),
+        sku: doc.text(d, "sku", ""),
+        qty: doc.num_of(d, "qty", 0.0),
+        unit_price: doc.int_of(d, "unit_price", 0),
+        list_price: doc.int_of(d, "list_price", 0),
+        line_discount: doc.int_of(d, "line_discount", 0),
+        promo_id: doc.text(d, "promo_id", ""),
+        promo_name: doc.text(d, "promo_name", ""),
+        promo_saved: doc.int_of(d, "promo_saved", 0),
+        price_override: doc.int_of(d, "price_override", 0) == 1,
+        tax_bp: doc.int_of(d, "tax_bp", 0),
+        tax: doc.int_of(d, "tax", 0),
+        total: doc.int_of(d, "total", 0),
+        cost: doc.int_of(d, "cost", 0),
+        min_age: doc.int_of(d, "min_age", 0),
+        age_checked: doc.int_of(d, "age_checked", 0) == 1,
+        sort: doc.int_of(d, "sort", 0),
+        refunded_qty: doc.num_of(d, "refunded_qty", 0.0),
+    }
+}
+
+/// How one sale was paid for.
+///
+/// Derived: every `payments` column is `NOT NULL`, three of them by default.
+/// `tendered` is what the customer handed over and `change` what came back, so
+/// the amount that reconciles a drawer is `amount`, not `tendered`.
+@derive(Decode)
+pub struct SalePayment {
+    pub id: str
+    pub sale_id: str
+    pub method: str
+    pub amount: int
+    pub tendered: int
+    pub change: int
+    pub reference: str
+    pub created_at: int
+}
+
+/// A refund taken against a sale.
+///
+/// Not derived: `client_id`, `approved_by` and `shift_id` are all nullable, and
+/// the last is **deliberately** null for a refund taken in the back office — the
+/// cash comes from the safe rather than from a drawer. `restock` is an
+/// `INTEGER 0/1`.
+pub struct SaleRefund {
+    pub id: str
+    pub client_id: str
+    pub sale_id: str
+    pub user_id: str
+    pub approved_by: str
+    pub shift_id: str
+    pub reason: str
+    pub method: str
+    pub total: int
+    pub restock: bool
+    pub created_at: int
+    pub by_name: str
+}
+
+pub fn sale_refund_of(d: doc.Doc) -> SaleRefund {
+    return SaleRefund{
+        id: doc.text(d, "id", ""),
+        client_id: doc.text(d, "client_id", ""),
+        sale_id: doc.text(d, "sale_id", ""),
+        user_id: doc.text(d, "user_id", ""),
+        approved_by: doc.text(d, "approved_by", ""),
+        shift_id: doc.text(d, "shift_id", ""),
+        reason: doc.text(d, "reason", ""),
+        method: doc.text(d, "method", "cash"),
+        total: doc.int_of(d, "total", 0),
+        // The server restocks unless the body said otherwise, so a missing flag
+        // means the goods went back on the shelf.
+        restock: doc.int_of(d, "restock", 1) == 1,
+        created_at: doc.int_of(d, "created_at", 0),
+        by_name: doc.text(d, "by_name", ""),
+    }
+}
+
+/// The shop, as it prints at the head of a receipt.
+///
+/// Derived: every value falls back to `""` at the other end, so all five keys
+/// are always present. `footer` is renamed from the `shop.receipt_footer`
+/// setting **by the Worker** — by the time it reaches here it is already
+/// `footer`, so there is nothing left for a converter to rename.
+@derive(Decode)
+pub struct Shop {
+    pub name: str
+    pub address: str
+    pub phone: str
+    pub tax_id: str
+    pub footer: str
+}
+
+/// A currency as this one endpoint spells it.
+///
+/// Not derived, and it cannot be shared with [`session_of`]: `/sales/:id` is the
+/// **only** camelCase object on the wire — `minorUnits`, `symbolFirst` — while
+/// `/auth/me` sends the same four values as `minor_units` and `symbol_first`.
+/// One shape, two spellings, so there are two readers.
+pub fn wire_currency_of(d: doc.Doc) -> money.Currency {
+    return money.Currency{
+        code: doc.text(d, "code", "MMK"),
+        symbol: doc.text(d, "symbol", "K"),
+        minor_units: doc.int_of(d, "minorUnits", 0),
+        symbol_first: doc.bool_of(d, "symbolFirst", true),
+    }
+}
+
+/// One sale's own page — `GET /sales/:id`.
+///
+/// Fallible: the sale, its lines and its refunds are read leniently for the
+/// nullable columns named above, while the payments and the shop's own details
+/// decode.
+pub struct SalePage {
+    pub sale: SaleHead
+    pub lines: [SaleLine]
+    pub payments: [SalePayment]
+    pub refunds: [SaleRefund]
+    pub currency: money.Currency
+    pub shop: Shop
+}
+
+pub fn sale_page_of(d: doc.Doc) -> (SalePage, error) {
+    var payments: [SalePayment] = []
+    for item in json.items(json.field(d, "payments")) {
+        let (one, err) = SalePayment.decode(item)
+        check errors.wrap(err, "that sale has a payment we could not read")
+        payments.push(one)
+    }
+    let (shop, serr) = Shop.decode(object_at(d, "shop"))
+    check errors.wrap(serr, "the shop's own details would not read")
+    return SalePage{
+        sale: sale_head_of(doc.field(d, "sale")),
+        lines: map(doc.items(doc.field(d, "lines")), sale_line_of),
+        payments: payments,
+        refunds: map(doc.items(doc.field(d, "refunds")), sale_refund_of),
+        currency: wire_currency_of(doc.field(d, "currency")),
+        shop: shop,
+    }, nil
+}
+
+/// One thing somebody had to be authorised for.
+///
+/// Not derived, and `amount` alone would settle it: the column has no default
+/// and the rows written for a voided sale and for a no-sale simply **omit** it,
+/// so null is routine rather than exceptional. `user_id`, `approved_by` and
+/// `register_id` are nullable too, and each of the three joined names is null
+/// when its id is or when that person or lane has since gone.
+pub struct AuditEntry {
+    pub id: str
+    pub at: int
+    pub user_id: str
+    pub approved_by: str
+    pub register_id: str
+    pub action: str
+    pub ref_type: str
+    pub ref_id: str
+    pub amount: int
+    pub detail: str
+    pub asked_by_name: str
+    pub approved_by_name: str
+    pub register_name: str
+}
+
+pub fn audit_entry_of(d: doc.Doc) -> AuditEntry {
+    return AuditEntry{
+        id: doc.text(d, "id", ""),
+        at: doc.int_of(d, "at", 0),
+        user_id: doc.text(d, "user_id", ""),
+        approved_by: doc.text(d, "approved_by", ""),
+        register_id: doc.text(d, "register_id", ""),
+        action: doc.text(d, "action", ""),
+        ref_type: doc.text(d, "ref_type", ""),
+        ref_id: doc.text(d, "ref_id", ""),
+        amount: doc.int_of(d, "amount", 0),
+        detail: doc.text(d, "detail", ""),
+        asked_by_name: doc.text(d, "asked_by_name", ""),
+        approved_by_name: doc.text(d, "approved_by_name", ""),
+        register_name: doc.text(d, "register_name", ""),
+    }
+}
+
+// ---- lanes, drawers and shifts ----------------------------------------------
+
+/// A lane, as the back office watches it.
+///
+/// Not derived: six of nineteen fields are nullable and every one of them is
+/// null on the ordinary case of a lane nobody has opened yet. `shift_id`,
+/// `opened_at`, `opening_float`, `operator` and `operator_id` go null together
+/// with the drawer; `last_close` and `last_variance` are null until it has been
+/// closed once; `last_seen_at` is null until it has called the Worker at all.
+///
+/// And one that is easy to miss: **`active_total` has no COALESCE** where the
+/// three figures beside it do, so a lane with no basket on it sends null there
+/// while `sales`, `takings` and `active_items` send 0.
+pub struct Lane {
+    pub id: str
+    pub name: str
+    pub kind: str
+    pub last_seen_at: int
+    pub shift_id: str
+    pub opened_at: int
+    pub opening_float: int
+    pub operator: str
+    pub operator_id: str
+    pub sales: int
+    pub takings: int
+    pub active_items: int
+    pub active_total: int
+    pub last_close: int
+    pub last_variance: int
+    pub state: str
+    pub online: bool
+    pub held: int
+    pub drawer_expected: int
+}
+
+pub fn lane_of(d: doc.Doc) -> Lane {
+    return Lane{
+        id: doc.text(d, "id", ""),
+        name: doc.text(d, "name", ""),
+        kind: doc.text(d, "kind", "counter"),
+        last_seen_at: doc.int_of(d, "last_seen_at", 0),
+        shift_id: doc.text(d, "shift_id", ""),
+        opened_at: doc.int_of(d, "opened_at", 0),
+        opening_float: doc.int_of(d, "opening_float", 0),
+        operator: doc.text(d, "operator", ""),
+        operator_id: doc.text(d, "operator_id", ""),
+        sales: doc.int_of(d, "sales", 0),
+        takings: doc.int_of(d, "takings", 0),
+        active_items: doc.int_of(d, "active_items", 0),
+        active_total: doc.int_of(d, "active_total", 0),
+        last_close: doc.int_of(d, "last_close", 0),
+        last_variance: doc.int_of(d, "last_variance", 0),
+        state: doc.text(d, "state", "closed"),
+        online: doc.bool_of(d, "online", false),
+        held: doc.int_of(d, "held", 0),
+        drawer_expected: doc.int_of(d, "drawer_expected", 0),
+    }
+}
+
+/// A shift in the list — `GET /shifts`.
+///
+/// Not derived: the five columns a close writes are all null while the drawer is
+/// **open**, and the list is ordered newest first, so the open shifts are the
+/// first rows a screen draws. `note` is null on an open shift and `''` on one
+/// closed without a note, and `closed_by_name` is a LEFT JOIN on a nullable id.
+pub struct ShiftRow {
+    pub id: str
+    pub register_id: str
+    pub user_id: str
+    pub opened_at: int
+    pub opening_float: int
+    pub closed_at: int
+    pub closed_by: str
+    pub counted_total: int
+    pub expected_total: int
+    pub variance: int
+    pub note: str
+    pub register_name: str
+    pub user_name: str
+    pub closed_by_name: str
+    pub sales: int
+    pub takings: int
+}
+
+pub fn shift_row_of(d: doc.Doc) -> ShiftRow {
+    return ShiftRow{
+        id: doc.text(d, "id", ""),
+        register_id: doc.text(d, "register_id", ""),
+        user_id: doc.text(d, "user_id", ""),
+        opened_at: doc.int_of(d, "opened_at", 0),
+        opening_float: doc.int_of(d, "opening_float", 0),
+        closed_at: doc.int_of(d, "closed_at", 0),
+        closed_by: doc.text(d, "closed_by", ""),
+        counted_total: doc.int_of(d, "counted_total", 0),
+        expected_total: doc.int_of(d, "expected_total", 0),
+        variance: doc.int_of(d, "variance", 0),
+        note: doc.text(d, "note", ""),
+        register_name: doc.text(d, "register_name", ""),
+        user_name: doc.text(d, "user_name", ""),
+        closed_by_name: doc.text(d, "closed_by_name", ""),
+        sales: doc.int_of(d, "sales", 0),
+        takings: doc.int_of(d, "takings", 0),
+    }
+}
+
+/// A shift, as its own page opens it.
+///
+/// The same six nullable columns as [`ShiftRow`], and one difference worth
+/// knowing: this endpoint does **not** join `closed_by_name`. The list does. A
+/// screen that reads that name off the detail gets nothing, which is why the
+/// field is not on this struct at all rather than always empty.
+pub struct ShiftHead {
+    pub id: str
+    pub register_id: str
+    pub user_id: str
+    pub opened_at: int
+    pub opening_float: int
+    pub closed_at: int
+    pub closed_by: str
+    pub counted_total: int
+    pub expected_total: int
+    pub variance: int
+    pub note: str
+    pub register_name: str
+    pub user_name: str
+}
+
+pub fn shift_head_of(d: doc.Doc) -> ShiftHead {
+    return ShiftHead{
+        id: doc.text(d, "id", ""),
+        register_id: doc.text(d, "register_id", ""),
+        user_id: doc.text(d, "user_id", ""),
+        opened_at: doc.int_of(d, "opened_at", 0),
+        opening_float: doc.int_of(d, "opening_float", 0),
+        closed_at: doc.int_of(d, "closed_at", 0),
+        closed_by: doc.text(d, "closed_by", ""),
+        counted_total: doc.int_of(d, "counted_total", 0),
+        expected_total: doc.int_of(d, "expected_total", 0),
+        variance: doc.int_of(d, "variance", 0),
+        note: doc.text(d, "note", ""),
+        register_name: doc.text(d, "register_name", ""),
+        user_name: doc.text(d, "user_name", ""),
+    }
+}
+
+/// What should be in the drawer, and how it got there.
+///
+/// Derived: not one of these is read from a column — the whole object is
+/// computed, every term COALESCE'd to 0, so all seven are whole numbers even on
+/// a shift that has taken nothing. `cash_taken` is gross cash **in**, with
+/// `change_given` subtracted back out to reach `expected`.
+@derive(Decode)
+pub struct Drawer {
+    pub opening_float: int
+    pub cash_taken: int
+    pub change_given: int
+    pub cash_in: int
+    pub cash_out: int
+    pub cash_refunds: int
+    pub expected: int
+}
+
+/// Cash into or out of a drawer other than by selling.
+///
+/// Derived: every `cash_movements` column is `NOT NULL` — including `user_id`,
+/// unlike the stock movements — and `user_name` comes from an INNER JOIN on it.
+/// A `safe_drop` counts as cash out of the drawer, the same as a `paid_out`.
+@derive(Decode)
+pub struct CashMovement {
+    pub id: str
+    pub shift_id: str
+    pub kind: str
+    pub amount: int
+    pub reason: str
+    pub user_id: str
+    pub created_at: int
+    pub user_name: str
+}
+
+/// What was taken by one tender.
+///
+/// One struct for two endpoints: the tenders of a shift's page and the tenders
+/// of `/reports/sales` are the same three columns from the same GROUP BY.
+///
+/// Derived: `amount` is a SUM over a non-empty group, so an empty result is an
+/// empty **list** rather than a row of nulls.
+@derive(Decode)
+pub struct TenderTotal {
+    pub method: str
+    pub count: int
+    pub amount: int
+}
+
+/// A sale in the list under a shift.
+///
+/// Derived: the query is completed-only, and the statement that completes a sale
+/// writes `number` and `completed_at` in the same breath as the status.
+@derive(Decode)
+pub struct ShiftSale {
+    pub id: str
+    pub number: int
+    pub total: int
+    pub completed_at: int
+}
+
+/// A shift's own page — `GET /shifts/:id`.
+///
+/// Fallible: the head is read leniently for the columns a close writes, and the
+/// drawer, the movements, the tenders and the sales all decode.
+pub struct ShiftPage {
+    pub shift: ShiftHead
+    pub drawer: Drawer
+    pub movements: [CashMovement]
+    pub tenders: [TenderTotal]
+    pub sales: [ShiftSale]
+}
+
+pub fn shift_page_of(d: doc.Doc) -> (ShiftPage, error) {
+    let (drawer, derr) = Drawer.decode(object_at(d, "drawer"))
+    check errors.wrap(derr, "that drawer would not add up")
+    var movements: [CashMovement] = []
+    for item in json.items(json.field(d, "movements")) {
+        let (one, err) = CashMovement.decode(item)
+        check errors.wrap(err, "that shift has a cash movement we could not read")
+        movements.push(one)
+    }
+    var tenders: [TenderTotal] = []
+    for item in json.items(json.field(d, "tenders")) {
+        let (one, err) = TenderTotal.decode(item)
+        check errors.wrap(err, "that shift's tenders would not read")
+        tenders.push(one)
+    }
+    var sales: [ShiftSale] = []
+    for item in json.items(json.field(d, "sales")) {
+        let (one, err) = ShiftSale.decode(item)
+        check errors.wrap(err, "that shift has a sale we could not read")
+        sales.push(one)
+    }
+    return ShiftPage{
+        shift: shift_head_of(doc.field(d, "shift")),
+        drawer: drawer,
+        movements: movements,
+        tenders: tenders,
+        sales: sales,
+    }, nil
+}
+
+// ---- the day, and the reports behind it -------------------------------------
+
+/// Today's trading.
+///
+/// Derived: four COALESCE'd aggregates with no GROUP BY, so the row is always
+/// there and always whole. `given_away` is the offers plus the discounts.
+@derive(Decode)
+pub struct TodayTotals {
+    pub sales: int
+    pub takings: int
+    pub tax: int
+    pub given_away: int
+}
+
+/// What today's sales earned, and what the goods cost.
+@derive(Decode)
+pub struct MarginTotals {
+    pub net: int
+    pub cost: int
+}
+
+/// What is on the shelf, in three figures.
+@derive(Decode)
+pub struct StockTotals {
+    pub at_cost: int
+    pub skus: int
+    pub low: int
+}
+
+/// A lane on the dashboard.
+///
+/// Not derived, and not the same shape as [`Lane`]: this is the shorter one the
+/// overview draws. `shift_id`, `opening_float`, `opened_at` and `operator` all
+/// come off the LEFT JOIN to an open shift and are null together — which is
+/// **every lane in a closed shop**. `takings` and `sales` beside them are
+/// COALESCE'd subqueries and are 0 rather than null.
+pub struct OverviewLane {
+    pub id: str
+    pub name: str
+    pub kind: str
+    pub shift_id: str
+    pub opening_float: int
+    pub opened_at: int
+    pub operator: str
+    pub takings: int
+    pub sales: int
+}
+
+pub fn overview_lane_of(d: doc.Doc) -> OverviewLane {
+    return OverviewLane{
+        id: doc.text(d, "id", ""),
+        name: doc.text(d, "name", ""),
+        kind: doc.text(d, "kind", "counter"),
+        shift_id: doc.text(d, "shift_id", ""),
+        opening_float: doc.int_of(d, "opening_float", 0),
+        opened_at: doc.int_of(d, "opened_at", 0),
+        operator: doc.text(d, "operator", ""),
+        takings: doc.int_of(d, "takings", 0),
+        sales: doc.int_of(d, "sales", 0),
+    }
+}
+
+/// A product that sold well this week.
+///
+/// Not derived: `sale_items.product_id` is nullable, so a line whose product has
+/// been removed groups under a null and comes back as one. The name is the
+/// receipt's snapshot and is always there. `sold` is a SUM over a REAL column —
+/// 3.5 kg of something is a legitimate figure.
+pub struct TopSeller {
+    pub product_id: str
+    pub name: str
+    pub sold: float
+    pub revenue: int
+}
+
+pub fn top_seller_of(d: doc.Doc) -> TopSeller {
+    return TopSeller{
+        product_id: doc.text(d, "product_id", ""),
+        name: doc.text(d, "name", ""),
+        sold: doc.num_of(d, "sold", 0.0),
+        revenue: doc.int_of(d, "revenue", 0),
+    }
+}
+
+/// One day of the fortnight strip.
+///
+/// Derived. A day with no sales is **absent** rather than zero, because the
+/// grouping only sees days that traded.
+@derive(Decode)
+pub struct DayTakings {
+    pub day: str
+    pub sales: int
+    pub takings: int
+}
+
+/// The dashboard — `GET /reports/overview`.
+///
+/// Fallible: the three summary objects and the fortnight strip decode, while the
+/// lanes and the top sellers are read leniently for the nulls named above.
+///
+/// Every window here is fixed at the other end: today is UTC midnight, the top
+/// sellers are seven days and the strip is fourteen. There is no `from` to echo.
+pub struct Overview {
+    pub today: TodayTotals
+    pub margin: MarginTotals
+    pub stock: StockTotals
+    pub lanes: [OverviewLane]
+    pub top_sellers: [TopSeller]
+    pub fortnight: [DayTakings]
+}
+
+pub fn overview_of(d: doc.Doc) -> (Overview, error) {
+    let (today, terr) = TodayTotals.decode(object_at(d, "today"))
+    check errors.wrap(terr, "today's takings would not read")
+    let (margin, merr) = MarginTotals.decode(object_at(d, "margin"))
+    check errors.wrap(merr, "today's margin would not read")
+    let (stock, serr) = StockTotals.decode(object_at(d, "stock"))
+    check errors.wrap(serr, "the stock summary would not read")
+    var fortnight: [DayTakings] = []
+    for item in json.items(json.field(d, "fortnight")) {
+        let (one, err) = DayTakings.decode(item)
+        check errors.wrap(err, "the fortnight has a day we could not read")
+        fortnight.push(one)
+    }
+    return Overview{
+        today: today,
+        margin: margin,
+        stock: stock,
+        lanes: map(doc.items(doc.field(d, "lanes")), overview_lane_of),
+        top_sellers: map(doc.items(doc.field(d, "top_sellers")), top_seller_of),
+        fortnight: fortnight,
+    }, nil
+}
+
+/// One day of trading, in full.
+///
+/// Derived. Not [`DayTakings`], which is the dashboard's shorter strip: this one
+/// carries the tax and what was given away as well.
+@derive(Decode)
+pub struct DailySales {
+    pub day: str
+    pub sales: int
+    pub takings: int
+    pub tax: int
+    pub given_away: int
+}
+
+/// One hour of the trading day.
+///
+/// Derived. `hour` is 0..23 **in UTC** — `STRFTIME('%H', …)` — and not in the
+/// shop's own time, which matters to a shop that is not on UTC.
+@derive(Decode)
+pub struct HourlySales {
+    pub hour: int
+    pub sales: int
+    pub takings: int
+}
+
+/// What one person rang up.
+@derive(Decode)
+pub struct StaffSales {
+    pub name: str
+    pub sales: int
+    pub takings: int
+}
+
+/// Takings by day, hour, tender and person — `GET /reports/sales`.
+///
+/// Derived **whole**, the only multi-part answer in this file that is: every
+/// column is `NOT NULL` or COALESCE'd, and every group has at least one row. Any
+/// of the four lists can be empty, which is not the same as a null.
+///
+/// `from` and `to` come back as the Worker resolved them — the defaults are the
+/// last thirty days — so a screen can label the window it actually got rather
+/// than the one it asked for.
+@derive(Decode)
+pub struct SalesReport {
+    pub from: int
+    pub to: int
+    pub daily: [DailySales]
+    pub hourly: [HourlySales]
+    pub tenders: [TenderTotal]
+    pub staff: [StaffSales]
+}
+
+/// A product's sales over a window.
+///
+/// Not derived: `product_id` is nullable for the usual reason — a line whose
+/// product is gone still sold. `sku` beside it is `NOT NULL DEFAULT ''` and an
+/// unknown one is the empty string.
+///
+/// `margin` is what the line actually earned: charged, less the tax that was
+/// never the shop's, less what the goods cost. It can be negative.
+pub struct ProductSales {
+    pub product_id: str
+    pub name: str
+    pub sku: str
+    pub sold: float
+    pub revenue: int
+    pub tax: int
+    pub cost: int
+    pub margin: int
+    pub promo_saved: int
+}
+
+pub fn product_sales_of(d: doc.Doc) -> ProductSales {
+    return ProductSales{
+        product_id: doc.text(d, "product_id", ""),
+        name: doc.text(d, "name", ""),
+        sku: doc.text(d, "sku", ""),
+        sold: doc.num_of(d, "sold", 0.0),
+        revenue: doc.int_of(d, "revenue", 0),
+        tax: doc.int_of(d, "tax", 0),
+        cost: doc.int_of(d, "cost", 0),
+        margin: doc.int_of(d, "margin", 0),
+        promo_saved: doc.int_of(d, "promo_saved", 0),
+    }
+}
+
+/// A heading's sales over a window.
+///
+/// Derived: `category` is COALESCE'd to 'Uncategorised' and is never null.
+@derive(Decode)
+pub struct CategorySales {
+    pub category: str
+    pub sold: float
+    pub revenue: int
+    pub margin: int
+}
+
+/// What sold, ranked — `GET /reports/products`.
+///
+/// Fallible: the categories decode and the products do not, for the one nullable
+/// id. The product list is capped at 200 rows with **no flag in the JSON** to
+/// say so; only the CSV export admits when it capped.
+pub struct ProductReport {
+    pub from: int
+    pub to: int
+    pub products: [ProductSales]
+    pub categories: [CategorySales]
+}
+
+pub fn product_report_of(d: doc.Doc) -> (ProductReport, error) {
+    var categories: [CategorySales] = []
+    for item in json.items(json.field(d, "categories")) {
+        let (one, err) = CategorySales.decode(item)
+        check errors.wrap(err, "that report has a heading we could not read")
+        categories.push(one)
+    }
+    return ProductReport{
+        from: doc.int_of(d, "from", 0),
+        to: doc.int_of(d, "to", 0),
+        products: map(doc.items(doc.field(d, "products")), product_sales_of),
+        categories: categories,
+    }, nil
+}
+
+/// Stock lost, by why it was lost.
+///
+/// Derived. `units` is a SUM over a signed REAL column and is **negative** for
+/// waste — the sign is what makes it shrinkage rather than a delivery.
+@derive(Decode)
+pub struct ShrinkageReason {
+    pub reason: str
+    pub movements: int
+    pub units: float
+    pub value: int
+}
+
+/// The products the shop lost most on.
+@derive(Decode)
+pub struct ShrinkageWorst {
+    pub name: str
+    pub sku: str
+    pub units: float
+    pub value: int
+}
+
+/// Where the shrinkage went — `GET /reports/shrinkage`.
+///
+/// Derived whole: two GROUP BYs over `NOT NULL` columns, and a window echoed
+/// back as the Worker resolved it.
+@derive(Decode)
+pub struct ShrinkageReport {
+    pub from: int
+    pub to: int
+    pub by_reason: [ShrinkageReason]
+    pub worst: [ShrinkageWorst]
+}
+
+/// Tax collected at one rate.
+///
+/// Derived. The grouping is by the rate **as it stood on the line** rather than
+/// as the product carries it today, so a rate change cannot re-band a sale that
+/// was rung under the old one.
+@derive(Decode)
+pub struct TaxRate {
+    pub tax_bp: int
+    pub net: int
+    pub tax: int
+    pub gross: int
+    pub sales: int
+}
+
+/// What is owed to the revenue office — `GET /reports/tax`.
+///
+/// Derived whole. `net` is what the shop earned, `tax` what it is holding, and
+/// `gross` what the customer paid; only the middle one is owed, which is why
+/// they are three fields rather than one.
+@derive(Decode)
+pub struct TaxReport {
+    pub from: int
+    pub to: int
+    pub rates: [TaxRate]
+    pub net: int
+    pub tax: int
+    pub gross: int
+}
+
+/// Something sitting on the shelf not selling.
+///
+/// Not derived: `last_sold` is a MAX over a product's completed sales and is
+/// **null for anything that has never sold** — which is the most interesting row
+/// in the list, so failing on it would be exactly backwards. Read as 0, which
+/// the screen already draws as "never".
+pub struct DeadStockLine {
+    pub id: str
+    pub sku: str
+    pub name: str
+    pub stock: float
+    pub cost: int
+    pub at_cost: int
+    pub last_sold: int
+}
+
+pub fn dead_stock_line_of(d: doc.Doc) -> DeadStockLine {
+    return DeadStockLine{
+        id: doc.text(d, "id", ""),
+        sku: doc.text(d, "sku", ""),
+        name: doc.text(d, "name", ""),
+        stock: doc.num_of(d, "stock", 0.0),
+        cost: doc.int_of(d, "cost", 0),
+        at_cost: doc.int_of(d, "at_cost", 0),
+        last_sold: doc.int_of(d, "last_sold", 0),
+    }
+}
+
+/// What is not moving — `GET /reports/dead-stock`.
+///
+/// Not derived, because its lines are not: ranked by what it is worth rather
+/// than by how long it has sat, since the decision it feeds is what to discount
+/// or send back.
+pub struct DeadStockReport {
+    pub days: int
+    pub products: [DeadStockLine]
+    pub at_cost: int
+}
+
+pub fn dead_stock_report_of(d: doc.Doc) -> DeadStockReport {
+    return DeadStockReport{
+        days: doc.int_of(d, "days", 60),
+        products: map(doc.items(doc.field(d, "products")), dead_stock_line_of),
+        at_cost: doc.int_of(d, "at_cost", 0),
+    }
+}
+
+// ---- the books --------------------------------------------------------------
+//
+// Nothing in the ledger stores a balance: every figure below is a SUM over
+// `journal_lines` for a window, which is why the sheets here cannot disagree
+// with one another. They are groupings of one set of rows rather than tallies
+// kept in step.
+
+/// One account's balance on a sheet.
+///
+/// One struct for five lists: the income and expense sides of the profit and
+/// loss, and the assets, liabilities and equity of the balance sheet. All five
+/// are the same row with the same two figures.
+///
+/// Derived: `accounts` has no nullable column, and the LEFT JOIN that finds the
+/// activity is wrapped in a COALESCE so an account with none is listed at zero
+/// rather than left out.
+///
+/// **`balance` and `amount` are not the same number.** `balance` is the raw
+/// signed sum — debit positive, credit negative — and is what a group is totted
+/// up from. `amount` is the same balance as its own account would state it,
+/// positive when normal, and is for showing one line. Adding a column of
+/// `amount` up is how a contra-revenue account gets added to income instead of
+/// taken off it.
+@derive(Decode)
+pub struct AccountBalance {
+    pub code: str
+    pub name: str
+    pub kind: str
+    pub normal: str
+    pub balance: int
+    pub amount: int
+}
+
+/// Profit and loss for a window — `GET /accounting/profit-and-loss`.
+///
+/// Derived whole. Revenue is already net of tax when it is posted, because the
+/// tax inside a tax-inclusive price was never the shop's money — so gross profit
+/// here needs no further adjustment.
+@derive(Decode)
+pub struct ProfitAndLoss {
+    pub from: int
+    pub to: int
+    pub income: [AccountBalance]
+    pub expenses: [AccountBalance]
+    pub revenue: int
+    pub cost_of_sales: int
+    pub gross_profit: int
+    pub operating_expenses: int
+    pub net_profit: int
+}
+
+/// The balance sheet as at a date — `GET /accounting/balance-sheet`.
+///
+/// Derived whole. Assets and liabilities are cumulative from the beginning of
+/// the records whatever window is asked for: a balance sheet is a photograph,
+/// not a period. `retained_earnings` is computed rather than posted, which is
+/// what lets the sheet balance without a year-end journal nobody has run.
+///
+/// `out_by` is zero when the books are sound, and it is on the response rather
+/// than hidden because a sheet that does not balance is the most important thing
+/// on the page.
+@derive(Decode)
+pub struct BalanceSheet {
+    pub as_at: int
+    pub assets: [AccountBalance]
+    pub liabilities: [AccountBalance]
+    pub equity: [AccountBalance]
+    pub retained_earnings: int
+    pub total_assets: int
+    pub total_liabilities: int
+    pub total_equity: int
+    pub out_by: int
+}
+
+/// One line of a trial balance.
+///
+/// Derived: built in the Worker from a balance that is never null, split into
+/// the side it falls on — one of `debit` and `credit` is always 0.
+@derive(Decode)
+pub struct TrialLine {
+    pub code: str
+    pub name: str
+    pub kind: str
+    pub debit: int
+    pub credit: int
+}
+
+/// The trial balance — `GET /accounting/trial-balance`.
+///
+/// Derived whole. Accounts with a zero balance are left out, so an empty window
+/// is an empty list rather than a page of noughts.
+@derive(Decode)
+pub struct TrialBalance {
+    pub from: int
+    pub to: int
+    pub lines: [TrialLine]
+    pub total_debit: int
+    pub total_credit: int
+}
+
+/// An account in the chart.
+///
+/// One struct for two shapes: `/accounting/accounts` sends `SELECT *` and the
+/// ledger's own `account` object sends these four columns only. `sort` is
+/// deliberately **not** a field — a derived decoder ignores keys it was not
+/// asked for, and leaving it out is what lets one struct read both.
+///
+/// Derived: every `accounts` column is `NOT NULL`.
+@derive(Decode)
+pub struct Account {
+    pub code: str
+    pub name: str
+    pub kind: str
+    pub normal: str
+}
+
+/// An account a running cost may be booked to.
+///
+/// Two fields, because that is all `/accounting/expense-accounts` selects — it
+/// cannot be read as an [`Account`], which would want a `kind` this endpoint
+/// does not send. The 5000-series is withheld at the other end on purpose: those
+/// are posted by the machinery, and offering them would double-count.
+@derive(Decode)
+pub struct AccountOption {
+    pub code: str
+    pub name: str
+}
+
+/// A journal entry's head.
+///
+/// Not derived: `corrects_id` and `user_id` are both nullable columns —
+/// `corrects_id` is set only on a reversal, which is the *minority* of entries —
+/// and `user_name` is a LEFT JOIN on the second of them.
+///
+/// `number` is not a column. It is `printf('J-%06d', rowid)`, which is sound
+/// only because the table refuses both UPDATE and DELETE, so a row's rowid can
+/// never move or be reused.
+pub struct JournalEntry {
+    pub id: str
+    pub number: str
+    pub value_at: int
+    pub booked_at: int
+    pub memo: str
+    pub ref_type: str
+    pub ref_id: str
+    pub corrects_id: str
+    pub user_id: str
+    pub user_name: str
+}
+
+pub fn journal_entry_of(d: doc.Doc) -> JournalEntry {
+    return JournalEntry{
+        id: doc.text(d, "id", ""),
+        number: doc.text(d, "number", ""),
+        value_at: doc.int_of(d, "value_at", 0),
+        booked_at: doc.int_of(d, "booked_at", 0),
+        memo: doc.text(d, "memo", ""),
+        ref_type: doc.text(d, "ref_type", ""),
+        ref_id: doc.text(d, "ref_id", ""),
+        corrects_id: doc.text(d, "corrects_id", ""),
+        user_id: doc.text(d, "user_id", ""),
+        user_name: doc.text(d, "user_name", ""),
+    }
+}
+
+/// One leg of a journal entry.
+///
+/// Derived: every `journal_lines` column is `NOT NULL` and `account_name` comes
+/// from an INNER JOIN on a chart the line cannot reference without.
+///
+/// One signed `amount` rather than two columns: debit is positive, credit is
+/// negative, and "this entry balances" is `SUM(amount) = 0`.
+@derive(Decode)
+pub struct JournalLine {
+    pub id: str
+    pub entry_id: str
+    pub account_code: str
+    pub account_name: str
+    pub amount: int
+    pub memo: str
+}
+
+/// The journal — `GET /accounting/journal`.
+///
+/// Fallible: the entries are read leniently for their two nullable ids, the
+/// lines decode.
+///
+/// The lines are for **exactly** the entries returned, so an entry is never
+/// shown with its legs missing. `total` is what the window holds before the cap
+/// and `shown` is what came back, which is how a screen says "200 of 1,842"
+/// rather than implying the window held exactly what fitted.
+pub struct Journal {
+    pub from: int
+    pub to: int
+    pub entries: [JournalEntry]
+    pub lines: [JournalLine]
+    pub total: int
+    pub shown: int
+}
+
+pub fn journal_of(d: doc.Doc) -> (Journal, error) {
+    var lines: [JournalLine] = []
+    for item in json.items(json.field(d, "lines")) {
+        let (one, err) = JournalLine.decode(item)
+        check errors.wrap(err, "the journal has a line we could not read")
+        lines.push(one)
+    }
+    return Journal{
+        from: doc.int_of(d, "from", 0),
+        to: doc.int_of(d, "to", 0),
+        entries: map(doc.items(doc.field(d, "entries")), journal_entry_of),
+        lines: lines,
+        total: doc.int_of(d, "total", 0),
+        shown: doc.int_of(d, "shown", 0),
+    }, nil
+}
+
+/// One movement on an account, with the balance after it.
+///
+/// Not derived: `user_name` is a LEFT JOIN on a nullable `user_id`, so anything
+/// the machinery posted rather than a person carries null there.
+///
+/// `line_memo` is the leg's own note and `memo` is the entry's; the screen shows
+/// the first and falls back to the second. `balance` is computed in the Worker
+/// as it walks the rows, so it depends on the ordering and is not a column.
+pub struct LedgerLine {
+    pub entry_id: str
+    pub number: str
+    pub value_at: int
+    pub booked_at: int
+    pub memo: str
+    pub line_memo: str
+    pub ref_type: str
+    pub ref_id: str
+    pub user_name: str
+    pub amount: int
+    pub balance: int
+}
+
+pub fn ledger_line_of(d: doc.Doc) -> LedgerLine {
+    return LedgerLine{
+        entry_id: doc.text(d, "entry_id", ""),
+        number: doc.text(d, "number", ""),
+        value_at: doc.int_of(d, "value_at", 0),
+        booked_at: doc.int_of(d, "booked_at", 0),
+        memo: doc.text(d, "memo", ""),
+        line_memo: doc.text(d, "line_memo", ""),
+        ref_type: doc.text(d, "ref_type", ""),
+        ref_id: doc.text(d, "ref_id", ""),
+        user_name: doc.text(d, "user_name", ""),
+        amount: doc.int_of(d, "amount", 0),
+        balance: doc.int_of(d, "balance", 0),
+    }
+}
+
+/// One account, movement by movement — `GET /accounting/ledger`.
+///
+/// Fallible: the account decodes and the lines do not.
+///
+/// `opening` is everything before the window, summed. Without it a running
+/// balance is a running total of an arbitrary slice and means nothing.
+pub struct Ledger {
+    pub from: int
+    pub to: int
+    pub account: Account
+    pub opening: int
+    pub lines: [LedgerLine]
+    pub closing: int
+}
+
+pub fn ledger_of(d: doc.Doc) -> (Ledger, error) {
+    let (account, aerr) = Account.decode(object_at(d, "account"))
+    check errors.wrap(aerr, "that account would not read")
+    return Ledger{
+        from: doc.int_of(d, "from", 0),
+        to: doc.int_of(d, "to", 0),
+        account: account,
+        opening: doc.int_of(d, "opening", 0),
+        lines: map(doc.items(doc.field(d, "lines")), ledger_line_of),
+        closing: doc.int_of(d, "closing", 0),
+    }, nil
+}
+
+/// An entry whose legs do not sum to zero.
+///
+/// Derived. `post()` refuses to build one, so anything in this list is asking
+/// whether something ever got past `post()`.
+@derive(Decode)
+pub struct Unbalanced {
+    pub id: str
+    pub memo: str
+    pub out_by: int
+}
+
+/// A product whose stock figure has drifted from its own movements.
+///
+/// Derived: `products.stock` is a running cache of `stock_movements`, and this
+/// is the only thing that has ever checked the cache against what it caches.
+@derive(Decode)
+pub struct StockDrift {
+    pub sku: str
+    pub name: str
+    pub stock: float
+    pub moved: float
+}
+
+/// Is any of this still true — `GET /accounting/health`.
+///
+/// Derived whole, including both nested lists: every figure is computed with a
+/// COALESCE or a `?? 0` behind it, and the three verdicts are real JSON
+/// booleans rather than the 0/1 integers the tables use elsewhere.
+///
+/// `stock_gap` is the one line here that is **not** a failure: the shelves are
+/// valued at what each product costs today while account 1200 carries what that
+/// stock cost when it was bought, and a supplier raising a price must not
+/// rewrite history.
+@derive(Decode)
+pub struct Health {
+    pub total_debit: int
+    pub total_credit: int
+    pub sides_agree: bool
+    pub entries: int
+    pub unbalanced: [Unbalanced]
+    pub orphan_lines: int
+    pub equation_holds: bool
+    pub out_by: int
+    pub stock_drift: [StockDrift]
+    pub stock_at_cost: int
+    pub stock_in_ledger: int
+    pub stock_gap: int
+    pub healthy: bool
+}
+
+/// A month, open or closed.
+///
+/// Not derived: `closed_at` is null for **every open period**, which is what the
+/// list is mostly made of, and `closed_by` is a nullable reference beside it.
+/// `note` is `NOT NULL DEFAULT ''`.
+pub struct FiscalPeriod {
+    pub id: str
+    pub starts_at: int
+    pub ends_at: int
+    pub closed_at: int
+    pub closed_by: str
+    pub note: str
+}
+
+pub fn fiscal_period_of(d: doc.Doc) -> FiscalPeriod {
+    return FiscalPeriod{
+        id: doc.text(d, "id", ""),
+        starts_at: doc.int_of(d, "starts_at", 0),
+        ends_at: doc.int_of(d, "ends_at", 0),
+        closed_at: doc.int_of(d, "closed_at", 0),
+        closed_by: doc.text(d, "closed_by", ""),
+        note: doc.text(d, "note", ""),
+    }
+}
+
+/// Whether the books are on, and what has been closed — `/accounting/summary`.
+///
+/// Not derived, because its periods are not. `enabled` is a real boolean the
+/// Worker computes from the `accounting.enabled` setting; until it is true
+/// nothing is posted at all, which is what the books screen leads with.
+pub struct BooksSummary {
+    pub enabled: bool
+    pub entries: int
+    pub periods: [FiscalPeriod]
+}
+
+pub fn books_summary_of(d: doc.Doc) -> BooksSummary {
+    return BooksSummary{
+        enabled: doc.bool_of(d, "enabled", false),
+        entries: doc.int_of(d, "entries", 0),
+        periods: map(doc.items(doc.field(d, "periods")), fiscal_period_of),
+    }
+}
+
+/// A running cost.
+///
+/// Not derived: three LEFT JOINs and a nullable column. `user_id` is nullable,
+/// `supplier_id` is nullable, and `user_name`, `account_name` and
+/// `supplier_name` are each null when their id is or when the row it pointed at
+/// has gone.
+///
+/// `tax` is the tax **inside** the amount, not on top of it, so it can never
+/// exceed it — the Worker refuses an expense where it does.
+pub struct Expense {
+    pub id: str
+    pub category: str
+    pub payee: str
+    pub amount: int
+    pub tax: int
+    pub method: str
+    pub account_code: str
+    pub supplier_id: str
+    pub reference: str
+    pub note: str
+    pub spent_at: int
+    pub user_id: str
+    pub created_at: int
+    pub user_name: str
+    pub account_name: str
+    pub supplier_name: str
+}
+
+pub fn expense_of(d: doc.Doc) -> Expense {
+    return Expense{
+        id: doc.text(d, "id", ""),
+        category: doc.text(d, "category", ""),
+        payee: doc.text(d, "payee", ""),
+        amount: doc.int_of(d, "amount", 0),
+        tax: doc.int_of(d, "tax", 0),
+        method: doc.text(d, "method", "cash"),
+        // 6000 Operating expenses is the column's own default and the fallback
+        // the Worker writes when a body names no account.
+        account_code: doc.text(d, "account_code", "6000"),
+        supplier_id: doc.text(d, "supplier_id", ""),
+        reference: doc.text(d, "reference", ""),
+        note: doc.text(d, "note", ""),
+        spent_at: doc.int_of(d, "spent_at", 0),
+        user_id: doc.text(d, "user_id", ""),
+        created_at: doc.int_of(d, "created_at", 0),
+        user_name: doc.text(d, "user_name", ""),
+        account_name: doc.text(d, "account_name", ""),
+        supplier_name: doc.text(d, "supplier_name", ""),
+    }
+}
+
+/// What was spent under one of the shopkeeper's own words for it.
+@derive(Decode)
+pub struct ExpenseCategory {
+    pub category: str
+    pub count: int
+    pub amount: int
+}
+
+/// What was spent against one account.
+///
+/// Derived: `account_name` is `COALESCE(a.name, e.account_code)` here — the code
+/// stands in for a name that is missing, so it is never null. The profit and
+/// loss is built from the account; the category beside it is the shopkeeper's
+/// own wording.
+@derive(Decode)
+pub struct ExpenseAccount {
+    pub account_code: str
+    pub account_name: str
+    pub count: int
+    pub amount: int
+    pub tax: int
+}
+
+/// What was spent in a window, in three figures.
+///
+/// Derived: the Worker substitutes a zero-filled object when the aggregate is
+/// missing, so this is always whole.
+@derive(Decode)
+pub struct ExpenseTotals {
+    pub amount: int
+    pub tax: int
+    pub count: int
+}
+
+/// Running costs — `GET /accounting/expenses`.
+///
+/// Fallible: the two breakdowns and the totals decode, and the expenses
+/// themselves are read leniently for their three joined names.
+pub struct ExpenseReport {
+    pub from: int
+    pub to: int
+    pub expenses: [Expense]
+    pub by_category: [ExpenseCategory]
+    pub by_account: [ExpenseAccount]
+    pub totals: ExpenseTotals
+}
+
+pub fn expense_report_of(d: doc.Doc) -> (ExpenseReport, error) {
+    var by_category: [ExpenseCategory] = []
+    for item in json.items(json.field(d, "by_category")) {
+        let (one, err) = ExpenseCategory.decode(item)
+        check errors.wrap(err, "the expense categories would not read")
+        by_category.push(one)
+    }
+    var by_account: [ExpenseAccount] = []
+    for item in json.items(json.field(d, "by_account")) {
+        let (one, err) = ExpenseAccount.decode(item)
+        check errors.wrap(err, "the expense accounts would not read")
+        by_account.push(one)
+    }
+    let (totals, terr) = ExpenseTotals.decode(object_at(d, "totals"))
+    check errors.wrap(terr, "the expense totals would not read")
+    return ExpenseReport{
+        from: doc.int_of(d, "from", 0),
+        to: doc.int_of(d, "to", 0),
+        expenses: map(doc.items(doc.field(d, "expenses")), expense_of),
+        by_category: by_category,
+        by_account: by_account,
+        totals: totals,
+    }, nil
+}
+
+// ---- people, and what is on offer -------------------------------------------
+
+/// Somebody on the staff list.
+///
+/// Not derived: `username` is null for sale staff, who sign in with a PIN;
+/// `last_seen_at` is null until they have; and `at_lane` is a subquery for a
+/// live session and is null whenever they are not signed in anywhere. `active`
+/// and `has_pin` are `INTEGER 0/1`, the second of them a
+/// `pin_hash IS NOT NULL` test rather than a column.
+///
+/// `app` and `signs_in_with` are not columns either — the Worker derives them
+/// from the role so that two front ends do not each decide what a role means.
+pub struct Staff {
+    pub id: str
+    pub name: str
+    pub role: str
+    pub username: str
+    pub active: bool
+    pub created_at: int
+    pub last_seen_at: int
+    pub has_pin: bool
+    pub at_lane: str
+    pub app: str
+    pub signs_in_with: str
+}
+
+pub fn staff_of(d: doc.Doc) -> Staff {
+    return Staff{
+        id: doc.text(d, "id", ""),
+        name: doc.text(d, "name", ""),
+        role: doc.text(d, "role", "sale_staff"),
+        username: doc.text(d, "username", ""),
+        active: doc.int_of(d, "active", 1) == 1,
+        created_at: doc.int_of(d, "created_at", 0),
+        last_seen_at: doc.int_of(d, "last_seen_at", 0),
+        has_pin: doc.int_of(d, "has_pin", 0) == 1,
+        at_lane: doc.text(d, "at_lane", ""),
+        app: doc.text(d, "app", ""),
+        signs_in_with: doc.text(d, "signs_in_with", ""),
+    }
+}
+
+/// What one command costs each role.
+///
+/// Derived: four strings the Worker builds from its own command table, so there
+/// is no column behind any of them and nothing that can arrive null. This is the
+/// same table the till builds its bar from, which is the point of sending it —
+/// the back office shows the rules rather than a second copy of them.
+@derive(Decode)
+pub struct CommandRule {
+    pub command: str
+    pub sale_staff: str
+    pub manager: str
+    pub confirm: str
+}
+
+/// A customer with their history — `GET /customers`.
+///
+/// Not [`Customer`], which is the five columns the till's lookup sends. This is
+/// `c.*` plus three subqueries.
+///
+/// Not derived: `last_seen` is a MAX over completed sales and is **null for
+/// somebody who has never bought anything** — which is exactly the row a shop
+/// wants to see. `visits` and `spent` beside it are COUNT and COALESCE'd SUM and
+/// are never null.
+pub struct CustomerAccount {
+    pub id: str
+    pub name: str
+    pub phone: str
+    pub points: int
+    pub credit: int
+    pub note: str
+    pub created_at: int
+    pub visits: int
+    pub spent: int
+    pub last_seen: int
+}
+
+pub fn customer_account_of(d: doc.Doc) -> CustomerAccount {
+    return CustomerAccount{
+        id: doc.text(d, "id", ""),
+        name: doc.text(d, "name", ""),
+        phone: doc.text(d, "phone", ""),
+        points: doc.int_of(d, "points", 0),
+        credit: doc.int_of(d, "credit", 0),
+        note: doc.text(d, "note", ""),
+        created_at: doc.int_of(d, "created_at", 0),
+        visits: doc.int_of(d, "visits", 0),
+        spent: doc.int_of(d, "spent", 0),
+        last_seen: doc.int_of(d, "last_seen", 0),
+    }
+}
+
+/// An offer.
+///
+/// Not derived: four nullable columns and a coded boolean. `product_id` and
+/// `category_id` are the scope's target and **exactly one is set** — an offer
+/// scoped to everything has both null. `starts_at` and `ends_at` are null on an
+/// open-ended offer, one or both. `product_name` and `category_name` are LEFT
+/// JOINs on the two ids and go null with them. `active` is an `INTEGER 0/1`.
+///
+/// `value` is read against `kind`: basis points for a percentage, minor units
+/// for an amount off or a fixed price, and the price of `n` units for a
+/// multibuy.
+pub struct Promotion {
+    pub id: str
+    pub name: str
+    pub name_my: str
+    pub kind: str
+    pub value: int
+    pub n: int
+    pub scope: str
+    pub product_id: str
+    pub category_id: str
+    pub starts_at: int
+    pub ends_at: int
+    pub priority: int
+    pub active: bool
+    pub created_at: int
+    pub product_name: str
+    pub category_name: str
+}
+
+pub fn promotion_of(d: doc.Doc) -> Promotion {
+    return Promotion{
+        id: doc.text(d, "id", ""),
+        name: doc.text(d, "name", ""),
+        name_my: doc.text(d, "name_my", ""),
+        kind: doc.text(d, "kind", ""),
+        value: doc.int_of(d, "value", 0),
+        n: doc.int_of(d, "n", 0),
+        scope: doc.text(d, "scope", "all"),
+        product_id: doc.text(d, "product_id", ""),
+        category_id: doc.text(d, "category_id", ""),
+        starts_at: doc.int_of(d, "starts_at", 0),
+        ends_at: doc.int_of(d, "ends_at", 0),
+        priority: doc.int_of(d, "priority", 0),
+        // Absent means NOT live. `promotions.active` is NOT NULL DEFAULT 1 so
+        // this never fires today, but an offer drawn as Running because a
+        // field went missing is the harmful direction to guess in.
+        active: doc.int_of(d, "active", 0) == 1,
+        created_at: doc.int_of(d, "created_at", 0),
+        product_name: doc.text(d, "product_name", ""),
+        category_name: doc.text(d, "category_name", ""),
+    }
+}
+
+/// What an offer actually did — `GET /promotions/performance`.
+///
+/// Derived: the query filters to lines that carry a promotion, so `promo_id`
+/// cannot be null here even though the column is nullable, and `promo_name` is
+/// `NOT NULL DEFAULT ''`. `units` is a SUM over a REAL quantity.
+@derive(Decode)
+pub struct PromotionResult {
+    pub promo_id: str
+    pub promo_name: str
+    pub lines: int
+    pub units: float
+    pub saved: int
+    pub revenue: int
 }

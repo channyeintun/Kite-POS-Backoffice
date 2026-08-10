@@ -200,40 +200,48 @@ fn failed(app: store.App, why: str) {
 /// to be tested in the scope it arrived in — so every caller checks its own
 /// failure and only a success reaches here. That is a better shape anyway: this
 /// function is about baskets, not about the network.
-fn settle(app: store.App, answer: doc.Doc) {
+///
+/// The branch is on an [`api.Answer`] variant, not on a `needs` string read out
+/// of a document. The three arms are the three answers, the compiler counts
+/// them, and no key name or tag spelling appears in this file — those live in
+/// `api.answer_of`, next to the endpoints that produce them.
+fn settle(app: store.App, answer: api.Answer) {
     store.reachable(app, true)
 
-    // A 422 is a step in the sale rather than a failure of one: the till is
-    // being told it needs ID, or a price, before this item can go on.
-    let needs = doc.text(answer, "needs", "")
-    // The tail below is the no-tag path and stays outside: an answer with no
-    // `needs` on it is an ordinary basket, and both arms above end the call.
-    match needs {
-        "age_check" => {
-            let product = doc.field(answer, "product")
+    match answer {
+        // A 422 is a step in the sale rather than a failure of one: the till is
+        // being told it needs ID, or a price, before this item can go on. Both
+        // arms leave the basket exactly as it was — the item did not go on —
+        // and neither dismisses, because each is *opening* a dialog.
+        NeedsAgeCheck(name, min_age, born_before, product_id) => {
+            // `code` is empty because the server's age_check 422 does not send
+            // one: it identifies the product by id, and the re-scan on approval
+            // goes back out by `product_id`. Unchanged from before the enum.
             store.show(app, store.Overlay.AgeCheck(
-                    name: doc.text(product, "name", ""),
-                    min_age: doc.int_of(answer, "min_age", 18),
-                    born_before: doc.int_of(answer, "born_on_or_before", 0),
+                    name: name,
+                    min_age: min_age,
+                    born_before: born_before,
                     code: "",
-                    product_id: doc.text(product, "id", "")))
+                    product_id: product_id))
             repaint(app)
             return
         },
-        "price" => {
-            let product = doc.field(answer, "product")
-            store.show(app, store.Overlay.AskPrice(
-                    name: doc.text(product, "name", ""),
-                    product_id: doc.text(product, "id", "")))
+        // `unit` is carried on the answer and the price dialog has nowhere to
+        // put it yet, so it is discarded here rather than at the boundary —
+        // where it would be lost to every future reader of that dialog too.
+        NeedsPrice(name, product_id, _) => {
+            store.show(app, store.Overlay.AskPrice(name: name, product_id: product_id))
             repaint(app)
             return
         },
-        _ => {},
+        // The ordinary path, and the one an untagged answer takes.
+        Basket(basket) => {
+            store.took_basket(app, basket)
+            store.dismiss(app)
+            repaint(app)
+            return
+        },
     }
-
-    store.took_basket(app, model.basket_of(answer))
-    store.dismiss(app)
-    repaint(app)
 }
 
 // ---- ringing ---------------------------------------------------------------
@@ -351,16 +359,15 @@ async fn do_price_check(app: store.App, code: str) {
         repaint(app)
         return
     }
-    let product = doc.field(answer, "product")
-    let saved = doc.int_of(answer, "promo_saved", 0)
-    var detail = doc.text(product, "sku", "")
+    let saved = answer.promo_saved
+    var detail = answer.sku
     if saved > 0 {
-        detail = "\(detail) · \(doc.text(answer, "promo_name", "")) · \(i18n.t(app.lang, "saved")) \(money.show(saved, store.currency_of(app)))"
+        detail = "\(detail) · \(answer.promo_name) · \(i18n.t(app.lang, "saved")) \(money.show(saved, store.currency_of(app)))"
     }
     store.show(app, store.Overlay.PriceCheck(
-            name: doc.text(product, "name", ""),
+            name: answer.name,
             detail: detail,
-            price: money.show(doc.int_of(answer, "total", 0), store.currency_of(app))))
+            price: money.show(answer.total, store.currency_of(app))))
     repaint(app)
 }
 
@@ -415,8 +422,8 @@ async fn do_pay(app: store.App) {
         repaint(app)
         return
     }
-    let change = doc.int_of(answer, "change", 0)
-    let number = doc.int_of(answer, "number", 0)
+    let change = answer.change
+    let number = answer.number
     store.clear_payments(app)
     store.go_to_mode(app, store.Mode.Sale)
     if change > 0 {
@@ -537,7 +544,7 @@ async fn do_new_customer(app: store.App, name: str, phone: str) {
         failed(app, err.message())
         return
     }
-    do_attach_customer(app, doc.text(answer, "id", ""))
+    do_attach_customer(app, answer.id)
 }
 
 async fn load_receipts(app: store.App, q: str) {
@@ -556,11 +563,8 @@ async fn load_receipt(app: store.App, id: str) {
         failed(app, err.message())
         return
     }
-    let sale = doc.field(answer, "sale")
-    store.took_return_lines(app,
-        map(doc.items(doc.field(answer, "lines")), model.return_line_of))
-    store.show(app, store.Overlay.Returning(sale_id: id,
-            number: doc.int_of(sale, "number", 0)))
+    store.took_return_lines(app, answer.lines)
+    store.show(app, store.Overlay.Returning(sale_id: id, number: answer.number))
     repaint(app)
 }
 
@@ -608,7 +612,7 @@ async fn do_close_lane(app: store.App, counted: int, manager_pin: str) {
     }
     // The lane's sessions are gone, so this device is signed out — which is
     // what closing a drawer means.
-    let variance = doc.int_of(answer, "variance", 0)
+    let variance = answer.variance
     browser.drop_kept("kite-pos.token")
     store.signed_out(app)
     store.say(app, "\(i18n.t(app.lang, "close_lane")) · \(money.show(variance, store.currency_of(app)))")

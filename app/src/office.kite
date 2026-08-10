@@ -21,6 +21,7 @@ use desk
 use doc
 use forms
 use i18n
+use model
 use money
 use office_view
 use screens
@@ -122,39 +123,39 @@ async fn load_refs(app: desk.App) {
     // Kite will not let a `(T, error)` be read inside the same expression that
     // tests the error, and a missing list is a screen with an empty dropdown
     // rather than a failure worth stopping for.
-    var categories: [doc.Doc] = []
+    var categories: [model.CatalogCategory] = []
     let (cats, cerr) = await api.categories(token)
     if cerr == nil {
-        categories = doc.items(doc.field(cats, "categories"))
+        categories = cats
     }
-    var suppliers: [doc.Doc] = []
+    var suppliers: [model.Supplier] = []
     let (sups, serr) = await api.suppliers(token)
     if serr == nil {
-        suppliers = doc.items(doc.field(sups, "suppliers"))
+        suppliers = sups
     }
-    var products: [doc.Doc] = []
+    var products: [model.CatalogProduct] = []
     let (prods, perr) = await api.products(token, "")
     if perr == nil {
-        products = doc.items(doc.field(prods, "products"))
+        products = prods
     }
-    var registers: [doc.Doc] = []
+    var registers: [model.Lane] = []
     let (lanes, lerr) = await api.lanes(token)
     if lerr == nil {
-        registers = doc.items(doc.field(lanes, "lanes"))
+        registers = lanes
     }
     desk.took_refs(app, categories, suppliers, products, registers)
 
-    var expense_accounts: [doc.Doc] = []
+    var expense_accounts: [model.AccountOption] = []
     let (chart, aerr) = await api.expense_accounts(token)
     if aerr == nil {
-        expense_accounts = doc.items(doc.field(chart, "accounts"))
+        expense_accounts = chart
     }
     desk.took_expense_accounts(app, expense_accounts)
 
-    var chart_accounts: [doc.Doc] = []
+    var chart_accounts: [model.Account] = []
     let (whole, werr) = await api.accounts(token)
     if werr == nil {
-        chart_accounts = doc.items(doc.field(whole, "accounts"))
+        chart_accounts = whole
     }
     desk.took_accounts(app, chart_accounts)
 
@@ -181,15 +182,15 @@ async fn load_header(app: desk.App) {
     var open = 0
     var offline = 0
     var expected = 0
-    for lane in doc.items(doc.field(answer, "lanes")) {
-        let state = doc.text(lane, "state", "closed")
+    for lane in answer {
+        let state = lane.state
         if state == "open" || state == "offline" {
             open = open + 1
         }
         if state == "offline" {
             offline = offline + 1
         }
-        expected = expected + doc.int_of(lane, "drawer_expected", 0)
+        expected = expected + lane.drawer_expected
     }
     desk.lanes_are(app, open, offline, money.show(expected, desk.currency_of(app)))
     if open > 0 {
@@ -253,7 +254,7 @@ async fn load_tills(app: desk.App) {
         failed(app, err.message())
         return
     }
-    var entries = doc.nothing()
+    var entries: [model.AuditEntry] = []
     let (audit, aerr) = await api.audit(token, browser.now() - day())
     if aerr == nil {
         entries = audit
@@ -277,7 +278,7 @@ async fn load_sale(app: desk.App, id: str) {
         failed(app, err.message())
         return
     }
-    desk.took_subject(app, doc.field(answer, "sale"), doc.items(doc.field(answer, "lines")))
+    desk.took_sale_lines(app, answer.lines)
     done(app, screens.sale_detail(answer, desk.lang_of(app), desk.currency_of(app)))
 }
 
@@ -296,7 +297,6 @@ async fn load_shift(app: desk.App, id: str) {
         failed(app, err.message())
         return
     }
-    desk.took_subject(app, answer, [])
     done(app, screens.shift_detail(answer, desk.lang_of(app), desk.currency_of(app)))
 }
 
@@ -315,7 +315,7 @@ async fn load_product(app: desk.App, id: str) {
         failed(app, err.message())
         return
     }
-    desk.took_subject(app, doc.field(answer, "product"), [])
+    desk.took_product(app, answer.product)
     done(app, screens.product_detail(answer, desk.lang_of(app), desk.currency_of(app)))
 }
 
@@ -343,8 +343,7 @@ async fn load_inventory(app: desk.App) {
         failed(app, err.message())
         return
     }
-    let totals = doc.field(answer, "totals")
-    let attention = doc.int_of(totals, "low", 0) + doc.int_of(totals, "out", 0)
+    let attention = answer.totals.low + answer.totals.out
     if attention > 0 {
         desk.badge(app, "inventory", "\(attention)")
     }
@@ -367,16 +366,16 @@ async fn load_purchasing(app: desk.App) {
         failed(app, err.message())
         return
     }
-    var os = doc.nothing()
+    var os: [model.PurchaseOrder] = []
     let (orders, oerr) = await api.purchase_orders(token)
     if oerr == nil {
         os = orders
     }
-    var ps = doc.nothing()
+    var ps: Option<model.Payables> = nil
     let (payables, perr) = await api.payables(token)
     if perr == nil {
         ps = payables
-        desk.took_invoices(app, doc.items(doc.field(payables, "invoices")))
+        desk.took_invoices(app, payables.invoices)
     }
     done(app, screens.purchasing(sheet, os, ps, desk.lang_of(app), desk.currency_of(app)))
 }
@@ -387,7 +386,7 @@ async fn load_order(app: desk.App, id: str) {
         failed(app, err.message())
         return
     }
-    desk.took_subject(app, doc.field(answer, "order"), doc.items(doc.field(answer, "lines")))
+    desk.took_order(app, answer.order, answer.lines)
     done(app, screens.order_detail(answer, desk.lang_of(app), desk.currency_of(app)))
 }
 
@@ -407,12 +406,15 @@ async fn load_promotions(app: desk.App) {
         failed(app, err.message())
         return
     }
-    var p = doc.nothing()
+    var p: [model.PromotionResult] = []
     let (perf, perr) = await api.promotion_performance(token, browser.now() - 30 * day())
     if perr == nil {
         p = perf
     }
-    done(app, screens.promotions(answer, p, desk.lang_of(app), desk.currency_of(app)))
+    // `.0` is the offers and `.1` the moment the server judged them at — see
+    // `api.promotions`, which is where the pair is named.
+    done(app, screens.promotions(answer.0, answer.1, p, desk.lang_of(app),
+            desk.currency_of(app)))
 }
 
 async fn load_reports(app: desk.App) {
@@ -424,22 +426,22 @@ async fn load_reports(app: desk.App) {
         failed(app, err.message())
         return
     }
-    var d = doc.nothing()
+    var d: Option<model.SalesReport> = nil
     let (daily, derr) = await api.sales_report(token, from, to)
     if derr == nil {
         d = daily
     }
-    var s = doc.nothing()
+    var s: Option<model.ShrinkageReport> = nil
     let (shrink, serr) = await api.shrinkage(token, from, to)
     if serr == nil {
         s = shrink
     }
-    var tax = doc.nothing()
+    var tax: Option<model.TaxReport> = nil
     let (rates, terr) = await api.tax_report(token, from, to)
     if terr == nil {
         tax = rates
     }
-    var dead = doc.nothing()
+    var dead: Option<model.DeadStockReport> = nil
     let (idle, ierr) = await api.dead_stock(token, 60)
     if ierr == nil {
         dead = idle
@@ -462,7 +464,7 @@ async fn load_accounting(app: desk.App) {
         failed(app, serr.message())
         return
     }
-    if !doc.bool_of(summary, "enabled", false) {
+    if !summary.enabled {
         done(app, screens.accounting_off(desk.lang_of(app)))
         return
     }
@@ -472,12 +474,12 @@ async fn load_accounting(app: desk.App) {
     let from = span[0]
     let to = span[1]
 
-    // A bundle rather than a struct: the sheets each read their own corner of
-    // it, and a document assembled here is one thing to pass down. Anything
-    // that failed is simply absent, which is what every reader below already
-    // treats as "not loaded".
-    var data: { str: json.Json } = { }
-    data["summary"] = or_else(summary, json.Json.Null)
+    // A bundle the sheets each read their own corner of — see [`screens.Books`].
+    // Anything that failed is left `nil`, which is what every reader below
+    // treats as "not loaded"; the fields are filled through `desk`-style
+    // setters because a closure may not capture a `var` and a struct literal
+    // cannot be built a field at a time.
+    var data = screens.books_of(summary)
 
     if view == "summary" || view == "pl" {
         let (pl, perr) = await api.profit_and_loss(token, from, to)
@@ -485,22 +487,30 @@ async fn load_accounting(app: desk.App) {
             failed(app, perr.message())
             return
         }
-        data["pl"] = or_else(pl, json.Json.Null)
+        data = screens.Books{..data, pl: pl }
     }
     if view == "summary" || view == "balance" {
         let (sheet, berr) = await api.balance_sheet(token, to)
-        if berr == nil {
-            data["sheet"] = or_else(sheet, json.Json.Null)
+        // Reported rather than swallowed. The screen draws nothing for a sheet
+        // it does not have — which is right, an invented clean bill of health
+        // is worse — but on the Balance tab that left the manager looking at
+        // an empty page with no way to tell a failed request from an empty
+        // ledger. The other four books views already failed here; this one
+        // was the odd one out.
+        if berr != nil {
+            failed(app, berr.message())
+            return
         }
+        data = screens.Books{..data, sheet: sheet }
     }
     if view == "summary" {
         let (health, herr) = await api.books_health(token)
         if herr == nil {
-            data["health"] = or_else(health, json.Json.Null)
+            data = screens.Books{..data, health: health }
         }
         let (owing, oerr) = await api.payables(token)
         if oerr == nil {
-            data["payables"] = or_else(owing, json.Json.Null)
+            data = screens.Books{..data, payables: owing }
         }
     }
     if view == "trial" {
@@ -509,7 +519,7 @@ async fn load_accounting(app: desk.App) {
             failed(app, terr.message())
             return
         }
-        data["trial"] = or_else(trial, json.Json.Null)
+        data = screens.Books{..data, trial: trial }
     }
     if view == "journal" {
         let (journal, jerr) = await api.journal_filtered(token, from, to,
@@ -518,7 +528,7 @@ async fn load_accounting(app: desk.App) {
             failed(app, jerr.message())
             return
         }
-        data["journal"] = or_else(journal, json.Json.Null)
+        data = screens.Books{..data, journal: journal }
     }
     if view == "accounts" {
         let (accounts, aerr) = await api.accounts(token)
@@ -526,7 +536,7 @@ async fn load_accounting(app: desk.App) {
             failed(app, aerr.message())
             return
         }
-        data["accounts"] = or_else(accounts, json.Json.Null)
+        data = screens.Books{..data, accounts: accounts }
     }
     if view == "ledger" && app.books_account.len() > 0 {
         let (ledger, lerr) = await api.general_ledger(token, app.books_account, from, to)
@@ -534,10 +544,10 @@ async fn load_accounting(app: desk.App) {
             failed(app, lerr.message())
             return
         }
-        data["ledger"] = or_else(ledger, json.Json.Null)
+        data = screens.Books{..data, ledger: ledger }
     }
 
-    done(app, screens.accounting(view, app.books_window, json.Json.Object(data),
+    done(app, screens.accounting(view, app.books_window, data,
             app.books_account, desk.lang_of(app), desk.currency_of(app)))
 }
 
@@ -586,7 +596,7 @@ async fn load_staff(app: desk.App) {
         failed(app, err.message())
         return
     }
-    done(app, screens.staff(answer, desk.lang_of(app)))
+    done(app, screens.staff(answer.0, answer.1, desk.lang_of(app)))
 }
 
 async fn load_settings(app: desk.App) {
@@ -601,30 +611,84 @@ async fn load_settings(app: desk.App) {
 
 // ---- opening a form --------------------------------------------------------
 
-/// A document from a list, by id — what an edit form is filled from.
-fn one_of(list: [doc.Doc], id: str) -> doc.Doc {
-    for d in list {
-        if doc.text(d, "id", "") == id {
-            return d
-        }
-    }
-    return doc.nothing()
+// A row from a list, by id — what an edit form is filled from. One per list
+// rather than one over documents: two types with an `id` and a `name` do not
+// make one type, and `find` from the prelude already answers the question.
+
+fn category_by(list: [model.CatalogCategory], id: str) -> Option<model.CatalogCategory> {
+    return find(list, |cat: model.CatalogCategory| cat.id == id)
 }
 
-fn names_of(list: [doc.Doc]) -> [str] {
+fn supplier_by(list: [model.Supplier], id: str) -> Option<model.Supplier> {
+    return find(list, |s: model.Supplier| s.id == id)
+}
+
+fn supplier_ids(list: [model.Supplier]) -> [str] {
     var out: [str] = []
-    for d in list {
-        out.push(doc.text(d, "name", ""))
+    for s in list {
+        out.push(s.id)
     }
     return out
 }
 
-fn ids_of(list: [doc.Doc]) -> [str] {
+fn supplier_names(list: [model.Supplier]) -> [str] {
     var out: [str] = []
-    for d in list {
-        out.push(doc.text(d, "id", ""))
+    for s in list {
+        out.push(s.name)
     }
     return out
+}
+
+fn register_ids(list: [model.Lane]) -> [str] {
+    var out: [str] = []
+    for lane in list {
+        out.push(lane.id)
+    }
+    return out
+}
+
+fn register_names(list: [model.Lane]) -> [str] {
+    var out: [str] = []
+    for lane in list {
+        out.push(lane.name)
+    }
+    return out
+}
+
+/// What the open drill-down is about, for the forms opened from it.
+///
+/// Each answers the empty value when there is no subject, which is what reading
+/// a field off an absent document used to do.
+fn subject_product_name(app: desk.App) -> str {
+    let p = app.subject_product
+    if p == nil {
+        return ""
+    }
+    return p.name
+}
+
+fn subject_product_stock(app: desk.App) -> float {
+    let p = app.subject_product
+    if p == nil {
+        return 0.0
+    }
+    return p.stock
+}
+
+fn subject_order_supplier(app: desk.App) -> str {
+    let o = app.subject_order
+    if o == nil {
+        return ""
+    }
+    return o.supplier_id
+}
+
+fn subject_order_total(app: desk.App) -> int {
+    let o = app.subject_order
+    if o == nil {
+        return 0
+    }
+    return o.total
 }
 
 fn open_form(app: desk.App, what: str, id: str) {
@@ -637,30 +701,34 @@ fn open_form(app: desk.App, what: str, id: str) {
     // draw nothing, and the press would look like it did nothing at all.
     match what {
         "form-product" => {
-            let existing = if id.len() > 0 { app.subject } else { doc.nothing() }
+            var existing: Option<model.CatalogProduct> = nil
+            if id.len() > 0 {
+                existing = app.subject_product
+            }
             desk.open_form(app, forms.product(existing, id, app.ref_categories,
                     app.ref_suppliers, l, c))
         },
-        "form-barcode" => desk.open_form(app, forms.barcode(id,
-                doc.text(app.subject, "name", ""), l)),
-        "form-category" => desk.open_form(app, forms.category(one_of(app.ref_categories, id), id, l)),
-        "form-supplier" => desk.open_form(app, forms.supplier(one_of(app.ref_suppliers, id), id, l)),
-        "form-promotion" => desk.open_form(app, forms.promotion(doc.nothing(), id,
+        "form-barcode" => desk.open_form(app, forms.barcode(id, subject_product_name(app), l)),
+        "form-category" => desk.open_form(app,
+            forms.category(category_by(app.ref_categories, id), id, l)),
+        "form-supplier" => desk.open_form(app,
+            forms.supplier(supplier_by(app.ref_suppliers, id), id, l)),
+        "form-promotion" => desk.open_form(app, forms.promotion(nil, id,
                 app.ref_products, app.ref_categories, l, c)),
-        "form-customer" => desk.open_form(app, forms.customer(doc.nothing(), id, l)),
+        "form-customer" => desk.open_form(app, forms.customer(nil, id, l)),
         "form-staff" => desk.open_form(app, forms.staff(l)),
         "form-expense" => desk.open_form(app, forms.expense(app.ref_expense_accounts, l, c)),
         "form-settings" => desk.open_form(app, forms.settings(app.ref_settings, l)),
         "form-close-period" => desk.open_form(app, forms.close_period(l)),
         "form-register" => desk.open_form(app, forms.register(l)),
-        "form-adjust" => desk.open_form(app, forms.adjust(id,
-                doc.text(app.subject, "name", ""),
-                doc.num_of(app.subject, "stock", 0.0), l)),
-        "form-open-shift" => desk.open_form(app, forms.open_shift(ids_of(app.ref_registers),
-                names_of(app.ref_registers), l, c)),
-        "form-invoice" => desk.open_form(app, forms.invoice(ids_of(app.ref_suppliers),
-                names_of(app.ref_suppliers), id, doc.text(app.subject, "supplier_id", ""),
-                doc.int_of(app.subject, "total", 0), l, c)),
+        "form-adjust" => desk.open_form(app, forms.adjust(id, subject_product_name(app),
+                subject_product_stock(app), l)),
+        "form-open-shift" => desk.open_form(app,
+            forms.open_shift(register_ids(app.ref_registers),
+                register_names(app.ref_registers), l, c)),
+        "form-invoice" => desk.open_form(app, forms.invoice(supplier_ids(app.ref_suppliers),
+                supplier_names(app.ref_suppliers), id, subject_order_supplier(app),
+                subject_order_total(app), l, c)),
         // A developer's message, not a shopkeeper's: it only appears when a
         // button names a form nobody wrote, which is a bug rather than a state.
         _ => desk.went_wrong(app, "\(what) is not wired up"),
@@ -675,10 +743,8 @@ async fn open_close_shift(app: desk.App, id: str) {
         failed(app, err.message())
         return
     }
-    let shift = doc.field(answer, "shift")
-    desk.open_form(app, forms.close_shift(id, doc.text(shift, "register_name", ""),
-            doc.int_of(doc.field(answer, "drawer"), "expected", 0),
-            desk.lang_of(app), desk.currency_of(app)))
+    desk.open_form(app, forms.close_shift(id, answer.shift.register_name,
+            answer.drawer.expected, desk.lang_of(app), desk.currency_of(app)))
     repaint(app)
 }
 
@@ -688,10 +754,10 @@ async fn open_pay_invoice(app: desk.App, id: str) {
         failed(app, err.message())
         return
     }
-    for i in doc.items(doc.field(answer, "invoices")) {
-        if doc.text(i, "id", "") == id {
-            desk.open_form(app, forms.pay_invoice(id, doc.text(i, "supplier_name", ""),
-                    doc.int_of(i, "outstanding", 0), desk.lang_of(app), desk.currency_of(app)))
+    for i in answer.invoices {
+        if i.id == id {
+            desk.open_form(app, forms.pay_invoice(id, i.supplier_name,
+                    i.outstanding, desk.lang_of(app), desk.currency_of(app)))
             repaint(app)
             return
         }
@@ -705,19 +771,17 @@ async fn open_refund(app: desk.App, id: str) {
         failed(app, err.message())
         return
     }
-    let sale = doc.field(answer, "sale")
-    desk.open_form(app, forms.refund(id, doc.int_of(sale, "number", 0),
-            doc.items(doc.field(answer, "lines")), desk.lang_of(app), desk.currency_of(app)))
+    desk.open_form(app, forms.refund(id, answer.sale.number, answer.lines,
+            desk.lang_of(app), desk.currency_of(app)))
     repaint(app)
 }
 
 fn open_receive(app: desk.App, item_id: str) {
-    for line in app.subject_lines {
-        if doc.text(line, "id", "") == item_id {
-            let left = doc.num_of(line, "qty", 0.0) - doc.num_of(line, "qty_received", 0.0)
-            desk.open_form(app, forms.receive(item_id, doc.text(line, "product_name", ""),
-                    left, doc.int_of(line, "unit_cost", 0),
-                    desk.lang_of(app), desk.currency_of(app)))
+    for line in app.subject_order_lines {
+        if line.id == item_id {
+            let left = line.qty - line.qty_received
+            desk.open_form(app, forms.receive(item_id, line.product_name,
+                    left, line.unit_cost, desk.lang_of(app), desk.currency_of(app)))
             repaint(app)
             return
         }
@@ -730,13 +794,13 @@ async fn open_staff_menu(app: desk.App, id: str) {
         failed(app, err.message())
         return
     }
-    for u in doc.items(doc.field(answer, "staff")) {
-        if doc.text(u, "id", "") == id {
-            if doc.text(u, "signs_in_with", "") == "pin" {
-                desk.open_form(app, forms.staff_pin(id, doc.text(u, "name", ""), desk.lang_of(app)))
+    // `.0` is the people and `.1` the command table — see `api.staff`.
+    for u in answer.0 {
+        if u.id == id {
+            if u.signs_in_with == "pin" {
+                desk.open_form(app, forms.staff_pin(id, u.name, desk.lang_of(app)))
             } else {
-                desk.open_form(app, forms.staff_password(id, doc.text(u, "name", ""),
-                        desk.lang_of(app)))
+                desk.open_form(app, forms.staff_password(id, u.name, desk.lang_of(app)))
             }
             repaint(app)
             return
@@ -1263,8 +1327,8 @@ async fn do_submit(app: desk.App, id: str, subject: str) {
         },
         "refund" => {
             var lines: [json.Json] = []
-            for line in app.subject_lines {
-                let line_id = doc.text(line, "id", "")
+            for line in app.subject_sale_lines {
+                let line_id = line.id
                 let wanted = qty_of("line:\(line_id)")
                 if wanted > 0.0 {
                     var entry: { str: json.Json } = { }
@@ -1444,13 +1508,13 @@ async fn do_receive_all(app: desk.App, id: str) {
     }
     var body: { str: json.Json } = { }
     var lines: [json.Json] = []
-    for l in doc.items(doc.field(answer, "lines")) {
-        let left = doc.num_of(l, "qty", 0.0) - doc.num_of(l, "qty_received", 0.0)
+    for l in answer.lines {
+        let left = l.qty - l.qty_received
         if left > 0.0 {
             var entry: { str: json.Json } = { }
-            entry["item_id"] = json.Json.Text(doc.text(l, "id", ""))
+            entry["item_id"] = json.Json.Text(l.id)
             entry["qty"] = json.Json.Number(left)
-            entry["unit_cost"] = json.Json.Number(doc.int_of(l, "unit_cost", 0) as float)
+            entry["unit_cost"] = json.Json.Number(l.unit_cost as float)
             lines.push(json.Json.Object(entry))
         }
     }
@@ -1471,16 +1535,15 @@ async fn do_receive_all(app: desk.App, id: str) {
 /// sent, and left as a draft because somebody should look at it first.
 async fn do_raise_orders(app: desk.App) {
     let token = desk.token_of(app)
-    let (sheet, err) = await api.worksheet(token, 28)
+    let (lines, err) = await api.worksheet(token, 28)
     if err != nil {
         failed(app, err.message())
         return
     }
-    let lines = doc.items(doc.field(sheet, "lines"))
     var suppliers: [str] = []
     for l in lines {
-        let supplier = doc.text(l, "supplier_id", "")
-        if supplier.len() > 0 && doc.num_of(l, "suggested", 0.0) > 0.0 && !includes(suppliers, supplier) {
+        let supplier = l.supplier_id
+        if supplier.len() > 0 && l.suggested > 0.0 && !includes(suppliers, supplier) {
             suppliers.push(supplier)
         }
     }
@@ -1498,11 +1561,11 @@ async fn do_raise_orders(app: desk.App) {
         body["status"] = json.Json.Text("draft")
         var items: [json.Json] = []
         for l in lines {
-            if doc.text(l, "supplier_id", "") == supplier && doc.num_of(l, "suggested", 0.0) > 0.0 {
+            if l.supplier_id == supplier && l.suggested > 0.0 {
                 var entry: { str: json.Json } = { }
-                entry["product_id"] = json.Json.Text(doc.text(l, "id", ""))
-                entry["qty"] = json.Json.Number(doc.num_of(l, "suggested", 0.0))
-                entry["unit_cost"] = json.Json.Number(doc.int_of(l, "cost", 0) as float)
+                entry["product_id"] = json.Json.Text(l.id)
+                entry["qty"] = json.Json.Number(l.suggested)
+                entry["unit_cost"] = json.Json.Number(l.cost as float)
                 items.push(json.Json.Object(entry))
             }
         }
@@ -1524,18 +1587,17 @@ async fn open_close_lane(app: desk.App, id: str) {
         failed(app, err.message())
         return
     }
-    for lane in doc.items(doc.field(answer, "lanes")) {
-        if doc.text(lane, "id", "") == id {
-            let shift = doc.text(lane, "shift_id", "")
+    for lane in answer {
+        if lane.id == id {
+            let shift = lane.shift_id
             if shift.len() == 0 {
                 desk.went_wrong(app,
                     words.t(desk.lang_of(app), "tills.that_lane_has_no_open_drawer"))
                 repaint(app)
                 return
             }
-            desk.open_form(app, forms.close_shift(shift, doc.text(lane, "name", ""),
-                    doc.int_of(lane, "drawer_expected", 0),
-                    desk.lang_of(app), desk.currency_of(app)))
+            desk.open_form(app, forms.close_shift(shift, lane.name,
+                    lane.drawer_expected, desk.lang_of(app), desk.currency_of(app)))
             repaint(app)
             return
         }

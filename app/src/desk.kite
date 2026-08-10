@@ -436,24 +436,37 @@ pub struct App {
     /// The dialog in front of everything, if any. One at a time, on purpose.
     pub var form: Option<Form>
 
-    /// Lists a form's dropdowns are built from, and whatever a drill-down is
-    /// about. Held as documents rather than parsed into structs: they are only
-    /// ever read back out by name to fill a field, and a struct per dropdown
-    /// would be a dozen types that exist for one line each.
-    pub var ref_categories: [doc.Doc]
-    pub var ref_suppliers: [doc.Doc]
-    pub var ref_products: [doc.Doc]
-    pub var ref_registers: [doc.Doc]
+    /// Lists a form's dropdowns are built from. The same values the screens
+    /// draw, held as [`model`] types rather than as documents: `api` decoded
+    /// them once on the way in, and a dropdown reading `s.name` cannot ask for
+    /// a key that is not there.
+    pub var ref_categories: [model.CatalogCategory]
+    pub var ref_suppliers: [model.Supplier]
+    pub var ref_products: [model.CatalogProduct]
+    pub var ref_registers: [model.Lane]
     /// The expense accounts a running cost may be booked to. Fetched rather
     /// than hard-coded, because the chart is data and a shop may extend it.
-    pub var ref_expense_accounts: [doc.Doc]
+    pub var ref_expense_accounts: [model.AccountOption]
     /// The whole chart, for the journal filter's account picker.
-    pub var ref_accounts: [doc.Doc]
+    pub var ref_accounts: [model.Account]
     /// Open supplier invoices, for the cancel picker.
-    pub var ref_invoices: [doc.Doc]
+    pub var ref_invoices: [model.Invoice]
+    /// The shop's own settings, and the one thing here still held as a
+    /// document — see [`api.settings`] for why a key→value map of setting
+    /// names has no struct.
     pub var ref_settings: doc.Doc
-    pub var subject: doc.Doc
-    pub var subject_lines: [doc.Doc]
+
+    /// What a drill-down is about.
+    ///
+    /// Three fields rather than one, because the one they replaced was three
+    /// things: a product on the catalogue's detail page, an order on a
+    /// purchase order's, and a sale's lines behind the refund dialog. As a
+    /// document they could share a name; as values they cannot, and every read
+    /// of them says which of the three it meant.
+    pub var subject_product: Option<model.CatalogProduct>
+    pub var subject_order: Option<model.OrderHead>
+    pub var subject_order_lines: [model.OrderLine]
+    pub var subject_sale_lines: [model.SaleLine]
 
     /// What a screen is filtering by, kept so a reload of the screen keeps it.
     pub var query: str
@@ -508,8 +521,10 @@ pub fn holding(root: dom.Element, view: html.Mounted) -> App {
         ref_accounts: [],
         ref_invoices: [],
         ref_settings: doc.nothing(),
-        subject: doc.nothing(),
-        subject_lines: [],
+        subject_product: nil,
+        subject_order: nil,
+        subject_order_lines: [],
+        subject_sale_lines: [],
         query: "",
         books_view: "summary",
         books_window: "30",
@@ -612,6 +627,19 @@ pub fn go(var app: App, screen: Screen) {
     app.blocks = []
     app.trouble = ""
     app.rail_open = false
+    // The drill-down subjects belong to the screen that loaded them.
+    //
+    // These were one `subject` field, last-writer-wins, so opening anything
+    // else overwrote it. Splitting it into four typed fields removed that
+    // accidental clearing: `subject_order` then outlived its own screen, and
+    // *Record an invoice* from the Purchasing list — which passes no order id
+    // — pre-filled a supplier and a **total** from whatever order had been
+    // opened earlier in the session. A stale figure on a form that creates a
+    // payable. Cleared here, where the screen changes.
+    app.subject_product = nil
+    app.subject_order = nil
+    app.subject_order_lines = []
+    app.subject_sale_lines = []
 }
 
 pub fn took(var app: App, blocks: [Block]) {
@@ -704,23 +732,24 @@ pub fn set_query(var app: App, q: str) {
     app.query = q
 }
 
-pub fn took_refs(var app: App, categories: [doc.Doc], suppliers: [doc.Doc],
-    products: [doc.Doc], registers: [doc.Doc]) {
+pub fn took_refs(var app: App, categories: [model.CatalogCategory],
+    suppliers: [model.Supplier], products: [model.CatalogProduct],
+    registers: [model.Lane]) {
     app.ref_categories = categories
     app.ref_suppliers = suppliers
     app.ref_products = products
     app.ref_registers = registers
 }
 
-pub fn took_expense_accounts(var app: App, accounts: [doc.Doc]) {
+pub fn took_expense_accounts(var app: App, accounts: [model.AccountOption]) {
     app.ref_expense_accounts = accounts
 }
 
-pub fn took_accounts(var app: App, accounts: [doc.Doc]) {
+pub fn took_accounts(var app: App, accounts: [model.Account]) {
     app.ref_accounts = accounts
 }
 
-pub fn took_invoices(var app: App, invoices: [doc.Doc]) {
+pub fn took_invoices(var app: App, invoices: [model.Invoice]) {
     app.ref_invoices = invoices
 }
 
@@ -729,9 +758,17 @@ pub fn took_settings(var app: App, settings: doc.Doc) {
 }
 
 /// What a drill-down is about, kept so a form opened from it can read it.
-pub fn took_subject(var app: App, subject: doc.Doc, lines: [doc.Doc]) {
-    app.subject = subject
-    app.subject_lines = lines
+pub fn took_product(var app: App, product: model.CatalogProduct) {
+    app.subject_product = product
+}
+
+pub fn took_order(var app: App, order: model.OrderHead, lines: [model.OrderLine]) {
+    app.subject_order = order
+    app.subject_order_lines = lines
+}
+
+pub fn took_sale_lines(var app: App, lines: [model.SaleLine]) {
+    app.subject_sale_lines = lines
 }
 
 // ---- the books -------------------------------------------------------------
