@@ -158,21 +158,21 @@ fn header(app: desk.App) -> html.Node {
     // without opening anything. The same two-button shape as the till's, so a
     // shopkeeper who has used one knows where the other is.
     right.push(html.keyed("lang", html.el("div", [html.class("lang")], [
-                html.keyed("en", html.txt("button", [
-                            html.class(if app.lang == i18n.Lang.En { "lang-on" } else { "lang-off" }),
-                            html.attr("type", "button"),
-                            html.attr("lang", "en"),
-                            act("lang"),
-                            html.data("id", "en"),
-                        ], "English")),
-                html.keyed("my", html.txt("button", [
-                            html.class(if app.lang == i18n.Lang.My { "lang-on" } else { "lang-off" }),
-                            html.attr("type", "button"),
-                            html.attr("lang", "my"),
-                            act("lang"),
-                            html.data("id", "my"),
-                        ], "မြန်မာ")),
-            ])))
+                    html.keyed("en", html.txt("button", [
+                                html.class(if app.lang == i18n.Lang.En { "lang-on" } else { "lang-off" }),
+                                html.attr("type", "button"),
+                                html.attr("lang", "en"),
+                                act("lang"),
+                                html.data("id", "en"),
+                            ], "English")),
+                    html.keyed("my", html.txt("button", [
+                                html.class(if app.lang == i18n.Lang.My { "lang-on" } else { "lang-off" }),
+                                html.attr("type", "button"),
+                                html.attr("lang", "my"),
+                                act("lang"),
+                                html.data("id", "my"),
+                            ], "မြန်မာ")),
+                ])))
 
     return html.keyed("header", html.el("header", [html.class("page-head")], [
                 html.keyed("burger", html.el("button", [
@@ -524,15 +524,13 @@ fn note_block(heading: str, body: str) -> html.Node {
 fn block_of(block: desk.Block, index: int, l: i18n.Lang) -> html.Node {
     return match block {
         Stats(items) => html.keyed("stats\(index)", stats_block(items)),
-        Meters(heading, note, rows) =>
-            html.keyed("meters\(index)", meters_block(heading, note, rows, l)),
+        Meters(heading, note, rows) => html.keyed("meters\(index)", meters_block(heading, note, rows, l)),
         Grid(table) => html.keyed("grid\(index)", table_block(table, l)),
         Lanes(cards) => html.keyed("lanes\(index)", lanes_block(cards, l)),
         Roles(cards) => html.keyed("roles\(index)", roles_block(cards)),
         Note(heading, body) => html.keyed("note\(index)", note_block(heading, body)),
         Buttons(items) => html.keyed("buttons\(index)", buttons_block(items)),
-        Detail(title, subtitle, facts, actions) =>
-            html.keyed("detail\(index)", detail_block(title, subtitle, facts, actions)),
+        Detail(title, subtitle, facts, actions) => html.keyed("detail\(index)", detail_block(title, subtitle, facts, actions)),
         Receipt(lines, head, foot) => html.keyed("receipt\(index)", receipt_block(lines, head, foot)),
     }
 }
@@ -563,8 +561,8 @@ fn field_of(f: desk.Field, l: i18n.Lang) -> html.Node {
                 html.attr("value", f.value), html.attr("autocomplete", "off"),
             ]),
         Lines => html.txt("textarea",
-                [html.id(id), html.data("field", f.name), html.class("field lines"), html.attr("rows", "3")],
-                f.value),
+            [html.id(id), html.data("field", f.name), html.class("field lines"), html.attr("rows", "3")],
+            f.value),
         Money => html.empty("input", [
                 html.id(id), html.data("field", f.name), html.class("field"), html.attr("type", "text"),
                 html.attr("inputmode", "decimal"), html.attr("value", f.value),

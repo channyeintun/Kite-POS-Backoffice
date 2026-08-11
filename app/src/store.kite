@@ -264,7 +264,7 @@ pub fn set_return_qty(var app: App, line_id: str, qty: float) {
     var next: [model.ReturnLine] = []
     for l in app.returning {
         if l.id == line_id {
-            next.push(model.ReturnLine{ ..l, taking: clampf(qty, 0.0, l.returnable) })
+            next.push(model.ReturnLine{..l, taking: clampf(qty, 0.0, l.returnable) })
         } else {
             next.push(l)
         }

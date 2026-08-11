@@ -124,7 +124,7 @@ pub fn screen_of(hash: str) -> Screen {
             "purchasing" => { return Screen.Order(id: parts[1]) },
             // Anything else falls through to Overview below, which is what an
             // address nobody wrote should land on.
-            _ => {},
+            _ => { },
         }
     }
     return Screen.Overview
@@ -356,11 +356,11 @@ pub fn field(name: str, label: str, kind: FieldKind, value: str) -> Field {
 }
 
 pub fn required(f: Field) -> Field {
-    return Field{ ..f, required: true }
+    return Field{..f, required: true }
 }
 
 pub fn hinted(f: Field, hint: str) -> Field {
-    return Field{ ..f, hint: hint }
+    return Field{..f, hint: hint }
 }
 
 /// A dialog that writes something.
@@ -389,11 +389,11 @@ pub fn form(id: str, title: str, submit: str, fields: [Field]) -> Form {
 }
 
 pub fn about(f: Form, subject: str) -> Form {
-    return Form{ ..f, subject: subject }
+    return Form{..f, subject: subject }
 }
 
 pub fn explained(f: Form, lede: str) -> Form {
-    return Form{ ..f, lede: lede }
+    return Form{..f, lede: lede }
 }
 
 /// What a screen is made of.
@@ -511,7 +511,7 @@ pub fn holding(root: dom.Element, view: html.Mounted) -> App {
         lanes_open: 0,
         lanes_offline: 0,
         drawer_expected: "",
-        badges: {},
+        badges: { },
         form: nil,
         ref_categories: [],
         ref_suppliers: [],
@@ -619,7 +619,7 @@ pub fn signed_in(var app: App, session: model.Session) {
 pub fn signed_out(var app: App) {
     app.session = nil
     app.blocks = []
-    app.badges = {}
+    app.badges = { }
 }
 
 pub fn go(var app: App, screen: Screen) {
@@ -697,7 +697,7 @@ pub fn form_refused(var app: App, why: str) {
         app.trouble = why
         return
     }
-    app.form = Form{ ..open, trouble: why, busy: false }
+    app.form = Form{..open, trouble: why, busy: false }
 }
 
 /// Rewrite one field on the open form.
@@ -712,12 +712,12 @@ pub fn set_field(var app: App, name: str, value: str) {
     var fields: [Field] = []
     for f in open.fields {
         if f.name == name {
-            fields.push(Field{ ..f, value: value })
+            fields.push(Field{..f, value: value })
         } else {
             fields.push(f)
         }
     }
-    app.form = Form{ ..open, fields: fields, busy: false }
+    app.form = Form{..open, fields: fields, busy: false }
 }
 
 pub fn form_working(var app: App) {
@@ -725,7 +725,7 @@ pub fn form_working(var app: App) {
     if open == nil {
         return
     }
-    app.form = Form{ ..open, trouble: "", busy: true }
+    app.form = Form{..open, trouble: "", busy: true }
 }
 
 pub fn set_query(var app: App, q: str) {

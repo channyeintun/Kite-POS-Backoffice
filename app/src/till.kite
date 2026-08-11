@@ -96,14 +96,14 @@ fn status_bar(app: store.App) -> html.Node {
     // till had no way out at all: `sign_off`, the `sign-out` arm and
     // `api.sign_out` all existed and nothing ever emitted the action.
     right.push(html.keyed("who", html.el("button", [
-                html.class("who"),
-                html.attr("type", "button"),
-                html.attr("title", t(app, "sign_out")),
-                act("sign-out"),
-            ], [
-                html.keyed("n", html.txt("span", [html.class("who-name")], name)),
-                html.keyed("o", html.txt("span", [html.class("who-out")], t(app, "sign_out"))),
-            ])))
+                    html.class("who"),
+                    html.attr("type", "button"),
+                    html.attr("title", t(app, "sign_out")),
+                    act("sign-out"),
+                ], [
+                    html.keyed("n", html.txt("span", [html.class("who-name")], name)),
+                    html.keyed("o", html.txt("span", [html.class("who-out")], t(app, "sign_out"))),
+                ])))
     right.push(html.keyed("when", html.txt("span", [html.class("when")],
                 browser.day_of(browser.now()))))
 
@@ -238,15 +238,15 @@ fn ledger(app: store.App) -> html.Node {
         // at the left and the amount at the right. One concatenated label can
         // only ever be left-aligned as a block.
         foot.push(html.keyed("pay", html.el("button", [
-                    html.class(if app.basket.lines.len() == 0 { "commit off" } else { "commit" }),
-                    html.attr("type", "button"),
-                    act("pay"),
-                ], [
-                    html.keyed("word", html.txt("span", [html.class("commit-word")],
-                            t(app, "pay"))),
-                    html.keyed("sum", html.txt("span", [html.class("commit-sum")],
-                            amount(app, app.basket.totals.total))),
-                ])))
+                        html.class(if app.basket.lines.len() == 0 { "commit off" } else { "commit" }),
+                        html.attr("type", "button"),
+                        act("pay"),
+                    ], [
+                        html.keyed("word", html.txt("span", [html.class("commit-word")],
+                                t(app, "pay"))),
+                        html.keyed("sum", html.txt("span", [html.class("commit-sum")],
+                                amount(app, app.basket.totals.total))),
+                    ])))
     }
 
     return html.keyed("ledger", html.el("section", [html.class("ledger")], [

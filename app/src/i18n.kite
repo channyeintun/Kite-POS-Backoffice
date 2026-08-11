@@ -69,7 +69,6 @@ pub fn other(l: Lang) -> Lang {
     }
 }
 
-
 /// One string, in the current language.
 ///
 /// Falls back to English when a phrase has no Burmese yet, and to the key
@@ -94,7 +93,6 @@ pub fn t(l: Lang, key: str) -> str {
 pub fn fill(l: Lang, key: str, value: str) -> str {
     return replace(t(l, key), "%s", value)
 }
-
 
 fn english(key: str) -> str {
     return match key {

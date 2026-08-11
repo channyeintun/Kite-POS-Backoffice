@@ -513,7 +513,7 @@ fn command(app: store.App, id: str) {
         },
         // A command the matrix names but this build does not handle yet does
         // nothing, which is what falling off the end of the chain did.
-        _ => {},
+        _ => { },
     }
 }
 
@@ -708,7 +708,7 @@ fn clicked(app: store.App, e: dom.Event) {
             "card" => store.choose_tender(app, model.Tender.Card),
             "wallet" => store.choose_tender(app, model.Tender.Wallet),
             "store_credit" => store.choose_tender(app, model.Tender.StoreCredit),
-            _ => {},
+            _ => { },
         }
         repaint(app)
         return
@@ -785,7 +785,7 @@ fn clicked(app: store.App, e: dom.Event) {
                 repaint(app)
                 return
             },
-            _ => {},
+            _ => { },
         }
         return
     }
@@ -973,7 +973,7 @@ fn typed(app: store.App, e: dom.Event) {
             command(app, "held")
             return
         },
-        _ => {},
+        _ => { },
     }
 }
 

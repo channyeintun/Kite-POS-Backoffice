@@ -328,16 +328,16 @@ pub fn overview(answer: model.Overview, l: i18n.Lang, c: money.Currency,
     let low = answer.stock.low
 
     let stats: [desk.Stat] = [
-        desk.Stat{ label: words.t(l, "dashboard.takings_today"), value: money.show(takings, c),
+        desk.Stat { label: words.t(l, "dashboard.takings_today"), value: money.show(takings, c),
             meta: "\(words.fill_n(l, "shifts.n_sales", "\(sales)")) · \(words.fill(l, "sales.avg_n", money.show(if sales > 0 { takings / sales } else { 0 }, c)))",
             tone: "ok" },
-        desk.Stat{ label: words.t(l, "dashboard.margin_today"), value: money.show(net - cost, c),
+        desk.Stat { label: words.t(l, "dashboard.margin_today"), value: money.show(net - cost, c),
             meta: words.fill(l, "dashboard.on_n_net_of_tax", money.show(net, c)), tone: "info" },
-        desk.Stat{ label: words.t(l, "common.stock_at_cost"),
+        desk.Stat { label: words.t(l, "common.stock_at_cost"),
             value: money.show(answer.stock.at_cost, c),
             meta: "\(words.fill_n(l, "dashboard.n_skus", "\(answer.stock.skus)")) · \(words.fill_n(l, "dashboard.n_low", "\(low)"))",
             tone: if low > 0 { "warn" } else { "" } },
-        desk.Stat{ label: words.t(l, "dashboard.given_away"),
+        desk.Stat { label: words.t(l, "dashboard.given_away"),
             value: money.show(answer.today.given_away, c),
             meta: words.t(l, "promotions.offers_and_discounts"), tone: "" },
     ]
@@ -482,9 +482,9 @@ pub fn sales(answer: [model.SaleRow], l: i18n.Lang, c: money.Currency) -> [desk.
     }
     return [
         desk.Block.Stats(items: [
-                desk.Stat{ label: words.t(l, "common.takings"), value: money.show(total, c),
+                desk.Stat { label: words.t(l, "common.takings"), value: money.show(total, c),
                     meta: words.fill(l, "sales.n_sales_in_seven_days", "\(rows.len())"), tone: "ok" },
-                desk.Stat{ label: words.t(l, "common.refunded"), value: money.show(refunds, c),
+                desk.Stat { label: words.t(l, "common.refunded"), value: money.show(refunds, c),
                     meta: words.t(l, "sales.returned_to_customers"),
                     tone: if refunds > 0 { "warn" } else { "" } },
             ]),
@@ -502,10 +502,10 @@ pub fn sale_detail(answer: model.SalePage, l: i18n.Lang, c: money.Currency) -> [
     let number = sale.number
 
     var facts: [desk.Fact] = [
-        desk.Fact{ label: words.t(l, "common.total"), value: money.show(sale.total, c), tone: "" },
-        desk.Fact{ label: words.t(l, "common.when"), value: when(sale.completed_at), tone: "" },
-        desk.Fact{ label: words.t(l, "common.cashier"), value: sale.cashier, tone: "" },
-        desk.Fact{ label: words.t(l, "common.lane"),
+        desk.Fact { label: words.t(l, "common.total"), value: money.show(sale.total, c), tone: "" },
+        desk.Fact { label: words.t(l, "common.when"), value: when(sale.completed_at), tone: "" },
+        desk.Fact { label: words.t(l, "common.cashier"), value: sale.cashier, tone: "" },
+        desk.Fact { label: words.t(l, "common.lane"),
             value: or_dash(sale.register_name), tone: "" },
     ]
     let customer = sale.customer
@@ -659,7 +659,7 @@ pub fn shifts(answer: [model.ShiftRow], l: i18n.Lang, c: money.Currency) -> [des
     }
     return [
         desk.Block.Stats(items: [
-                desk.Stat{ label: words.t(l, "common.over_short"), value: money.show(variance, c),
+                desk.Stat { label: words.t(l, "common.over_short"), value: money.show(variance, c),
                     meta: words.t(l, "shifts.across_every_closed_drawer"),
                     tone: if variance == 0 { "ok" } else { "warn" } },
             ]),
@@ -679,18 +679,18 @@ pub fn shift_detail(answer: model.ShiftPage, l: i18n.Lang, c: money.Currency) ->
     let id = shift.id
 
     let facts: [desk.Fact] = [
-        desk.Fact{ label: words.t(l, "common.expected_in_drawer"),
+        desk.Fact { label: words.t(l, "common.expected_in_drawer"),
             value: money.show(drawer.expected, c), tone: "" },
-        desk.Fact{ label: words.t(l, "common.counted"),
+        desk.Fact { label: words.t(l, "common.counted"),
             value: if closed > 0 {
                 money.show(shift.counted_total, c)
             } else {
                 words.t(l, "shift_detail.not_counted_yet")
             }, tone: "" },
-        desk.Fact{ label: words.t(l, "common.over_short"),
+        desk.Fact { label: words.t(l, "common.over_short"),
             value: if closed > 0 { money.show(shift.variance, c) } else { "—" },
             tone: if closed > 0 && shift.variance != 0 { "warn" } else { "" } },
-        desk.Fact{ label: words.t(l, "common.opened"), value: when(shift.opened_at), tone: "" },
+        desk.Fact { label: words.t(l, "common.opened"), value: when(shift.opened_at), tone: "" },
     ]
     var actions: [desk.Action] = []
     if closed == 0 {
@@ -815,17 +815,17 @@ pub fn product_detail(answer: model.ProductPage, l: i18n.Lang,
     let margin = price - cost
 
     let facts: [desk.Fact] = [
-        desk.Fact{ label: words.t(l, "products.shelf_price"),
+        desk.Fact { label: words.t(l, "products.shelf_price"),
             value: money.show(price, c), tone: "" },
-        desk.Fact{ label: words.t(l, "common.cost"), value: money.show(cost, c), tone: "" },
-        desk.Fact{ label: words.t(l, "common.margin_2"),
+        desk.Fact { label: words.t(l, "common.cost"), value: money.show(cost, c), tone: "" },
+        desk.Fact { label: words.t(l, "common.margin_2"),
             value: "\(money.show(margin, c))\(if price > 0 { " · \((margin * 100) / price)%" } else { "" })",
             tone: if margin <= 0 { "stop" } else { "" } },
-        desk.Fact{ label: words.t(l, "products.on_the_shelf"), value: money.quantity(stock),
+        desk.Fact { label: words.t(l, "products.on_the_shelf"), value: money.quantity(stock),
             tone: if stock <= 0.0 { "stop" } else { "" } },
-        desk.Fact{ label: words.t(l, "products.reorder_level"),
+        desk.Fact { label: words.t(l, "products.reorder_level"),
             value: money.quantity(p.reorder_point), tone: "" },
-        desk.Fact{ label: words.t(l, "common.supplier"),
+        desk.Fact { label: words.t(l, "common.supplier"),
             value: or_dash(p.supplier_name), tone: "" },
     ]
     let actions: [desk.Action] = [
@@ -935,17 +935,17 @@ pub fn inventory(answer: model.Inventory, l: i18n.Lang, c: money.Currency) -> [d
     let out = totals.out
 
     let stats: [desk.Stat] = [
-        desk.Stat{ label: words.t(l, "purchasing.at_cost"),
+        desk.Stat { label: words.t(l, "purchasing.at_cost"),
             value: money.show(totals.at_cost, c),
             meta: words.fill_n(l, "dashboard.n_skus", "\(totals.skus)"),
             tone: "info" },
-        desk.Stat{ label: words.t(l, "inventory.at_retail"),
+        desk.Stat { label: words.t(l, "inventory.at_retail"),
             value: money.show(totals.at_retail, c),
             meta: words.t(l, "inventory.if_it_all_sold_at_the_shelf_price"), tone: "" },
-        desk.Stat{ label: words.t(l, "inventory.low"), value: "\(low)",
+        desk.Stat { label: words.t(l, "inventory.low"), value: "\(low)",
             meta: words.t(l, "inventory.at_or_below_the_reorder_point"),
             tone: if low > 0 { "warn" } else { "ok" } },
-        desk.Stat{ label: words.t(l, "inventory.out"), value: "\(out)",
+        desk.Stat { label: words.t(l, "inventory.out"), value: "\(out)",
             meta: words.t(l, "inventory.nothing_on_the_shelf"),
             tone: if out > 0 { "stop" } else { "ok" } },
     ]
@@ -1087,8 +1087,7 @@ pub fn purchasing(sheet: [model.WorksheetLine], orders: [model.PurchaseOrder],
                         if due > 0 { browser.day_of(due) } else { "—" },
                         money.show(i.total, c),
                         money.show(left, c),
-                    ], if left > 0 && due > 0 && due < browser.now() { "stop" }
-                       else if left > 0 { "warn" } else { "ok" },
+                    ], if left > 0 && due > 0 && due < browser.now() { "stop" } else if left > 0 { "warn" } else { "ok" },
                     if left > 0 { "form-pay-invoice" } else { "" }, i.id))
         }
 
@@ -1118,21 +1117,21 @@ pub fn purchasing(sheet: [model.WorksheetLine], orders: [model.PurchaseOrder],
 
     return [
         desk.Block.Stats(items: [
-                desk.Stat{ label: words.t(l, "purchasing.to_order"), value: money.show(value, c),
+                desk.Stat { label: words.t(l, "purchasing.to_order"), value: money.show(value, c),
                     meta: words.fill_n(l, "replenishment.n_lines_on_the_worksheet",
                         "\(lines.len())"),
                     tone: if value > 0 { "warn" } else { "ok" } },
-                desk.Stat{ label: words.t(l, "accounting.owed_to_suppliers"),
+                desk.Stat { label: words.t(l, "accounting.owed_to_suppliers"),
                     value: money.show(outstanding, c),
                     meta: words.t(l, "payables.across_every_open_invoice"), tone: "info" },
-                desk.Stat{ label: words.t(l, "purchasing.overdue"), value: money.show(overdue, c),
+                desk.Stat { label: words.t(l, "purchasing.overdue"), value: money.show(overdue, c),
                     meta: words.t(l, "payables.past_the_due_date"),
                     tone: if overdue > 0 { "stop" } else { "ok" } },
-                desk.Stat{ label: words.t(l, "payables.not_yet_due"),
+                desk.Stat { label: words.t(l, "payables.not_yet_due"),
                     value: money.show(not_due, c),
                     meta: words.fill_n(l, "payables.n_suppliers", "\(suppliers_owed)"),
                     tone: "ok" },
-                desk.Stat{ label: words.t(l, "payables.over_30_days_late"),
+                desk.Stat { label: words.t(l, "payables.over_30_days_late"),
                     value: money.show(late_over_30, c),
                     meta: words.t(l, "payables.past_the_due_date"),
                     tone: if late_over_30 > 0 { "stop" } else { "ok" } },
@@ -1174,15 +1173,15 @@ pub fn order_detail(answer: model.OrderPage, l: i18n.Lang, c: money.Currency) ->
     let status = order.status
 
     let facts: [desk.Fact] = [
-        desk.Fact{ label: words.t(l, "common.supplier"), value: order.supplier_name, tone: "" },
-        desk.Fact{ label: words.t(l, "common.status"), value: order_status_of(l, status),
+        desk.Fact { label: words.t(l, "common.supplier"), value: order.supplier_name, tone: "" },
+        desk.Fact { label: words.t(l, "common.status"), value: order_status_of(l, status),
             tone: match status {
                 "received" => "ok",
                 "draft" => "",
                 _ => "warn",
             } },
-        desk.Fact{ label: words.t(l, "common.total"), value: money.show(order.total, c), tone: "" },
-        desk.Fact{ label: words.t(l, "purchasing.raised"),
+        desk.Fact { label: words.t(l, "common.total"), value: money.show(order.total, c), tone: "" },
+        desk.Fact { label: words.t(l, "purchasing.raised"),
             value: browser.day_of(order.created_at), tone: "" },
     ]
     var actions: [desk.Action] = []
@@ -1258,9 +1257,9 @@ pub fn customers(answer: [model.CustomerAccount], l: i18n.Lang,
     }
     return [
         desk.Block.Stats(items: [
-                desk.Stat{ label: words.t(l, "customers.customers"), value: "\(rows.len())",
+                desk.Stat { label: words.t(l, "customers.customers"), value: "\(rows.len())",
                     meta: words.t(l, "customers.on_the_loyalty_list"), tone: "info" },
-                desk.Stat{ label: words.t(l, "customers.store_credit_owed"),
+                desk.Stat { label: words.t(l, "customers.store_credit_owed"),
                     value: money.show(credit, c),
                     meta: words.t(l, "customers.a_liability_not_a_takings_figure"),
                     tone: if credit > 0 { "warn" } else { "ok" } },
@@ -1324,14 +1323,14 @@ pub fn staff(answer: [model.Staff], rules: [model.CommandRule], l: i18n.Lang) ->
                 desk.action(words.t(l, "staff.add_staff"), "form-staff", "", "filled"),
             ]),
         desk.Block.Roles(cards: [
-                desk.RoleCard{
+                desk.RoleCard {
                     role: words.t(l, "staff.sale_staff"),
                     opens: words.t(l, "staff.opens_the_pos_app"),
                     body: words.t(l, "staff.sale_staff_body"),
                     chips: [words.t(l, "staff.chip_sell"), words.t(l, "staff.chip_hold_and_recall"),
                         words.t(l, "tills.price_check"), words.t(l, "staff.chip_discounts_locked")],
                 },
-                desk.RoleCard{
+                desk.RoleCard {
                     role: words.t(l, "staff.manager_owner"),
                     opens: words.t(l, "staff.opens_the_back_office"),
                     body: words.t(l, "staff.manager_owner_body"),
@@ -1412,7 +1411,7 @@ pub fn promotions(answer: [model.Promotion], at: int, perf: [model.PromotionResu
 
     return [
         desk.Block.Stats(items: [
-                desk.Stat{ label: words.t(l, "promotions.live_offers"), value: "\(live)",
+                desk.Stat { label: words.t(l, "promotions.live_offers"), value: "\(live)",
                     meta: words.t(l, "promotions.running_at_this_moment"),
                     tone: if live > 0 { "ok" } else { "" } },
             ]),
@@ -1622,7 +1621,7 @@ pub fn expenses(answer: model.ExpenseReport, l: i18n.Lang, c: money.Currency) ->
     // One card per account, so "what is rent costing us" is a figure on the
     // screen rather than an addition somebody does in their head.
     var cards: [desk.Stat] = [
-        desk.Stat{ label: words.t(l, "expenses.spent"), value: money.show(spent, c),
+        desk.Stat { label: words.t(l, "expenses.spent"), value: money.show(spent, c),
             meta: "\(words.fill_n(l, "accounting.n_entries", "\(totals.count)")) · \(words.fill(l, "accounting.n_net_of_tax", money.show(spent - tax, c)))",
             tone: "warn" },
     ]
@@ -1709,7 +1708,7 @@ fn books_chrome(view: str, win: str, l: i18n.Lang) -> [desk.Block] {
                 "books-opening", "", "quiet")),
         // Every other sheet gets neither, which is what the two `if`s said by
         // not having an `else`.
-        _ => {},
+        _ => { },
     }
     actions.push(desk.action(words.t(l, "common.print"), "print", "", "quiet"))
     actions.push(desk.action(words.t(l, "accounting.export_this_sheet"),
@@ -1854,17 +1853,17 @@ fn books_summary(pl: Option<model.ProfitAndLoss>, sheet: Option<model.BalanceShe
 
     var blocks: [desk.Block] = [
         desk.Block.Stats(items: [
-                desk.Stat{ label: words.t(l, "common.revenue"), value: money.show(revenue, c),
+                desk.Stat { label: words.t(l, "common.revenue"), value: money.show(revenue, c),
                     meta: "\(window_of(l, win)) · \(words.t(l, "accounting.net_of_discounts_and_tax"))",
                     tone: "ok" },
-                desk.Stat{ label: words.t(l, "common.gross_profit"), value: money.show(gross, c),
+                desk.Stat { label: words.t(l, "common.gross_profit"), value: money.show(gross, c),
                     meta: words.fill(l, "common.n_margin", "\(margin)%"),
                     tone: if gross < 0 { "stop" } else { "ok" } },
-                desk.Stat{ label: words.t(l, "accounting.net_profit"), value: money.show(net, c),
+                desk.Stat { label: words.t(l, "accounting.net_profit"), value: money.show(net, c),
                     meta: words.fill(l, "accounting.after_running_costs",
                         money.show(operating, c)),
                     tone: if net < 0 { "stop" } else { "ok" } },
-                desk.Stat{ label: words.t(l, "accounting.owed_to_suppliers"),
+                desk.Stat { label: words.t(l, "accounting.owed_to_suppliers"),
                     value: money.show(owed, c),
                     meta: words.fill(l, "accounting.n_overdue", money.show(overdue, c)),
                     tone: if overdue > 0 { "warn" } else { "info" } },
