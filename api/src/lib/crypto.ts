@@ -41,24 +41,56 @@ function fromBase64(text: string): Uint8Array {
   return out;
 }
 
-async function derive(
-  secret: string,
+/**
+ * What one `deriveBits` call will accept.
+ *
+ * Workers' WebCrypto refuses a higher count outright — `NotSupportedError:
+ * Pbkdf2 failed: iteration counts above 100000 are not supported` — and it
+ * refuses it at the moment the first owner is created, which is the first time
+ * anybody runs this. The ceiling is below the 210,000 above, so one of the two
+ * had to give.
+ *
+ * Lowering the work factor to fit is the obvious move and the wrong one: it
+ * halves the cost of searching a stolen password hash to buy nothing but a
+ * smaller number in a constant. So a count above the ceiling is run as
+ * successive passes instead, each taking the previous pass's output as its key
+ * material. An attacker pays the sum either way — 210,000 still means 210,000
+ * — and only the number of calls into the platform changes.
+ *
+ * Nothing else moves. The stored format still carries a single total, so
+ * `verifySecret` reads it back and re-derives the same way, and a count at or
+ * under the ceiling still takes exactly one pass and hashes bit for bit as it
+ * did before. PINs, at 25,000, are untouched.
+ */
+const MAX_ITERATIONS_PER_CALL = 100_000;
+
+async function deriveOnce(
+  material: BufferSource,
   salt: Uint8Array,
   iterations: number,
 ): Promise<Uint8Array> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    "PBKDF2",
-    false,
-    ["deriveBits"],
-  );
+  const key = await crypto.subtle.importKey("raw", material, "PBKDF2", false, ["deriveBits"]);
   const bits = await crypto.subtle.deriveBits(
     { name: "PBKDF2", hash: "SHA-256", salt: salt as BufferSource, iterations },
     key,
     256,
   );
   return new Uint8Array(bits);
+}
+
+async function derive(
+  secret: string,
+  salt: Uint8Array,
+  iterations: number,
+): Promise<Uint8Array> {
+  const first = Math.min(iterations, MAX_ITERATIONS_PER_CALL);
+  let out = await deriveOnce(new TextEncoder().encode(secret), salt, first);
+  for (let left = iterations - first; left > 0; ) {
+    const round = Math.min(left, MAX_ITERATIONS_PER_CALL);
+    out = await deriveOnce(out as BufferSource, salt, round);
+    left -= round;
+  }
+  return out;
 }
 
 /**
