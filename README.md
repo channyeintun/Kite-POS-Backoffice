@@ -333,7 +333,7 @@ default password that works is one nobody changes — so the first owner is
 created once, and the endpoint refuses forever after:
 
 ```bash
-curl -X POST https://YOUR-WORKER/api/setup \
+curl -X POST https://YOUR-WORKER/api/auth/setup \
   -H 'content-type: application/json' \
   -d '{"name":"Owner","username":"owner","password":"something long"}'
 ```

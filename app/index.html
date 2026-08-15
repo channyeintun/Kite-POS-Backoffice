@@ -10,10 +10,16 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Till — Kite POS</title>
 
-<!-- Where the Worker is. Same-origin `/api` by default, which Vite proxies to
-     `wrangler dev` in development. Change this one line to point a build at a
-     deployed Worker; nothing is compiled in. -->
-<meta name="api-base" content="/api">
+<!-- Where the Worker is. This one line is the whole configuration; nothing is
+     compiled in.
+
+     It now names the deployed Worker, which means `npm run dev` no longer goes
+     through the Vite proxy to `wrangler dev` on 8787 — it goes to the live
+     shop. Set it back to `/api` to work locally. Reaching production from a
+     development build is refused rather than silent: ALLOWED_ORIGINS in
+     api/wrangler.toml lists only the Pages origin, so localhost fails CORS
+     loudly instead of writing to the shop's books. -->
+<meta name="api-base" content="https://kite-pos-api.chanyeintun.workers.dev/api">
 
 <link rel="manifest" href="/manifest-till.webmanifest">
 <link rel="icon" href="/icon-till-192.png">

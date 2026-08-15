@@ -9,7 +9,7 @@ compatibility_flags = ["nodejs_compat"]
 # Set it to the deployed Pages URLs before the shop opens; `*` is refused by
 # `cors.ts` whenever credentials are involved, which is always here.
 [vars]
-ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:4173"
+ALLOWED_ORIGINS = "https://kite-pos.pages.dev"
 SESSION_HOURS = "14"
 
 # D1 free tier: 5 GB storage, 5 million rows read a day. A corner shop writes a
@@ -19,7 +19,7 @@ SESSION_HOURS = "14"
 [[d1_databases]]
 binding = "DB"
 database_name = "kite-pos"
-database_id = "PLACEHOLDER-RUN-WRANGLER-D1-CREATE"
+database_id = "78db975a-0686-4f3a-afa3-534fea17ce80"
 migrations_dir = "migrations"
 
 # Product photos. R2's free tier has no egress charge, which is the whole

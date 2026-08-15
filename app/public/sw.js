@@ -21,11 +21,19 @@
  * unique on `sales`); this worker deliberately does not pretend to do it.
  */
 
-const VERSION = "kite-pos-v2";
+// v3 purges a cache that had `/index.html` and `/office.html` in it. Pages
+// serves those two with a 308 to `/` and `/office`, so what landed under those
+// keys was a *redirected* response — and a service worker may not answer a
+// navigation with one of those. The till opened on its first visit and then
+// failed with ERR_FAILED on every launch after, which is the worst shape a bug
+// of this kind can take.
+const VERSION = "kite-pos-v3";
+
+// The URLs the host serves, not the files in `public/`. `/office` 404s under
+// the Vite dev server, which is why each entry is still added on its own below.
 const SHELL = [
   "/",
-  "/index.html",
-  "/office.html",
+  "/office",
   "/manifest-till.webmanifest",
   "/manifest-office.webmanifest",
   "/icon-till-192.png",
@@ -86,6 +94,15 @@ self.addEventListener("fetch", (event) => {
       if (hit) return hit;
       return fetch(request)
         .then((response) => {
+          // A response that arrived through a redirect cannot be handed to a
+          // navigation — the browser rejects it outright — and caching one puts
+          // a page in the cache that can never be served again. So it is passed
+          // through as a redirect the browser follows itself, and never stored.
+          if (response.redirected) {
+            return request.mode === "navigate"
+              ? Response.redirect(response.url, 302)
+              : response;
+          }
           // Only cache what came back whole and from here. An opaque or partial
           // response cached now is a broken page after the next reload.
           if (response.ok && response.type === "basic") {
@@ -97,7 +114,7 @@ self.addEventListener("fetch", (event) => {
         .catch(() => {
           // A navigation with no network gets the shell, so the till opens and
           // can say what is wrong. Anything else simply fails.
-          if (request.mode === "navigate") return caches.match("/index.html");
+          if (request.mode === "navigate") return caches.match("/");
           throw new Error("offline");
         });
     }),
