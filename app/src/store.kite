@@ -106,6 +106,20 @@ pub struct App {
     pub var online: bool
     pub var busy: bool
     pub var signing_in: bool
+
+    /// Whether a kept token is still being checked with the Worker.
+    ///
+    /// A reload has a token in hand and no session yet, and those are not the
+    /// same thing as being signed out — but `session` is nil in both, so the
+    /// page drew the PIN pad and then replaced it a moment later. That moment
+    /// used to be a millisecond, when Vite proxied the Worker on this origin;
+    /// against the deployed Worker it is a preflight and a request, and a
+    /// cashier can get two digits into a pad that is about to vanish.
+    ///
+    /// So it is set before the first paint of a reload and cleared by whichever
+    /// answer arrives — a session, or the sign-in screen for a token the Worker
+    /// would not have.
+    pub var restoring: bool
 }
 
 pub fn holding(root: dom.Element, view: html.Mounted, lang: i18n.Lang) -> App {
@@ -136,6 +150,7 @@ pub fn holding(root: dom.Element, view: html.Mounted, lang: i18n.Lang) -> App {
         online: true,
         busy: false,
         signing_in: false,
+        restoring: false,
     }
 }
 
@@ -215,6 +230,7 @@ pub fn signed_in(var app: App, session: model.Session) {
     app.pin = ""
     app.signing_in = false
     app.trouble = ""
+    app.restoring = false
 }
 
 pub fn signed_out(var app: App) {
@@ -400,6 +416,11 @@ pub fn working(var app: App, busy: bool) {
 
 pub fn signing_in(var app: App, on: bool) {
     app.signing_in = on
+}
+
+/// Set before the first paint when there is a kept token to check.
+pub fn restoring(var app: App, on: bool) {
+    app.restoring = on
 }
 
 /// The connection dot, set by whether the last call actually worked.

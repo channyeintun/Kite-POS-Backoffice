@@ -943,3 +943,44 @@ img.tile-photo {
    * bottom of the tile. `min-height: 0` lets the box win over the picture. */
   min-height: 0;
 }
+
+/* The splash, between a reload and the Worker saying whose token this is.
+ *
+ * Fixed and covering, because it replaces the whole page rather than sitting in
+ * the lane's grid — there is no status bar yet to sit under. It is the page's
+ * own black, so a reload reads as the till still starting rather than as a
+ * screen flashing white.
+ *
+ * Still, deliberately. This is a launch screen and not a progress report: it is
+ * up for one request, and something spinning for a quarter of a second reads as
+ * a stutter rather than as work being done. */
+.splash {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 20px;
+  background: var(--bg);
+}
+
+/* Neutral, not green. Colour on this screen carries machine state everywhere
+ * else in the till, and a mark is not a state. */
+.splash-mark {
+  display: grid;
+  place-items: center;
+  width: 96px;
+  height: 96px;
+  border-radius: 24px;
+  background: var(--raised);
+  border: 1px solid var(--edge);
+  color: var(--ink);
+  font: 700 34px/1 Roboto, sans-serif;
+  letter-spacing: 0.04em;
+}
+
+.splash-name {
+  margin: 0;
+  font: 500 18px/1.35 Roboto, sans-serif;
+  color: var(--ink-dim);
+}

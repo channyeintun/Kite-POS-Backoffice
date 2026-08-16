@@ -855,10 +855,38 @@ fn sign_in(app: store.App) -> [html.Node] {
     ]
 }
 
+/// What a reload shows while the Worker is asked whose kept token this is.
+///
+/// The shop's mark and the application's name, which is what the device itself
+/// puts up while an installed till is starting — so a reload and a cold launch
+/// look like the same thing rather than one of them flashing a PIN pad.
+///
+/// It introduces no new wording: `point_of_sale` is the phrase `words.kite`
+/// already carries for the back office, copied into the till's own dictionary
+/// because a lane cannot afford to import that file. A screen nobody has
+/// approved the words of is not one to invent on the way to fixing something
+/// else.
+fn splash(app: store.App) -> [html.Node] {
+    return [
+        html.keyed("splash", html.el("main", [html.class("splash")], [
+                    html.keyed("mark", html.txt("span", [html.class("splash-mark")], "CM")),
+                    html.keyed("name", html.txt("h1", [html.class("splash-name")],
+                            t(app, "point_of_sale"))),
+                ])),
+    ]
+}
+
 // ---- the page --------------------------------------------------------------
 
 /// The whole till, as a description.
 pub fn page(app: store.App) -> [html.Node] {
+    // Before the signed-out test, not after it: a reload holds a token and has
+    // no session yet, and only this flag tells that apart from being signed
+    // out. The other order is what put a PIN pad in front of a cashier who was
+    // already signed in.
+    if app.restoring {
+        return splash(app)
+    }
     if app.session == nil {
         return sign_in(app)
     }

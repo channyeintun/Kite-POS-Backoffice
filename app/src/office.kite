@@ -87,6 +87,7 @@ async fn resume(app: desk.App, token: str) {
     let (session, err) = await api.whoami(token)
     if err != nil {
         browser.drop_kept("kite-office.token")
+        desk.restoring(app, false)
         repaint(app)
         return
     }
@@ -1714,6 +1715,13 @@ pub fn main() {
         desk.set_lang(app, i18n.of_code(kept))
     }
     desk.go(app, desk.screen_of(window.hash()))
+
+    // Read before the first paint — see the note in `pos.kite`. Without this
+    // the desk drew its sign-in card over a session that was already good.
+    let token = window.kept("kite-office.token")
+    if token != nil {
+        desk.restoring(app, true)
+    }
     repaint(app)
 
     let (_, cerr) = dom.on(root, "click", |e: dom.Event| { clicked(app, e) })
@@ -1738,7 +1746,6 @@ pub fn main() {
 
     browser.register_worker("/sw.js")
 
-    let token = window.kept("kite-office.token")
     if token != nil {
         resume(app, token)
     }

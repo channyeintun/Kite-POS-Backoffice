@@ -726,9 +726,25 @@ fn sign_in(app: desk.App) -> [html.Node] {
     ]
 }
 
+/// What a reload shows while the Worker is asked whose kept token this is.
+/// The desk's own mark and name — see the till's for why it invents no words.
+fn splash(app: desk.App) -> [html.Node] {
+    return [
+        html.keyed("splash", html.el("main", [html.class("splash")], [
+                    html.keyed("mark", avatar("CM", "mark splash-mark")),
+                    html.keyed("name", html.txt("h1", [html.class("splash-name")],
+                            words.t(app.lang, "layout.back_office"))),
+                ])),
+    ]
+}
+
 // ---- the page --------------------------------------------------------------
 
 pub fn page(app: desk.App) -> [html.Node] {
+    // Before the signed-out test — see the note on the till's `page`.
+    if app.restoring {
+        return splash(app)
+    }
     if app.session == nil {
         return sign_in(app)
     }

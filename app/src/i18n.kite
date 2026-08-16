@@ -140,6 +140,10 @@ fn english(key: str) -> str {
         "only_cash_change" => "Only cash gives change.",
         "online" => "Online",
         "pay" => "PAY",
+        // The splash's one line. Not new wording: `words.kite` already carries
+        // this phrase as `layout.point_of_sale`, and the till cannot reach that
+        // file — see this module's header for what importing it costs a lane.
+        "point_of_sale" => "Point of sale",
         "price" => "Price",
         "price_check" => "Price check",
         "price_override" => "Price override",
@@ -226,6 +230,7 @@ fn burmese(key: str) -> str {
         "only_cash_change" => "ငွေသားဖြင့်သာ အကြွေ ပြန်အမ်းနိုင်သည်။",
         "online" => "အွန်လိုင်း",
         "pay" => "ငွေရှင်းမည်",
+        "point_of_sale" => "အရောင်းစနစ်",
         "price" => "ဈေးနှုန်း",
         "price_check" => "စျေးနှုန်းစစ်",
         "price_override" => "စျေးနှုန်းပြင်",

@@ -108,6 +108,7 @@ async fn resume(app: store.App, token: str) {
         // it is simply the sign-in screen.
         browser.drop_kept("kite-pos.token")
         store.signing_in(app, false)
+        store.restoring(app, false)
         repaint(app)
         return
     }
@@ -993,6 +994,16 @@ pub fn main() {
 
     let lang = i18n.of_code(or_else(window.kept("kite-pos.lang"), "en"))
     let app = store.holding(root, mounted, lang)
+
+    // Read before the first paint rather than after it, which is the whole of
+    // the fix: a kept token means somebody is signed in until the Worker says
+    // otherwise, and the paint below is the one that used to put a PIN pad in
+    // front of a cashier who already was. The ask itself still happens last,
+    // once the listeners are on.
+    let token = window.kept("kite-pos.token")
+    if token != nil {
+        store.restoring(app, true)
+    }
     repaint(app)
 
     // One listener for every touch in the application. A repainted description
@@ -1012,7 +1023,6 @@ pub fn main() {
 
     browser.register_worker("/sw.js")
 
-    let token = window.kept("kite-pos.token")
     if token != nil {
         resume(app, token)
     }

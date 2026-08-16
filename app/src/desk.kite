@@ -496,6 +496,15 @@ pub struct App {
     pub var notice: str
     pub var busy: bool
     pub var signing_in: bool
+
+    /// Whether a kept token is still being checked with the Worker.
+    ///
+    /// The same field as the till's, for the same reason — see
+    /// [`store.App.restoring`]. A reload holds a token and has no session yet,
+    /// and `session == nil` cannot tell that apart from being signed out, so
+    /// the desk drew its sign-in card over a session that was about to arrive.
+    pub var restoring: bool
+
     /// Whether the rail is showing on a narrow screen.
     pub var rail_open: bool
 }
@@ -536,6 +545,7 @@ pub fn holding(root: dom.Element, view: html.Mounted) -> App {
         notice: "",
         busy: false,
         signing_in: false,
+        restoring: false,
         rail_open: false,
     }
 }
@@ -614,6 +624,7 @@ pub fn signed_in(var app: App, session: model.Session) {
     app.session = session
     app.signing_in = false
     app.trouble = ""
+    app.restoring = false
 }
 
 pub fn signed_out(var app: App) {
@@ -675,6 +686,11 @@ pub fn working(var app: App, busy: bool) {
 
 pub fn signing_in(var app: App, on: bool) {
     app.signing_in = on
+}
+
+/// Set before the first paint when there is a kept token to check.
+pub fn restoring(var app: App, on: bool) {
+    app.restoring = on
 }
 
 pub fn toggle_rail(var app: App) {
