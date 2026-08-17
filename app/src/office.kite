@@ -196,6 +196,8 @@ async fn load_header(app: desk.App) {
     desk.lanes_are(app, open, offline, money.show(expected, desk.currency_of(app)))
     if open > 0 {
         desk.badge(app, "tills", "\(open)")
+    } else {
+        desk.unbadge(app, "tills")
     }
     repaint(app)
 }
@@ -347,6 +349,8 @@ async fn load_inventory(app: desk.App) {
     let attention = answer.totals.low + answer.totals.out
     if attention > 0 {
         desk.badge(app, "inventory", "\(attention)")
+    } else {
+        desk.unbadge(app, "inventory")
     }
     done(app, screens.inventory(answer, desk.lang_of(app), desk.currency_of(app)))
 }

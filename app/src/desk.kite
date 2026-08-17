@@ -671,6 +671,21 @@ pub fn badge(var app: App, slug: str, value: str) {
     app.badges = next
 }
 
+/// Take a screen's badge off the rail.
+///
+/// Needed because every caller writes a badge under a condition — an open lane,
+/// a low item — and a condition that stops holding has to take the number down.
+/// Without this the count a screen last had stays on the rail for the rest of
+/// the session: close the last lane and the rail still says one.
+///
+/// Through a local because a map is a copy-on-write value, so the write has to
+/// land back on the field. The same shape `badge` above already has.
+pub fn unbadge(var app: App, slug: str) {
+    var next = app.badges
+    next.remove(slug)
+    app.badges = next
+}
+
 pub fn went_wrong(var app: App, trouble: str) {
     app.trouble = trouble
     app.busy = false
