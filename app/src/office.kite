@@ -47,9 +47,9 @@ fn field_value(selector: str) -> str {
     return dom.value(field).trim()
 }
 
-fn day() -> int {
-    return 86400
-}
+/// Seconds in a day. A window into the past is written `30 * DAY`, which is
+/// what the reports below are all measured in.
+let DAY = 86400
 
 // ---- signing in ------------------------------------------------------------
 
@@ -256,7 +256,7 @@ async fn load_tills(app: desk.App) {
         return
     }
     var entries: [model.AuditEntry] = []
-    let (audit, aerr) = await api.audit(token, browser.now() - day())
+    let (audit, aerr) = await api.audit(token, browser.now() - DAY)
     if aerr == nil {
         entries = audit
     }
@@ -265,7 +265,7 @@ async fn load_tills(app: desk.App) {
 
 async fn load_sales(app: desk.App) {
     let to = browser.now()
-    let (answer, err) = await api.sales_history(desk.token_of(app), to - 7 * day(), to)
+    let (answer, err) = await api.sales_history(desk.token_of(app), to - 7 * DAY, to)
     if err != nil {
         failed(app, err.message())
         return
@@ -352,7 +352,7 @@ async fn load_inventory(app: desk.App) {
 }
 
 async fn load_movements(app: desk.App) {
-    let (answer, err) = await api.movements(desk.token_of(app), browser.now() - 7 * day(), "")
+    let (answer, err) = await api.movements(desk.token_of(app), browser.now() - 7 * DAY, "")
     if err != nil {
         failed(app, err.message())
         return
@@ -408,7 +408,7 @@ async fn load_promotions(app: desk.App) {
         return
     }
     var p: [model.PromotionResult] = []
-    let (perf, perr) = await api.promotion_performance(token, browser.now() - 30 * day())
+    let (perf, perr) = await api.promotion_performance(token, browser.now() - 30 * DAY)
     if perr == nil {
         p = perf
     }
@@ -421,7 +421,7 @@ async fn load_promotions(app: desk.App) {
 async fn load_reports(app: desk.App) {
     let token = desk.token_of(app)
     let to = browser.now()
-    let from = to - 30 * day()
+    let from = to - 30 * DAY
     let (products, err) = await api.product_report(token, from, to)
     if err != nil {
         failed(app, err.message())
@@ -583,7 +583,7 @@ async fn do_export_books(app: desk.App, view: str) {
 
 async fn load_expenses(app: desk.App) {
     let to = browser.now()
-    let (answer, err) = await api.expenses(desk.token_of(app), to - 90 * day(), to)
+    let (answer, err) = await api.expenses(desk.token_of(app), to - 90 * DAY, to)
     if err != nil {
         failed(app, err.message())
         return
@@ -1256,7 +1256,7 @@ async fn do_submit(app: desk.App, id: str, subject: str) {
             body["reference"] = json.Json.Text(value_of("reference"))
             body["total"] = json.Json.Number(money_of(app, "total") as float)
             body["issued_at"] = json.Json.Number(browser.now() as float)
-            body["due_at"] = json.Json.Number((browser.now() + whole_of("due_days") * day()) as float)
+            body["due_at"] = json.Json.Number((browser.now() + whole_of("due_days") * DAY) as float)
             let (_, err) = await api.add_invoice(token, json.Json.Object(body))
             settle(app, err, words.t(l, "toast.invoice_recorded"))
         },
