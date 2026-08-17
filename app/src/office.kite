@@ -1635,7 +1635,15 @@ fn clicked(app: desk.App, e: dom.Event) {
         return
     }
     let id = or_else(dom.attribute(acted, "data-id"), "")
-    _ = dom.prevent_default(e)
+    // Every other control here is a `type="button"` button, an `li` or a `tr`,
+    // none of which has a default action to cancel. The photo inputs are
+    // `<input type="file">`, whose default action — opening the file chooser —
+    // is the entire point of pressing one, and cancelling it is why a product
+    // photo could never be attached: the chooser never opened, so `change`
+    // never fired and `changed` below never ran.
+    if name != "photo-pick" {
+        _ = dom.prevent_default(e)
+    }
     pressed(app, name, id)
 }
 
