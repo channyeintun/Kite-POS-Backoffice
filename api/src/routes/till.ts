@@ -13,6 +13,7 @@ import {
   run,
   settingBool,
   stmt,
+  type Settings,
 } from "../lib/db.js";
 import { newId } from "../lib/crypto.js";
 import { approvalFor, requireManagerSession } from "../lib/auth.js";
@@ -23,6 +24,7 @@ import { linesOf, livePromotions, priceSale, writeBack, type LineRow, type SaleR
 import { expectedInDrawer } from "./shifts.js";
 import { post, saleEntry, sweepEntry, varianceEntry } from "../lib/ledger.js";
 import { applyRefund } from "../lib/refunds.js";
+import { settleTab } from "../lib/credit.js";
 
 export const till = new Hono<Ctx>();
 
@@ -124,10 +126,21 @@ async function basketView(
       WHERE register_id = ?1 AND status = 'held' AND hold_label <> ''`,
     sale.register_id,
   );
+  // The tab comes with the basket, because the decision it feeds is taken on
+  // the tender screen: how much of this basket may go on the customer's
+  // account, and how much they already owe. A till that had to ask separately
+  // would be asking about a figure it had just been shown.
   const customer = sale.customer_id
-    ? await one<{ id: string; name: string; points: number }>(
+    ? await one<{
+        id: string;
+        name: string;
+        points: number;
+        credit: number;
+        credit_limit: number;
+        owed: number;
+      }>(
         db,
-        "SELECT id, name, points FROM customers WHERE id = ?1",
+        "SELECT id, name, points, credit, credit_limit, owed FROM customers WHERE id = ?1",
         sale.customer_id,
       )
     : null;
@@ -666,7 +679,7 @@ till.post("/void", async (c) => {
 
 type TenderIn = { method: string; amount: number; tendered?: number; reference?: string };
 
-const TENDERS = ["cash", "card", "wallet", "store_credit"] as const;
+const TENDERS = ["cash", "card", "wallet", "store_credit", "on_account"] as const;
 
 /**
  * Finish the sale.
@@ -676,8 +689,15 @@ const TENDERS = ["cash", "card", "wallet", "store_credit"] as const;
  *   * **Only cash returns change.** A card or a wallet charged more than the
  *     balance due is an overcharge, so the till refuses it instead of quietly
  *     making change from a card.
- *   * **The payments must cover the total.** Short payment is not a partial
- *     sale here; a customer who cannot pay leaves the basket held.
+ *   * **The payments must cover the total.** Short payment is still not a
+ *     partial sale: a basket that is not fully tendered stays held.
+ *
+ * Paying later does not bend the second rule, it uses it. `on_account` is a
+ * tender like any other — it settles the part of the basket the customer is
+ * not paying for now, so a tab and a half-paid tab are the same arithmetic as
+ * a split between cash and a card, and every figure downstream still adds up.
+ * What it tenders is not money: the goods leave and the shop books what it is
+ * owed, against the customer's limit and nobody else's.
  *
  * The barrier against ringing twice is the state itself: the UPDATE requires
  * the sale to still be `held`, so a double-tapped Pay button and a replayed
@@ -690,9 +710,11 @@ const TENDERS = ["cash", "card", "wallet", "store_credit"] as const;
  * request, because on a replay there is no request left to compute it from.
  */
 async function payAnswer(db: D1Database, sale: SaleRow) {
-  const paid = await one<{ change: number }>(
+  const paid = await one<{ change: number; on_account: number }>(
     db,
-    "SELECT COALESCE(SUM(change), 0) AS change FROM payments WHERE sale_id = ?1",
+    `SELECT COALESCE(SUM(change), 0) AS change,
+            COALESCE(SUM(CASE WHEN method = 'on_account' THEN amount ELSE 0 END), 0) AS on_account
+       FROM payments WHERE sale_id = ?1`,
     sale.id,
   );
   return {
@@ -700,6 +722,11 @@ async function payAnswer(db: D1Database, sale: SaleRow) {
     number: sale.number,
     total: sale.total,
     change: paid?.change ?? 0,
+    // What went on the tab, read back rather than remembered. A receipt that
+    // says "K3,000 to pay" has to say the same thing on the retry as it did on
+    // the call that was lost, and the only figure that can is the one in the
+    // rows.
+    on_account: paid?.on_account ?? 0,
     completed_at: sale.completed_at,
     replayed: true,
   };
@@ -807,6 +834,150 @@ till.post("/pay", async (c) => {
     }
   }
 
+  // **The tab, and the limit that bounds it.**
+  //
+  // Credit is a decision about a person, so it needs a person: a walk-in basket
+  // has nobody to chase and nobody to refuse, and `customers.credit_limit`
+  // defaults to 0 so a customer nobody has decided about is refused here too.
+  //
+  // The limit is checked by the write that takes it rather than by a read
+  // before one. D1 has no interactive transaction, so `SELECT owed` followed by
+  // `UPDATE owed = owed + x` is a race two lanes can both win — and both would,
+  // against a customer standing at one of them with a queue at the other. This
+  // is the same conditional-write shape as the store-credit drawdown below it,
+  // read in the other direction.
+  //
+  // It runs **alone and before the sale is claimed**, because a statement that
+  // matches no rows is a success in SQLite and cannot abort a batch. Batched
+  // with the consequences it would refuse nothing: the sale would complete, the
+  // stock would go down and the journal would take a posting, and the 409 would
+  // be raised over work that had already committed.
+  const onAccount = tenders
+    .filter((t) => t.method === "on_account")
+    .reduce((a, t) => a + t.amount, 0);
+  if (onAccount > 0) {
+    if (!sale.customer_id) {
+      throw badRequest("no_customer", "a tab needs a customer — put one on the sale first");
+    }
+    const took = await run(
+      c.env.DB,
+      "UPDATE customers SET owed = owed + ?2 WHERE id = ?1 AND owed + ?2 <= credit_limit",
+      sale.customer_id,
+      onAccount,
+    );
+    if (took.meta.changes === 0) {
+      // Read only now, and only to write the sentence. The decision was taken
+      // by the statement above; this says how much room there actually is so
+      // the cashier can offer to split the basket rather than guess.
+      const who = await one<{ owed: number; credit_limit: number }>(
+        c.env.DB,
+        "SELECT owed, credit_limit FROM customers WHERE id = ?1",
+        sale.customer_id,
+      );
+      const room = Math.max(0, (who?.credit_limit ?? 0) - (who?.owed ?? 0));
+      throw conflict("over_credit_limit", "that is more than this customer may owe", {
+        owed: who?.owed ?? 0,
+        credit_limit: who?.credit_limit ?? 0,
+        available: room,
+      });
+    }
+  }
+
+  // **Everything from here to the batch has to give the tab back if it throws.**
+  //
+  // The claim above is the only piece of this call that commits before the sale
+  // is won, and `sales.client_id` — the idempotency key the retry is recognised
+  // by — is not written until the sale claim itself. So a failure in between
+  // leaves `owed` raised against a sale that never completed, and an honest
+  // retry with the same key finds no sale, runs the whole flow again, and
+  // raises it a second time: the customer is chased for twice what they took
+  // and half their limit is consumed by nothing.
+  //
+  // `nextNumber` throws when its counter row is missing, the batch throws on
+  // any constraint or a posting into a closed period, and the sale claim can
+  // lose. All three now land here.
+  try {
+    return await completeSale(c, {
+      sale, tenders, priced, clientId, onAccount, onCredit, overpaid, settings, at, actor,
+    });
+  } catch (err) {
+    // **Put the sale back before the tab, and only give the tab back if the
+    // sale went back.**
+    //
+    // The claim inside `completeSale` wins the sale on its own, before the
+    // batch that writes everything the sale means. So a throw can land on
+    // either side of it, and the two sides need opposite treatment:
+    //
+    //   * **Before**, the sale is still held and the tab has to come off.
+    //   * **After**, the sale row is `completed` while the payments, the stock
+    //     movements and the journal entry all rolled back with the batch. That
+    //     is a sale with no tender behind it, and every takings figure in the
+    //     system is `SUM(sales.total)` over completed sales — the overview, the
+    //     lane cards, the shift, four reports — so it inflates all of them by a
+    //     basket the ledger has never heard of, and the accounting equation
+    //     still holds *because* nothing was posted. Nothing would flag it.
+    //
+    // A completed sale with no payments can only be that, because `/pay`
+    // refuses a tender list that does not cover the total and every tender is
+    // more than nothing. So it is safe to hand it back to the lane, and the
+    // cashier rings it again. The receipt number is spent either way, which is
+    // what a gap in a receipt sequence is for.
+    //
+    // The tab then comes off only if the sale really did go back — otherwise a
+    // throw *after* a batch that succeeded would cancel a debt the shop is owed.
+    const torn = await run(
+      c.env.DB,
+      `UPDATE sales SET status = 'held', completed_at = NULL, number = NULL,
+                        shift_id = NULL, client_id = NULL
+        WHERE id = ?1 AND status = 'completed'
+          AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.sale_id = ?1)`,
+      sale.id,
+    );
+    if (onAccount > 0 && sale.customer_id) {
+      await run(
+        c.env.DB,
+        `UPDATE customers SET owed = owed - ?2
+          WHERE id = ?1 AND owed >= ?2
+            AND EXISTS (SELECT 1 FROM sales s WHERE s.id = ?3 AND s.status = 'held')`,
+        sale.customer_id,
+        onAccount,
+        sale.id,
+      );
+    }
+    if (torn.meta.changes > 0) {
+      console.error("a sale was claimed and then rolled back", sale.id);
+    }
+    throw err;
+  }
+});
+
+/**
+ * The half of `POST /pay` that runs once the tab has been claimed.
+ *
+ * Split out so the claim has something to wrap. Everything in here either
+ * completes the sale or throws, and a throw is the caller's signal to give the
+ * customer's credit back.
+ */
+async function completeSale(
+  c: Context<Ctx>,
+  p: {
+    sale: SaleRow;
+    tenders: TenderIn[];
+    priced: ReturnType<typeof priceSale>;
+    clientId: string | null;
+    /** What went on the customer's tab, already claimed against their limit. */
+    onAccount: number;
+    /** What is being spent from store credit, already checked as available. */
+    onCredit: number;
+    overpaid: number;
+    settings: Settings;
+    at: number;
+    actor: Actor;
+  },
+) {
+  const { sale, tenders, priced, clientId, onAccount, onCredit, overpaid, settings, at, actor } = p;
+  const total = priced.totals.total;
+
   const shiftId = await openShift(c.env.DB, laneOf(actor));
   const number = await nextNumber(c.env.DB, "sale_number");
 
@@ -836,6 +1007,24 @@ till.post("/pay", async (c) => {
   if (claimed.meta.changes === 0) {
     // Somebody — probably this same till, retrying — already rang it. Answer
     // with the sale as it stands; a replay must not be a second sale.
+    //
+    // **Give the tab back first.** The credit claim above is the one piece of
+    // this call that lands before the sale is won, because it has to: a limit
+    // enforced after the sale is a limit that refuses nothing. So the loser of
+    // a simultaneous double-tap has already put the basket on the customer's
+    // account, and the winner is about to put it there again. Without this the
+    // customer is charged twice for shopping that left the shop once, their
+    // remaining credit is short by a basket, and there is no row anywhere
+    // saying why — `owed` would disagree with the payments that are supposed to
+    // explain it, which is precisely the property that makes it trustworthy.
+    if (onAccount > 0 && sale.customer_id) {
+      await run(
+        c.env.DB,
+        "UPDATE customers SET owed = owed - ?2 WHERE id = ?1",
+        sale.customer_id,
+        onAccount,
+      );
+    }
     const already = await need<SaleRow>(
       c.env.DB,
       "that sale",
@@ -919,6 +1108,40 @@ till.post("/pay", async (c) => {
     );
   }
 
+  // A tab is an authorisation, so it is written where the authorisations are.
+  //
+  // The back office reads `audit_log` as "what was authorised at the till", and
+  // letting stock leave against a promise is exactly the kind of decision that
+  // belongs in it — not because the cashier needed a manager for it (the limit
+  // is the control, and it is enforced above) but because a debt that appears
+  // on a customer's account should be traceable to the moment and the person
+  // who allowed it.
+  if (onAccount > 0) {
+    statements.push(
+      stmt(
+        c.env.DB,
+        `INSERT INTO audit_log (id, at, user_id, approved_by, register_id, action, ref_type, ref_id, amount, detail)
+         VALUES (?1, ?2, ?3, ?3, ?4, 'sell_on_account', 'sale', ?5, ?6, ?7)`,
+        newId("aud"),
+        at,
+        actor.userId,
+        sale.register_id,
+        sale.id,
+        onAccount,
+        sale.customer_id ?? "",
+      ),
+    );
+  }
+
+  // Points are earned on the shopping, not on the settling.
+  //
+  // A decided policy rather than an oversight: a customer who takes goods on
+  // their tab has bought them, and the loyalty scheme is a discount on what
+  // they buy. Awarding on payment instead would mean a shopper who always pays
+  // cash and one who always pays on Friday earn differently for the same
+  // basket, and it would need a second award path down the settlement route
+  // that nothing would reconcile. The exposure is bounded by the credit limit,
+  // which is what the limit is for.
   if (sale.customer_id) {
     const perUnit = Number(settings["loyalty.points_per_unit"] ?? "0");
     if (perUnit > 0) {
@@ -964,9 +1187,10 @@ till.post("/pay", async (c) => {
     number: finished.number,
     total: finished.total,
     change: overpaid,
+    on_account: onAccount,
     completed_at: finished.completed_at,
   });
-});
+}
 
 // ---------------------------------------------------------------------------
 // The rest of the command bar
@@ -1087,6 +1311,13 @@ till.post("/return", async (c) => {
   );
   if (sale.status !== "completed") throw conflict("not_refundable", "only a completed sale can be returned");
 
+  // **Goods bought on a tab go back onto the tab, and the lane does not ask.**
+  //
+  // A cashier pressing Return has one question in front of them — which units
+  // are coming back — and "is this customer still paying this sale off" is not
+  // a thing they should have to remember at a counter. `applyRefund` reads the
+  // rows and splits it: anything still outstanding comes off the debt, and only
+  // the remainder is counted out of this drawer.
   const settings = await readSettings(c.env.DB);
   const result = await applyRefund(c.env.DB, {
     saleId,
@@ -1124,10 +1355,67 @@ till.get("/customers", async (c) => {
   }
   const rows = await all(
     c.env.DB,
-    `SELECT id, name, phone, points, credit FROM customers ${where} ORDER BY name LIMIT 25`,
+    // `owed` and `credit_limit` come with the row because the lane cannot
+    // decide without them. "Can this basket go on the tab" is a question asked
+    // at the counter with somebody waiting, and a till that has to make a
+    // second request to answer it is a till that asks the server what it
+    // already showed the cashier.
+    `SELECT id, name, phone, points, credit, credit_limit, owed
+       FROM customers ${where} ORDER BY name LIMIT 25`,
     ...binds,
   );
   return c.json({ customers: rows });
+});
+
+
+/**
+ * Money off a tab, taken at the counter.
+ *
+ * This is where a corner shop's credit actually comes back: somebody who took
+ * their shopping on Tuesday puts notes on the counter on Friday. It is not a
+ * sale — no goods move, no revenue is earned, nothing is priced — so it is not
+ * rung through the basket. It is money arriving against a debt.
+ *
+ * The cash goes into **this lane's drawer**, which is why the lane's open shift
+ * is stamped on it: that drawer is counted at the end of the shift, and cash
+ * the count does not know about is a surplus booked to cash over and short
+ * against whoever was standing there.
+ */
+till.post("/account-payment", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const actor = c.get("actor");
+  const registerId = laneOf(actor);
+  const customerId = str(body, "customer_id");
+  const amount = int(body, "amount");
+  const method = oneOf(body, "method", ["cash", "card", "wallet"] as const);
+
+  // **A lane with no drawer open cannot take money.**
+  //
+  // `expectedInDrawer` finds a settlement by its `shift_id`, so one taken with
+  // no shift is cash that physically went into a till and that no count will
+  // ever expect. It stays in `1000 Cash in drawer` for good: every close sweeps
+  // out only what was counted, so the account never returns to zero and the
+  // balance sheet reports money in a drawer nobody has a session for. The same
+  // refusal as No sale, for the same reason.
+  const shiftId = await openShift(c.env.DB, registerId);
+  if (!shiftId) throw conflict("no_shift", "open a drawer before taking money off a tab");
+
+  const settings = await readSettings(c.env.DB);
+  const settled = await settleTab(c.env.DB, {
+    customerId,
+    amount,
+    method,
+    reference: optStr(body, "reference"),
+    note: optStr(body, "note"),
+    userId: actor.userId,
+    shiftId,
+    registerId,
+    cashTo: "drawer",
+    clientId: optStr(body, "client_id") || null,
+    at: now(),
+    accounting: settingBool(settings, "accounting.enabled", false),
+  });
+  return c.json(settled);
 });
 
 /** A new customer, signed up at the counter. */

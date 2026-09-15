@@ -30,6 +30,16 @@
 //! took the till from 183 KB to 529 KB: a lane device paying, on every cold
 //! start, for a chart-of-accounts vocabulary it will never show.
 //!
+//! The tab vocabulary — `on_account`, `owes`, `pay_tab` and the three `tab_*`
+//! sentences — is **composed rather than reviewed**. It is built from words the
+//! Corner Mart set already uses (အကြွေးဖြင့် on account, ဖောက်သည် customer,
+//! ကန့်သတ်ချက် limit) and deliberately says ကြွေးကျန် for what a customer owes
+//! the shop, to keep it apart from ပေးရန်ရှိ — which the reviewed set uses for
+//! what the *shop* owes, in `payables.owed` and in `customers.store_credit_owed`
+//! on the very same person. A cashier reading one for the other has the sign
+//! backwards on somebody's money, so this pair is first on the list for the
+//! native speaker who signs off the command words.
+//!
 //! **A missing key returns the key itself**, not an empty string. A screen
 //! reading `products.shelf_price` where nothing is defined shows
 //! "products.shelf_price" — ugly, findable, and obviously wrong, which is what
@@ -111,6 +121,7 @@ fn english(key: str) -> str {
         "clear" => "Clear",
         "close_lane" => "Close lane",
         "confirm" => "Confirm",
+        "credit_needs_customer" => "Store credit needs a customer — attach one first.",
         "counted" => "Counted in the drawer",
         "customer" => "Customer",
         "discount" => "Discount",
@@ -138,8 +149,11 @@ fn english(key: str) -> str {
         "nothing_returnable" => "Everything on this receipt has come back already",
         "offline" => "Offline",
         "only_cash_change" => "Only cash gives change.",
+        "on_account" => "On account",
         "online" => "Online",
+        "owes" => "Owes",
         "pay" => "PAY",
+        "pay_tab" => "Pay tab",
         // The splash's one line. Not new wording: `words.kite` already carries
         // this phrase as `layout.point_of_sale`, and the till cannot reach that
         // file — see this module's header for what importing it costs a lane.
@@ -167,9 +181,14 @@ fn english(key: str) -> str {
         "sign_out_busy" => "Hold or void the basket before signing off.",
         "store_credit" => "Store credit",
         "subtotal" => "Subtotal",
+        "tab_needs_customer" => "A tab needs a customer — attach one first.",
+        "tab_no_room" => "That is more than this customer may owe.",
+        "tab_paid" => "Taken off the tab:",
+        "tab_room" => "Can still go on the tab:",
         "tax_added" => "Tax",
         "tax_included" => "Tax included",
         "tender" => "TENDER",
+        "the_lot" => "All of it",
         "tender_type" => "TENDER TYPE",
         "total" => "TOTAL",
         "void" => "Void sale",
@@ -201,6 +220,7 @@ fn burmese(key: str) -> str {
         "clear" => "ရှင်းလင်း",
         "close_lane" => "လိုင်းပိတ်",
         "confirm" => "အတည်ပြု",
+        "credit_needs_customer" => "ဆိုင်ခရက်ဒစ်အတွက် ဖောက်သည် လိုအပ်သည် — ဦးစွာ ချိတ်ဆက်ပါ။",
         "counted" => "ငွေတိုက်တွင် ရေတွက်ရရှိ",
         "customer" => "ဖောက်သည်",
         "discount" => "လျှော့ဈေး",
@@ -228,8 +248,11 @@ fn burmese(key: str) -> str {
         "nothing_returnable" => "ဤပြေစာမှ အားလုံး ပြန်အမ်းပြီးဖြစ်သည်",
         "offline" => "အော့ဖ်လိုင်း",
         "only_cash_change" => "ငွေသားဖြင့်သာ အကြွေ ပြန်အမ်းနိုင်သည်။",
+        "on_account" => "အကြွေးဖြင့်",
         "online" => "အွန်လိုင်း",
+        "owes" => "ကြွေးကျန်",
         "pay" => "ငွေရှင်းမည်",
+        "pay_tab" => "အကြွေးဆပ်",
         "point_of_sale" => "အရောင်းစနစ်",
         "price" => "ဈေးနှုန်း",
         "price_check" => "စျေးနှုန်းစစ်",
@@ -254,9 +277,14 @@ fn burmese(key: str) -> str {
         "sign_out_busy" => "မထွက်မီ စာရင်းကို ဆိုင်းငံ့ပါ သို့မဟုတ် ဖျက်ပါ။",
         "store_credit" => "ဆိုင်ခရက်ဒစ်",
         "subtotal" => "ကြားပေါင်း",
+        "tab_needs_customer" => "အကြွေးအတွက် ဖောက်သည် လိုအပ်သည် — ဦးစွာ ချိတ်ဆက်ပါ။",
+        "tab_no_room" => "ဤဖောက်သည်၏ အကြွေးကန့်သတ်ချက် ကျော်လွန်နေသည်။",
+        "tab_paid" => "အကြွေးမှ နုတ်ပြီး —",
+        "tab_room" => "အကြွေးအဖြစ် ထပ်တင်နိုင်သည် —",
         "tax_added" => "အခွန်",
         "tax_included" => "အခွန်ပါဝင်ပြီး",
         "tender" => "ငွေရှင်းမှု",
+        "the_lot" => "အားလုံး",
         "tender_type" => "ငွေပေးချေမှုအမျိုးအစား",
         "total" => "စုစုပေါင်း",
         "void" => "ပယ်ဖျက်",

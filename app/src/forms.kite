@@ -110,7 +110,8 @@ fn blank_promotion() -> model.Promotion {
 
 fn blank_customer() -> model.CustomerAccount {
     return model.CustomerAccount{
-        id: "", name: "", phone: "", points: 0, credit: 0, note: "",
+        id: "", name: "", phone: "", points: 0, credit: 0,
+        credit_limit: 0, owed: 0, note: "",
         created_at: 0, visits: 0, spent: 0, last_seen: 0,
     }
 }
@@ -309,7 +310,16 @@ pub fn promotion(existing: Option<model.Promotion>, id: str,
 
 // ---- people ----------------------------------------------------------------
 
-pub fn customer(existing: Option<model.CustomerAccount>, id: str, l: i18n.Lang) -> desk.Form {
+/// A customer, and how far the shop trusts them.
+///
+/// `existing` is not optional in practice and the caller must pass it for an
+/// edit. It used to be handed `nil` here, which opened the edit dialog blank
+/// and wrote the blanks back on Save — survivable while the fields were a name
+/// and a phone number somebody could retype. The credit limit is not that: a
+/// Save that silently zeroed it would revoke somebody's tab with nobody able to
+/// say what changed, and the customer finds out at the counter.
+pub fn customer(existing: Option<model.CustomerAccount>, id: str, l: i18n.Lang,
+    c: money.Currency) -> desk.Form {
     let who = or_else(existing, blank_customer())
     return desk.about(
         desk.form("customer",
@@ -321,9 +331,57 @@ pub fn customer(existing: Option<model.CustomerAccount>, id: str, l: i18n.Lang) 
             words.t(l, "common.save"), [
                 desk.required(text_field("name", words.t(l, "common.name"), who.name)),
                 text_field("phone", words.t(l, "common.phone"), who.phone),
+                desk.hinted(money_field("credit_limit", words.t(l, "receivables.credit_limit"),
+                        who.credit_limit, c),
+                    words.t(l, "receivables.credit_limit_hint")),
                 desk.field("note", words.t(l, "common.note"), desk.FieldKind.Lines, who.note),
             ]),
         id)
+}
+
+/// Money off a tab, taken in the back office.
+///
+/// A picker rather than a row action, for the reason [`cancel_invoice`] gives:
+/// a `desk.Row` carries one action, and on the customers table that action is
+/// *edit*, which is what a shopkeeper reaches for on nearly every row. Only
+/// people who actually owe something are offered, because they are the only
+/// ones the server will take money for.
+///
+/// `key` becomes the form's subject and is sent as the idempotency key. The
+/// back office has no equivalent of the till's `pay_key_of` and nothing else
+/// here needs one — every other write is a create the server can tell apart, or
+/// an edit that is the same whether it lands once or twice. A settlement is
+/// neither: sent twice it takes the money twice, halves the balance, and leaves
+/// two rows that both look legitimate. It is minted where the dialog is opened,
+/// so pressing Save again after a lost answer sends the key the server already
+/// has.
+pub fn settle_tab(l: i18n.Lang, people: [model.CustomerAccount], key: str,
+    c: money.Currency) -> desk.Form {
+    var ids: [str] = []
+    var names: [str] = []
+    for cu in people {
+        if cu.owed > 0 {
+            ids.push(cu.id)
+            names.push("\(cu.name) · \(money.show(cu.owed, c))")
+        }
+    }
+    if ids.len() == 0 {
+        ids = [""]
+        names = [words.t(l, "receivables.nobody_owes_anything")]
+    }
+    return desk.about(
+        desk.explained(
+        desk.form("settle-tab", words.t(l, "receivables.take_a_payment"),
+            words.t(l, "common.save"), [
+                choice_field("customer_id", words.t(l, "common.customer"), ids, names, ids[0]),
+                desk.required(money_field("amount", words.t(l, "receivables.paying"), 0, c)),
+                choice_field("method", words.t(l, "common.how"), ["cash", "card", "wallet"],
+                    [words.t(l, "common.cash"), words.t(l, "common.card"),
+                        words.t(l, "common.wallet")], "cash"),
+                text_field("note", words.t(l, "common.note"), ""),
+            ]),
+        words.t(l, "receivables.settlement_lede")),
+        key)
 }
 
 pub fn staff(l: i18n.Lang) -> desk.Form {

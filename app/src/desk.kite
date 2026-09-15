@@ -451,6 +451,13 @@ pub struct App {
     pub var ref_accounts: [model.Account]
     /// Open supplier invoices, for the cancel picker.
     pub var ref_invoices: [model.Invoice]
+    /// The customer list the Customers screen is showing.
+    ///
+    /// Two dialogs read it: the edit form, so a Save does not write blanks over
+    /// somebody's name and — worse — over the credit limit a manager set, and
+    /// the settle picker, so taking money off a tab does not need a round trip
+    /// to find out who owes anything.
+    pub var ref_customers: [model.CustomerAccount]
     /// The shop's own settings, and the one thing here still held as a
     /// document — see [`api.settings`] for why a key→value map of setting
     /// names has no struct.
@@ -529,6 +536,7 @@ pub fn holding(root: dom.Element, view: html.Mounted) -> App {
         ref_expense_accounts: [],
         ref_accounts: [],
         ref_invoices: [],
+        ref_customers: [],
         ref_settings: doc.nothing(),
         subject_product: nil,
         subject_order: nil,
@@ -782,6 +790,10 @@ pub fn took_accounts(var app: App, accounts: [model.Account]) {
 
 pub fn took_invoices(var app: App, invoices: [model.Invoice]) {
     app.ref_invoices = invoices
+}
+
+pub fn took_customers(var app: App, people: [model.CustomerAccount]) {
+    app.ref_customers = people
 }
 
 pub fn took_settings(var app: App, settings: doc.Doc) {

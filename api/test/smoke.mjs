@@ -478,6 +478,273 @@ const run = async () => {
   const afterDouble = await call("GET", `/api/sales/${dblPaid.json.sale_id}`, { token: owner });
   check("and nothing was written", (afterDouble.json.refunds ?? []).length, 0);
 
+  console.log("\n— selling on credit —");
+
+  // A tab: goods now, money later, and the arithmetic that has to hold in
+  // between. Idempotent like everything else here — the customer is reused,
+  // the limit is set to an absolute, and every balance is asserted as a
+  // **delta** so a third run passes as the first did.
+
+  const tabName = "Tab Tester";
+  const existingTabbers = await call("GET", `/api/customers?q=${encodeURIComponent(tabName)}`, {
+    token: owner,
+  });
+  const foundTabber = (existingTabbers.json.customers ?? []).find((x) => x.name === tabName);
+  const tabberId = foundTabber
+    ? foundTabber.id
+    : (await call("POST", "/api/customers", {
+        token: owner, body: { name: tabName, phone: "09-555-0199" },
+      })).json.id;
+
+  // The limit is what makes a tab possible, and it defaults to nothing.
+  const noLimitYet = await call("PATCH", `/api/customers/${tabberId}`, {
+    token: owner, body: { name: tabName, phone: "09-555-0199", credit_limit: 0 },
+  });
+  check("a credit limit can be set", noLimitYet.status, 200);
+  await call("POST", "/api/till/customer", { token: till, body: { customer_id: tabberId } });
+  await call("POST", "/api/till/scan", { token: till, body: { code: "8850001", qty: 1 } });
+  const overLimit = await call("POST", "/api/till/pay", {
+    token: till, body: { payments: [{ method: "on_account", amount: 900 }] },
+  });
+  check("a customer with no limit cannot take goods on a tab",
+    overLimit.json.error?.code, "over_credit_limit");
+
+  // Raise it, and the same basket goes through — half in cash, half on the tab.
+  // That is "semi pay": a split between a tender that is money and one that is
+  // not, which is why it needed no new arithmetic.
+  await call("PATCH", `/api/customers/${tabberId}`, {
+    token: owner, body: { name: tabName, phone: "09-555-0199", credit_limit: 50000 },
+  });
+  const beforeTab = await call("GET", `/api/customers/${tabberId}`, { token: owner });
+  const owedBefore = beforeTab.json.customer.owed;
+
+  const semi = await call("POST", "/api/till/pay", {
+    token: till, body: { payments: [
+      { method: "cash", amount: 400 },
+      { method: "on_account", amount: 500 },
+    ] },
+  });
+  check("half now and half on the tab completes the sale", semi.status, 200);
+  check("and says how much went on the tab", semi.json.on_account, 500);
+
+  const afterTab = await call("GET", `/api/customers/${tabberId}`, { token: owner });
+  check("what they owe went up by exactly the unpaid part",
+    afterTab.json.customer.owed - owedBefore, 500);
+  check("and the tab lists the receipt it is for",
+    (afterTab.json.tab ?? []).some((t) => t.id === semi.json.sale_id && t.outstanding === 500), true);
+
+  // A tab still has to cover the basket. Short is short whatever the tenders.
+  await call("POST", "/api/till/customer", { token: till, body: { customer_id: tabberId } });
+  await call("POST", "/api/till/scan", { token: till, body: { code: "8850001", qty: 1 } });
+  const stillShort = await call("POST", "/api/till/pay", {
+    token: till, body: { payments: [{ method: "on_account", amount: 400 }] },
+  });
+  check("a tab that does not cover the basket is still short",
+    stillShort.json.error?.code, "short");
+
+  // And a tab needs somebody to belong to.
+  await call("POST", "/api/till/customer", { token: till, body: { customer_id: "" } });
+  const nobodysTab = await call("POST", "/api/till/pay", {
+    token: till, body: { payments: [{ method: "on_account", amount: 900 }] },
+  });
+  check("a walk-in cannot open a tab", nobodysTab.json.error?.code, "no_customer");
+
+  // Clear that basket down so nothing below inherits it.
+  await call("POST", "/api/till/customer", { token: till, body: { customer_id: tabberId } });
+  const secondTab = await call("POST", "/api/till/pay", {
+    token: till, body: { payments: [{ method: "on_account", amount: 900 }] },
+  });
+  check("the whole basket can go on the tab", secondTab.status, 200);
+  await call("POST", "/api/till/customer", { token: till, body: { customer_id: "" } });
+
+  // Money back against the tab, at the lane. The debt comes down, oldest
+  // receipt first, and the cash is expected in *this* drawer.
+  const liveForTab = (await call("GET", "/api/shifts", { token: owner })).json.shifts
+    .find((x) => !x.closed_at && x.register_id === "reg_1");
+  const drawerBefore = liveForTab
+    ? (await call("GET", `/api/shifts/${liveForTab.id}`, { token: owner })).json.drawer
+    : null;
+  const owedBeforePaying = (await call("GET", `/api/customers/${tabberId}`, { token: owner }))
+    .json.customer.owed;
+
+  const settleKey = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const settled = await call("POST", "/api/till/account-payment", {
+    token: till,
+    body: { client_id: settleKey, customer_id: tabberId, amount: 300, method: "cash" },
+  });
+  check("a tab can be paid off at the counter", settled.status, 200);
+  check("and says what is left", owedBeforePaying - settled.json.owed, 300);
+
+  const settleReplay = await call("POST", "/api/till/account-payment", {
+    token: till,
+    body: { client_id: settleKey, customer_id: tabberId, amount: 300, method: "cash" },
+  });
+  check("replaying a settlement takes the money once", settleReplay.json.id, settled.json.id);
+  check("and says so", settleReplay.json.replayed, true);
+
+  const owedAfterPaying = (await call("GET", `/api/customers/${tabberId}`, { token: owner }))
+    .json.customer.owed;
+  check("the balance moved by exactly one payment",
+    owedBeforePaying - owedAfterPaying, 300);
+
+  // The drawer has to know about it. Without a term of its own the count comes
+  // up over by the settlement and the surplus is booked to cash over and short
+  // against whoever was standing at the lane.
+  if (drawerBefore && liveForTab) {
+    const drawerAfter = (await call("GET", `/api/shifts/${liveForTab.id}`, { token: owner }))
+      .json.drawer;
+    check("a tab settled at the lane is expected in that lane's drawer",
+      drawerAfter.tabs_settled - drawerBefore.tabs_settled, 300);
+    check("and the expected total moved with it",
+      drawerAfter.expected - drawerBefore.expected, 300);
+  }
+
+  const tooMuch = await call("POST", "/api/till/account-payment", {
+    token: till,
+    body: { customer_id: tabberId, amount: owedAfterPaying + 1000, method: "cash" },
+  });
+  check("more than is owed is refused", tooMuch.json.error?.code, "over_owed");
+
+  // Goods bought on a tab come back onto the tab, whatever method is asked for.
+  // Paying one out in cash would hand over money the shop never received,
+  // against goods it now has back on the shelf.
+  const tabSale = await call("GET", `/api/sales/${secondTab.json.sale_id}`, { token: owner });
+  const tabLine = tabSale.json.lines[0];
+  const owedBeforeBack = (await call("GET", `/api/customers/${tabberId}`, { token: owner }))
+    .json.customer.owed;
+  const onTabBack = await call("POST", `/api/sales/${secondTab.json.sale_id}/refund`, {
+    token: owner,
+    body: { reason: "wrong one", method: "cash", restock: false,
+      lines: [{ sale_item_id: tabLine.id, qty: 1 }] },
+  });
+  check("an unpaid sale comes back against the tab", onTabBack.status, 201);
+  check("with none of it paid out in money", onTabBack.json.on_account, onTabBack.json.total);
+  const owedAfterBack = (await call("GET", `/api/customers/${tabberId}`, { token: owner }))
+    .json.customer.owed;
+  check("and the debt falls by what came back",
+    owedBeforeBack - owedAfterBack, onTabBack.json.total);
+
+  // **The case that used to have no way out at all.** One item, paid half in
+  // cash and half on the tab, brought back: worth more than the tab still
+  // holds, so every method refused it and the goods stayed on the shelf with
+  // the customer's cash gone. Now it splits — the tab first, the rest in money.
+  await call("POST", "/api/till/customer", { token: till, body: { customer_id: tabberId } });
+  await call("POST", "/api/till/scan", { token: till, body: { code: "8850001", qty: 1 } });
+  const halfPaid = await call("POST", "/api/till/pay", {
+    token: till, body: { payments: [
+      { method: "cash", amount: 400 },
+      { method: "on_account", amount: 500 },
+    ] },
+  });
+  check("a part-paid sale completes", halfPaid.status, 200);
+  await call("POST", "/api/till/customer", { token: till, body: { customer_id: "" } });
+
+  const halfLine = (await call("GET", `/api/sales/${halfPaid.json.sale_id}`, { token: owner }))
+    .json.lines[0];
+  const owedBeforeSplit = (await call("GET", `/api/customers/${tabberId}`, { token: owner }))
+    .json.customer.owed;
+  const split = await call("POST", `/api/sales/${halfPaid.json.sale_id}/refund`, {
+    token: owner,
+    body: { reason: "did not want it", method: "cash", restock: false,
+      lines: [{ sale_item_id: halfLine.id, qty: 1 }] },
+  });
+  check("a part-paid sale can be returned", split.status, 201);
+  check("the tab takes what it was owed", split.json.on_account, 500);
+  check("and the rest is money back", split.json.total - split.json.on_account, 400);
+  const owedAfterSplit = (await call("GET", `/api/customers/${tabberId}`, { token: owner }))
+    .json.customer.owed;
+  check("the debt falls by the tab leg only", owedBeforeSplit - owedAfterSplit, 500);
+
+  // A settlement and a refund racing for the same debt must not both get it.
+  //
+  // A refund is several round trips, and every await in it is a moment another
+  // request is served — so a settlement arriving in one of those gaps used to
+  // pay off the very debt the refund had already decided to cancel. Both
+  // succeeded: the balance fell once and two rows said it had fallen twice, so
+  // `customers.owed` and the rows meant to explain it stopped agreeing.
+  //
+  // Checked as an invariant rather than as a timing, for the reason the stock
+  // count above gives: `wrangler dev` may or may not overlap them, and what has
+  // to hold either way is that the running figure equals what the rows derive.
+  const racer = await call("POST", "/api/customers", {
+    token: owner, body: { name: `Race ${Date.now()}`, credit_limit: 100000 },
+  });
+  await call("POST", "/api/till/customer", { token: till, body: { customer_id: racer.json.id } });
+  await call("POST", "/api/till/scan", { token: till, body: { code: "8850001", qty: 1 } });
+  const racedSale = await call("POST", "/api/till/pay", {
+    token: till, body: { payments: [{ method: "on_account", amount: 900 }] },
+  });
+  check("the raced sale went on the tab", racedSale.json.on_account, 900);
+  await call("POST", "/api/till/customer", { token: till, body: { customer_id: "" } });
+
+  const racedLine = (await call("GET", `/api/sales/${racedSale.json.sale_id}`, { token: owner }))
+    .json.lines[0];
+  const [racedRefund, racedSettle] = await Promise.all([
+    call("POST", `/api/sales/${racedSale.json.sale_id}/refund`, {
+      token: owner,
+      body: { reason: "race", method: "cash", restock: false,
+        lines: [{ sale_item_id: racedLine.id, qty: 1 }] },
+    }),
+    call("POST", `/api/customers/${racer.json.id}/payments`, {
+      token: owner, body: { amount: 900, method: "cash" },
+    }),
+  ]);
+  // Whichever order they land in, the debt can only be relieved once: either
+  // the settlement is refused because the refund already cleared it, or the
+  // refund gives back no more than the settlement left. What must never happen
+  // is both taking the same K900.
+  const bothTook = (racedRefund.json.on_account ?? 0) + (racedSettle.status < 400 ? 900 : 0);
+  check("the same debt is not relieved twice", bothTook <= 900, true);
+
+  const raced = await call("GET", `/api/customers/${racer.json.id}`, { token: owner });
+  const derivedOwed = (raced.json.tab ?? []).reduce((a, t) => a + t.outstanding, 0);
+  check("and the running balance still equals what the rows derive",
+    raced.json.customer.owed, derivedOwed);
+
+  // **The books say so too, about every customer and every sale at once.**
+  //
+  // These two sweeps are the durable form of the checks above: the concurrency
+  // and mid-request-failure cases they exist for cannot be reproduced reliably
+  // — `wrangler dev` serialises, and the faults that break a batch are timing
+  // dependent — so what is asserted is the invariant rather than the mechanism.
+  // Both were found by driving the real failures by hand, and both would have
+  // caught them without anybody knowing to look.
+  const sweep = await call("GET", "/api/accounting/health", { token: owner });
+  if (sweep.json.enabled !== false) {
+    check("no customer's balance has drifted from its rows",
+      (sweep.json.tab_drift ?? []).length, 0);
+    check("every completed sale was paid for",
+      (sweep.json.untendered_sales ?? []).length, 0);
+    check("and the books call themselves healthy", sweep.json.healthy, true);
+  }
+
+  // What the back office reads.
+  const receivables = await call("GET", "/api/customers/receivables", { token: owner });
+  check("the receivables report answers", receivables.status, 200);
+  // Against the balance read at the same moment, not one captured earlier: the
+  // aging table is derived from the rows and `customers.owed` is the running
+  // figure, and the whole point of checking them against each other is that
+  // they are two answers to one question.
+  const owedNow = (await call("GET", `/api/customers/${tabberId}`, { token: owner }))
+    .json.customer.owed;
+  const agedTab = (receivables.json.aging?.rows ?? []).find((r) => r.customer_id === tabberId);
+  check("and bands what is owed by how old it is",
+    agedTab ? agedTab.total : 0, owedNow);
+  check("with the totals summed over everybody",
+    receivables.json.aging.totals.owed >= owedNow, true);
+
+  // A settlement taken in the back office comes out of the safe, not a drawer.
+  const officeSettle = await call("POST", `/api/customers/${tabberId}/payments`, {
+    token: owner, body: { amount: 100, method: "cash", note: "paid at the office" },
+  });
+  check("the back office can take money off a tab too", officeSettle.status, 201);
+  if (drawerBefore && liveForTab) {
+    const drawerNow = (await call("GET", `/api/shifts/${liveForTab.id}`, { token: owner }))
+      .json.drawer;
+    check("and it does not land in a lane's drawer",
+      drawerNow.tabs_settled - drawerBefore.tabs_settled, 300);
+  }
+
   console.log("\n— what the fintech review found —");
 
   // Five reviewers read the corrected code against the fintech-engineering
@@ -732,13 +999,13 @@ const run = async () => {
     badView.json.error?.code, "bad_view");
 
   const REPORTS = ["products", "categories", "sales", "tenders", "staff",
-    "shrinkage", "tax", "inventory", "shifts", "expenses"];
+    "shrinkage", "tax", "inventory", "shifts", "expenses", "receivables"];
   let reportsOk = 0;
   for (const report of REPORTS) {
     const sheet = await fetchRaw(`/api/reports/export?report=${report}&from=0`, owner);
     if (sheet.status === 200 && sheet.type.startsWith("text/csv")) reportsOk++;
   }
-  check("all ten operational reports export", reportsOk, REPORTS.length);
+  check("all eleven operational reports export", reportsOk, REPORTS.length);
   const badReport = await call("GET", "/api/reports/export?report=bogus", { token: owner });
   check("an unknown report is refused", badReport.json.error?.code, "bad_report");
 

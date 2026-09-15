@@ -113,6 +113,10 @@ sales.post("/:id/refund", async (c) => {
   const saleId = c.req.param("id");
   const reason = str(body, "reason").trim();
   if (reason.length === 0) throw badRequest("bad_reason", "a refund needs a reason");
+  // How the **money** part is given back. Anything the customer still owes on
+  // this sale comes off their tab first, whatever is chosen here — the shop
+  // cannot hand over money it never received — and `applyRefund` does that
+  // split itself rather than making somebody at a counter work it out.
   const method = oneOf(body, "method", ["cash", "card", "wallet", "store_credit"] as const);
 
   const sale = await need<{ id: string; status: string }>(

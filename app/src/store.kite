@@ -53,6 +53,14 @@ pub enum Overlay {
     /// Picking the receipt a return is against, then the lines coming back.
     Receipts
     Returning(sale_id: str, number: int)
+    /// Somebody settling what they owe, at the counter.
+    ///
+    /// Not a sale and not a basket: no goods move, nothing is priced, and it
+    /// can be done with an empty till. `owed` is carried in the variant because
+    /// the dialog is opened from a row the search already fetched, and going
+    /// back for a figure that is on screen is a round trip a queue can feel.
+    ///
+    PayTab(customer_id: str, name: str, owed: int)
 }
 
 pub struct App {
@@ -90,6 +98,20 @@ pub struct App {
     /// the server would answer the *next* sale with the previous one.
     pub var pay_key: str
     pub var pay_key_for: str
+
+    /// The same pair for a tab being settled, and which customer it is for.
+    ///
+    /// **On `App` rather than inside the dialog**, which is where it started
+    /// and where it was not safe. A key that lives in the overlay dies with the
+    /// overlay, and both ways out destroy it: Cancel and Escape both dismiss.
+    /// So the sequence that matters — the settlement commits, the answer is
+    /// lost on the way back, the cashier is shown "the lane is offline",
+    /// closes the dialog *because* they were told the lane is offline, and
+    /// reopens it to try again — minted a key the server had never seen and
+    /// took the money a second time. Anchored to the customer, reopening sends
+    /// the key the server already has and gets the first answer back.
+    pub var settle_key: str
+    pub var settle_key_for: str
 
     /// The PIN pad, before anybody is signed in.
     pub var pin: str
@@ -144,6 +166,8 @@ pub fn holding(root: dom.Element, view: html.Mounted, lang: i18n.Lang) -> App {
         tender: model.Tender.Cash,
         pay_key: "",
         pay_key_for: "",
+        settle_key: "",
+        settle_key_for: "",
         pin: "",
         notice: "",
         trouble: "",
@@ -177,6 +201,27 @@ pub fn balance_due(app: App) -> int {
         paid = paid + p.amount
     }
     return app.basket.totals.total - paid
+}
+
+/// What is still allowed to go on this basket's tab.
+///
+/// The customer's limit, less what they already owe, less whatever has already
+/// been put on the tab in *this* transaction — the last term is the one a
+/// server-side check cannot help with, because those tenders have not been sent
+/// yet. Zero for a walk-in and zero for a customer nobody has given a limit,
+/// which is the same refusal for two reasons and is why they read alike.
+pub fn tab_room(app: App) -> int {
+    var already = 0
+    for p in app.taken {
+        if p.tender == model.Tender.OnAccount {
+            already = already + p.amount
+        }
+    }
+    let room = app.basket.customer_limit - app.basket.customer_owed - already
+    if room < 0 {
+        return 0
+    }
+    return room
 }
 
 pub fn change_due(app: App) -> int {
@@ -398,6 +443,25 @@ pub fn pay_key_of(var app: App, minted: str) -> str {
         app.pay_key_for = app.basket.sale_id
     }
     return app.pay_key
+}
+
+/// The idempotency key for the tab being settled, minted once and kept.
+///
+/// The mirror of [`pay_key_of`], anchored to the customer rather than to a
+/// basket. Cleared by [`settled_tab`] once the server has answered, so the next
+/// settlement for the same person is a new one rather than a replay of the last.
+pub fn settle_key_of(var app: App, customer_id: str, minted: str) -> str {
+    if app.settle_key.len() == 0 || app.settle_key_for != customer_id {
+        app.settle_key = minted
+        app.settle_key_for = customer_id
+    }
+    return app.settle_key
+}
+
+/// A tab settled, so the key that settled it must not settle the next one.
+pub fn settled_tab(var app: App) {
+    app.settle_key = ""
+    app.settle_key_for = ""
 }
 
 pub fn say(var app: App, notice: str) {

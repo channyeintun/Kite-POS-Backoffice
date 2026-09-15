@@ -104,6 +104,7 @@ fn english(key: str) -> str {
         "purchase_order" => english_purchase_order(key),
         "purchasing" => english_purchasing(key),
         "receipt" => english_receipt(key),
+        "receivables" => english_receivables(key),
         "register" => english_register(key),
         "replenishment" => english_replenishment(key),
         "reports" => english_reports(key),
@@ -1169,6 +1170,42 @@ fn english_receipt(key: str) -> str {
     }
 }
 
+fn english_receivables(key: str) -> str {
+    return match key {
+        "receivables.balances_adrift_from_their_rows" => "Balances adrift from their rows",
+        "receivables.credit_limit" => "Credit limit",
+        "receivables.credit_limit_hint" => "The most this customer may owe at once. Zero means no tab — a limit is a decision somebody makes about somebody, not a default.",
+        "receivables.d60" => "31–60",
+        "receivables.d90" => "61–90",
+        "receivables.every_sale_was_paid_for" => "Every completed sale was paid for",
+        "receivables.everybody" => "Everybody",
+        "receivables.in_the_rows" => "In the rows",
+        "receivables.limit" => "Limit",
+        "receivables.measured_from_the_day_the_goods_left" => "measured from the day the goods left — a shop tab has no agreed date to break",
+        "receivables.money_off_a_tab" => "money that came back against a tab",
+        "receivables.nobody_owes_anything" => "Nobody owes anything",
+        "receivables.n_on_a_tab" => "%d on a tab",
+        "receivables.on_the_customer" => "On the customer",
+        "receivables.off_the_tab" => "Off the tab",
+        "receivables.over_90" => "Over 90",
+        "receivables.owed" => "Owed",
+        "receivables.owed_by_customers" => "Owed by customers",
+        "receivables.owed_in_the_ledger" => "The ledger: owed by customers",
+        "receivables.owed_matches_its_rows" => "What is owed matches its rows",
+        "receivables.owed_over_60_days" => "Owed over 60 days",
+        "receivables.paying" => "Paying",
+        "receivables.payment_taken" => "Taken off the tab",
+        "receivables.payments_taken" => "Payments taken",
+        "receivables.settlement_lede" => "Cash comes out of the safe, not a lane's drawer — the back office has no drawer to count it in. Money taken at the counter goes on that lane's shift instead. It pays off the oldest shopping first.",
+        "receivables.take_a_payment" => "Take a payment",
+        "receivables.the_balance_against_what_moved_it" => "the running balance against what moved it",
+        "receivables.the_part_worth_chasing" => "the part worth a phone call",
+        "receivables.up_to_30_days" => "Up to 30 days",
+        "receivables.what_is_owed" => "What is owed",
+        _ => "",
+    }
+}
+
 fn english_register(key: str) -> str {
     return match key {
         "register.add_them_from_the_customers_page_first" => "Add them from the Customers page first.",
@@ -1888,6 +1925,7 @@ fn burmese(key: str) -> str {
         "purchase_order" => burmese_purchase_order(key),
         "purchasing" => burmese_purchasing(key),
         "receipt" => burmese_receipt(key),
+        "receivables" => burmese_receivables(key),
         "register" => burmese_register(key),
         "replenishment" => burmese_replenishment(key),
         "reports" => burmese_reports(key),
@@ -2949,6 +2987,42 @@ fn burmese_receipt(key: str) -> str {
         // speaker and these have not.
         "receipt.each" => "တစ်ခုလျှင်",
         "receipt.you_saved_label" => "သက်သာငွေ",
+        _ => "",
+    }
+}
+
+fn burmese_receivables(key: str) -> str {
+    return match key {
+        "receivables.balances_adrift_from_their_rows" => "မှတ်တမ်းနှင့် မကိုက်ညီသော လက်ကျန်များ",
+        "receivables.credit_limit" => "အကြွေး ကန့်သတ်ချက်",
+        "receivables.credit_limit_hint" => "ဤဖောက်သည် တစ်ချိန်တည်းတွင် အများဆုံး ကြွေးတင်နိုင်သည့် ပမာဏ။ သုညဆိုလျှင် အကြွေး မရ — ကန့်သတ်ချက်ဆိုသည်မှာ လူတစ်ဦးအပေါ် ဆုံးဖြတ်ချက် ဖြစ်သည်၊ မူလတန်ဖိုး မဟုတ်ပါ။",
+        "receivables.d60" => "၃၁–၆၀",
+        "receivables.d90" => "၆၁–၉၀",
+        "receivables.every_sale_was_paid_for" => "ပြီးဆုံးသော အရောင်းတိုင်း ငွေရှင်းပြီးမှု",
+        "receivables.everybody" => "အားလုံး",
+        "receivables.in_the_rows" => "မှတ်တမ်းအရ",
+        "receivables.limit" => "ကန့်သတ်ချက်",
+        "receivables.measured_from_the_day_the_goods_left" => "ကုန်ပစ္စည်း ထွက်သွားသည့်နေ့မှ ရေတွက်သည် — ဆိုင်အကြွေးတွင် သတ်မှတ်ထားသော ပေးရမည့်ရက် မရှိပါ",
+        "receivables.money_off_a_tab" => "အကြွေးအတွက် ပြန်လည်ရရှိသော ငွေ",
+        "receivables.nobody_owes_anything" => "ကြွေးကျန် မရှိပါ",
+        "receivables.n_on_a_tab" => "အကြွေးရှိသူ %d ဦး",
+        "receivables.on_the_customer" => "ဖောက်သည်စာရင်းအရ",
+        "receivables.off_the_tab" => "အကြွေးမှ နုတ်",
+        "receivables.over_90" => "၉၀ ကျော်",
+        "receivables.owed" => "ကြွေးကျန်",
+        "receivables.owed_by_customers" => "ဖောက်သည်များ၏ ကြွေးကျန်",
+        "receivables.owed_in_the_ledger" => "စာရင်းအရ ဖောက်သည်များ၏ ကြွေးကျန်",
+        "receivables.owed_matches_its_rows" => "ကြွေးကျန်သည် မှတ်တမ်းနှင့် ကိုက်ညီမှု",
+        "receivables.owed_over_60_days" => "၆၀ ရက်ကျော် ကြွေးကျန်",
+        "receivables.paying" => "ပေးချေသည့် ပမာဏ",
+        "receivables.payment_taken" => "အကြွေးမှ နုတ်ပြီး",
+        "receivables.payments_taken" => "လက်ခံရရှိသော ငွေများ",
+        "receivables.settlement_lede" => "ငွေသားကို မီးခံသေတ္တာမှ ထုတ်သည် — ရုံးခန်းတွင် ရေတွက်ရန် ငွေအံဆွဲ မရှိပါ။ ကောင်တာတွင် လက်ခံသော ငွေမှာ ထိုလိုင်း၏ အလှည့်ထဲ ဝင်သည်။ အဟောင်းဆုံး ဝယ်ယူမှုမှ စ၍ နုတ်သည်။",
+        "receivables.take_a_payment" => "ငွေလက်ခံမည်",
+        "receivables.the_balance_against_what_moved_it" => "လက်ကျန်ကို ၎င်းကို ရွှေ့ခဲ့သည့်အရာနှင့် နှိုင်းယှဉ်ချက်",
+        "receivables.the_part_worth_chasing" => "ဖုန်းဆက်သင့်သည့် အပိုင်း",
+        "receivables.up_to_30_days" => "၃၀ ရက်အတွင်း",
+        "receivables.what_is_owed" => "ကြွေးကျန် စာရင်း",
         _ => "",
     }
 }

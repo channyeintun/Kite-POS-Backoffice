@@ -101,6 +101,7 @@ export const ACC = {
   drawer: "1000",
   safe: "1010",
   clearing: "1020",
+  receivable: "1100",
   stock: "1200",
   grni: "1300",
   payables: "2000",
@@ -115,10 +116,21 @@ export const ACC = {
   operating: "6000",
 } as const;
 
-/** Where the money for a tender lands. */
+/**
+ * Where the money for a tender lands.
+ *
+ * `on_account` is the one tender that is not money: the goods leave and the
+ * shop books what it is owed. It needs its own branch rather than the fall
+ * through, and that is not a tidiness point — the fall through is
+ * `1020 Card & wallet clearing`, so an unnamed tender posts as card money in
+ * transit. The entry balances, the trial balance balances, the balance sheet
+ * balances, and the shop believes a machine is about to settle a debt that a
+ * person owes it. Nothing anywhere would raise that.
+ */
 export function accountForTender(method: string): string {
   if (method === "cash") return ACC.drawer;
   if (method === "store_credit") return ACC.storeCredit;
+  if (method === "on_account") return ACC.receivable;
   return ACC.clearing;
 }
 
@@ -201,13 +213,26 @@ export function refundEntry(args: {
    * anyway left it short with no shift to explain the difference.
    */
   cashFrom: "drawer" | "safe";
+  /**
+   * The part of the refund that came off the customer's tab rather than out of
+   * a till.
+   *
+   * Goods bought on credit are given back against the debt first: the shop
+   * cannot hand over money it never received. Only what is left over after the
+   * tab is settled leaves by `method`, which is why the two legs are separate
+   * credits summing to the same total — Sales and Tax are reversed in full
+   * either way, and what differs is where the value went.
+   */
+  onAccount: number;
   userId: string;
 }): Entry {
   const paidFrom =
     args.method === "cash" && args.cashFrom === "safe" ? ACC.safe : accountForTender(args.method);
+  const inMoney = args.net + args.tax - args.onAccount;
   const postings: Posting[] = [
     { account: ACC.sales, amount: args.net },
-    { account: paidFrom, amount: -(args.net + args.tax) },
+    { account: ACC.receivable, amount: -args.onAccount, memo: "back onto the tab" },
+    { account: paidFrom, amount: -inMoney },
   ];
   if (args.tax !== 0) postings.push({ account: ACC.taxPayable, amount: args.tax });
   if (args.cost !== 0) {
@@ -222,6 +247,47 @@ export function refundEntry(args: {
     refId: args.refundId,
     userId: args.userId,
     postings,
+  };
+}
+
+/**
+ * A tab, settled.
+ *
+ * The mirror of [`supplierPaymentEntry`]: money arrives and an obligation goes
+ * away, except this one is owed *to* the shop, so the receivable is credited
+ * rather than the payable debited. Nothing here touches revenue — that was
+ * earned and booked on the day the goods left, and booking it again when the
+ * money turns up would count the same shopping twice.
+ *
+ * `cashTo` is the counterpart of `refundEntry`'s `cashFrom` and exists for the
+ * same reason. A customer settling their tab at the counter puts notes in that
+ * lane's drawer, and that drawer is counted at the end of the shift — so the
+ * money has to be in the drawer account, or the count comes up over by the
+ * settlement and the surplus is booked to cash over and short forever. Money
+ * taken in the back office goes to the safe, because the office has no drawer
+ * to count it in.
+ */
+export function customerPaymentEntry(args: {
+  paymentId: string;
+  at: number;
+  amount: number;
+  method: string;
+  cashTo: "drawer" | "safe";
+  userId: string | null;
+}): Entry {
+  const into =
+    args.method === "cash" && args.cashTo === "safe" ? ACC.safe : accountForTender(args.method);
+  return {
+    valueAt: args.at,
+    bookedAt: args.at,
+    memo: "Paid off a tab",
+    refType: "customer_payment",
+    refId: args.paymentId,
+    userId: args.userId,
+    postings: [
+      { account: into, amount: args.amount, memo: args.method },
+      { account: ACC.receivable, amount: -args.amount },
+    ],
   };
 }
 

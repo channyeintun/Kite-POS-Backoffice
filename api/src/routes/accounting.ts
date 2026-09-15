@@ -4,6 +4,7 @@ import { now } from "../env.js";
 import { all, batch, currencyOf, one, readSettings, run, stmt } from "../lib/db.js";
 import { newId } from "../lib/crypto.js";
 import { badRequest, conflict, int, oneOf, optInt, optStr, str } from "../lib/http.js";
+import { OUTSTANDING_ON_SALE } from "../lib/credit.js";
 import { ACC, expenseEntry, post, reversalEntry } from "../lib/ledger.js";
 import { csvDoc, csvResponse, isoDay, isoStamp, plainAmount, preamble } from "../lib/csv.js";
 
@@ -974,6 +975,62 @@ accounting.get("/health", async (c) => {
       ORDER BY p.name LIMIT 20`,
   );
 
+  // `customers.owed` is a running cache of the tab rows, exactly as
+  // `products.stock` is of the movements — and it has the same failure mode.
+  // Two callers spending one debt, a claim restored over work that committed,
+  // a request that died between raising a tab and writing the sale it was for:
+  // each leaves the running figure and the rows that explain it disagreeing,
+  // and every one of them produces a ledger that still balances. Only a sweep
+  // that asks the question can find them, which is why this is here rather than
+  // in a comment saying it cannot happen.
+  const tabDrift = await all<{ id: string; name: string; owed: number; derived: number }>(
+    c.env.DB,
+    `SELECT id, name, owed, derived FROM (
+       SELECT c.id, c.name, c.owed,
+              COALESCE((SELECT SUM(${OUTSTANDING_ON_SALE}) FROM sales s
+                         WHERE s.customer_id = c.id AND s.status = 'completed'), 0) AS derived
+         FROM customers c
+     ) WHERE owed <> derived
+      ORDER BY name LIMIT 20`,
+  );
+
+  // **A completed sale has to have been paid for.**
+  //
+  // The sale is claimed on its own, before the batch that writes what the sale
+  // means — it has to be, or a double-tapped Pay writes every consequence
+  // twice. So a batch that aborts leaves the row `completed` with no payments,
+  // no stock movement and no posting behind it. Every takings figure in the
+  // system is `SUM(sales.total)` over completed sales, and the ledger is where
+  // the profit and loss comes from, so the two drift apart by exactly that
+  // basket — and the accounting equation still holds, *because* nothing was
+  // posted. `/pay` now hands such a sale back to the lane, and this is the
+  // question that finds any it could not.
+  const untendered = await all<{ id: string; number: number | null; total: number; at: number }>(
+    c.env.DB,
+    `SELECT s.id, s.number, s.total, s.completed_at AS at
+       FROM sales s
+      WHERE s.status = 'completed'
+        -- The amount column, not amount + change: it is already what the sale
+        -- was credited, with the change taken off it. Adding the change back
+        -- counts the note the customer handed over rather than what stayed in
+        -- the drawer, and flags every sale that gave any.
+        AND s.total <> COALESCE((SELECT SUM(p.amount) FROM payments p
+                                  WHERE p.sale_id = s.id), 0)
+      ORDER BY s.completed_at DESC LIMIT 20`,
+  );
+
+  // And the same question of the books: what every customer owes, against what
+  // account 1100 says the shop is owed. They are written by the same statements
+  // and can only part company if one of them was written without the other.
+  const owedNow = await one<{ total: number }>(
+    c.env.DB,
+    "SELECT COALESCE(SUM(owed), 0) AS total FROM customers",
+  );
+  const receivableBooked = await one<{ amount: number }>(
+    c.env.DB,
+    "SELECT COALESCE(SUM(amount), 0) AS amount FROM journal_lines WHERE account_code = '1100'",
+  );
+
   const shelf = await one<{ at_cost: number }>(
     c.env.DB,
     `SELECT COALESCE(SUM(CAST(ROUND(stock * cost) AS INTEGER)), 0) AS at_cost
@@ -1000,10 +1057,24 @@ accounting.get("/health", async (c) => {
     stock_at_cost: shelf?.at_cost ?? 0,
     stock_in_ledger: booked?.amount ?? 0,
     stock_gap: (shelf?.at_cost ?? 0) - (booked?.amount ?? 0),
+    tab_drift: tabDrift,
+    untendered_sales: untendered,
+    owed_by_customers: owedNow?.total ?? 0,
+    // Unlike the stock pair, these two are not allowed to differ. A shelf is
+    // valued at what it costs *today* while 1200 carries what it cost when it
+    // was bought, so a supplier's price rise separates them legitimately. A
+    // debt has no such second valuation: every kyat of it was booked by the
+    // statement that raised it, so a gap here is a bug and is counted as one.
+    //
+    // It is measured only over the period the books have been on. A shop that
+    // gave credit before switching accounting on has debts the ledger never
+    // saw, which is a known gap rather than drift — see the opening balance.
+    receivable_in_ledger: receivableBooked?.amount ?? 0,
     // One verdict, so a card can be green or red without re-deriving the rule.
     healthy:
       debit === credit && unbalanced.length === 0 && (orphans?.n ?? 0) === 0 &&
-      outBy === 0 && drift.length === 0,
+      outBy === 0 && drift.length === 0 && tabDrift.length === 0 &&
+      untendered.length === 0,
   });
 });
 

@@ -15,6 +15,7 @@ use std/dom
 use std/html
 use std/window
 use std/json
+use std/crypto
 use api
 use browser
 use desk
@@ -396,12 +397,48 @@ async fn load_order(app: desk.App, id: str) {
 }
 
 async fn load_customers(app: desk.App) {
-    let (answer, err) = await api.customers(desk.token_of(app))
+    let token = desk.token_of(app)
+    let (answer, err) = await api.customers(token)
     if err != nil {
         failed(app, err.message())
         return
     }
-    done(app, screens.customers(answer, desk.lang_of(app), desk.currency_of(app)))
+    // Kept for the two dialogs that need a row rather than an id — the edit
+    // form, and the picker that takes money off a tab.
+    desk.took_customers(app, answer)
+
+    // What is owed is fetched beside the list and is allowed to fail on its
+    // own: a shopkeeper who cannot see the aging table can still edit a
+    // customer, and `screens.customers` skips the table rather than drawing it
+    // with zeros in it.
+    var debts: Option<model.Receivables> = nil
+    let (owed, oerr) = await api.receivables(token)
+    if oerr == nil {
+        debts = owed
+    }
+
+    // The rail carries what is late, not what is outstanding. A tab a week old
+    // is the shop working normally; one over sixty days is the thing a manager
+    // opened the back office to deal with.
+    if debts != nil {
+        // **The badge counts the people it is about.** It was the count of
+        // everybody on a tab while being shown only when something was late,
+        // so a shop with nine ordinary tabs and one old one put "10" on the
+        // rail — a number that matched nothing on the screen it opened.
+        var late = 0
+        for a in debts.aging.rows {
+            if a.d90 + a.d90up > 0 {
+                late = late + 1
+            }
+        }
+        if late > 0 {
+            desk.badge(app, "customers", "\(late)")
+        } else {
+            desk.unbadge(app, "customers")
+        }
+    }
+
+    done(app, screens.customers(answer, debts, desk.lang_of(app), desk.currency_of(app)))
 }
 
 async fn load_promotions(app: desk.App) {
@@ -628,6 +665,10 @@ fn supplier_by(list: [model.Supplier], id: str) -> Option<model.Supplier> {
     return find(list, |s: model.Supplier| s.id == id)
 }
 
+fn customer_by(list: [model.CustomerAccount], id: str) -> Option<model.CustomerAccount> {
+    return find(list, |cu: model.CustomerAccount| cu.id == id)
+}
+
 fn supplier_ids(list: [model.Supplier]) -> [str] {
     var out: [str] = []
     for s in list {
@@ -720,7 +761,16 @@ fn open_form(app: desk.App, what: str, id: str) {
             forms.supplier(supplier_by(app.ref_suppliers, id), id, l)),
         "form-promotion" => desk.open_form(app, forms.promotion(nil, id,
                 app.ref_products, app.ref_categories, l, c)),
-        "form-customer" => desk.open_form(app, forms.customer(nil, id, l)),
+        // The row, not `nil`. Opening this blank wrote the blanks back on Save,
+        // which was survivable for a name and a phone number and is not for a
+        // credit limit — see `forms.customer`.
+        "form-customer" => desk.open_form(app,
+            forms.customer(customer_by(app.ref_customers, id), id, l, c)),
+        // The key is minted here, where the dialog opens, and rides on the
+        // form's subject — so Save pressed twice after a lost answer sends the
+        // one the server already has. See `forms.settle_tab`.
+        "form-settle-tab" => desk.open_form(app,
+            forms.settle_tab(l, app.ref_customers, crypto.token(), c)),
         "form-staff" => desk.open_form(app, forms.staff(l)),
         "form-expense" => desk.open_form(app, forms.expense(app.ref_expense_accounts, l, c)),
         "form-settings" => desk.open_form(app, forms.settings(app.ref_settings, l)),
@@ -1209,8 +1259,23 @@ async fn do_submit(app: desk.App, id: str, subject: str) {
             body["name"] = json.Json.Text(value_of("name"))
             body["phone"] = json.Json.Text(value_of("phone"))
             body["note"] = json.Json.Text(value_of("note"))
+            body["credit_limit"] = json.Json.Number(money_of(app, "credit_limit") as float)
             let (_, err) = await api.save_customer(token, subject, json.Json.Object(body))
             settle(app, err, words.t(l, "toast.saved"))
+        },
+        "settle-tab" => {
+            let who = value_of("customer_id")
+            if who.len() == 0 {
+                desk.form_refused(app, words.t(l, "receivables.nobody_owes_anything"))
+                repaint(app)
+                return
+            }
+            body["amount"] = json.Json.Number(money_of(app, "amount") as float)
+            body["method"] = json.Json.Text(value_of("method"))
+            body["note"] = json.Json.Text(value_of("note"))
+            body["client_id"] = json.Json.Text(subject)
+            let (_, err) = await api.settle_tab(token, who, json.Json.Object(body))
+            settle(app, err, words.t(l, "receivables.payment_taken"))
         },
         "staff" => {
             body["name"] = json.Json.Text(value_of("name"))

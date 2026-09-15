@@ -175,6 +175,12 @@ pub struct Basket {
     pub totals: Totals
     pub customer_name: str
     pub customer_points: int
+    /// What the attached customer may still put on the tab, and what they
+    /// already owe. Both zero on a walk-in, which is also what "no tab" looks
+    /// like — a customer with no limit and a customer with nobody attached are
+    /// refused by the same test.
+    pub customer_limit: int
+    pub customer_owed: int
     pub held_count: int
     pub shift_open: bool
     pub commands: [Command]
@@ -187,6 +193,8 @@ pub fn empty_basket() -> Basket {
         totals: Totals{ subtotal: 0, promo_saved: 0, discount: 0, tax: 0, total: 0, item_count: 0.0 },
         customer_name: "",
         customer_points: 0,
+        customer_limit: 0,
+        customer_owed: 0,
         held_count: 0,
         shift_open: false,
         commands: [],
@@ -213,6 +221,8 @@ pub fn basket_of(d: doc.Doc) -> Basket {
         },
         customer_name: doc.text(customer, "name", ""),
         customer_points: doc.int_of(customer, "points", 0),
+        customer_limit: doc.int_of(customer, "credit_limit", 0),
+        customer_owed: doc.int_of(customer, "owed", 0),
         held_count: doc.int_of(d, "held_count", 0),
         shift_open: doc.bool_of(d, "shift_open", false),
         commands: map(doc.items(doc.field(d, "commands")), command_of),
@@ -354,11 +364,23 @@ pub fn held_of(d: doc.Doc) -> Held {
 
 // ---- taking payment --------------------------------------------------------
 
+/// How a basket is settled.
+///
+/// `OnAccount` is the odd one and is worth saying out loud: it is a tender that
+/// moves no money. The goods leave, the customer owes the shop, and the basket
+/// is fully tendered — which is the whole reason a tab is modelled as a tender
+/// rather than as a sale that does not add up. Paying half now is then nothing
+/// new: it is a split between cash and the tab, the same arithmetic as a split
+/// between cash and a card.
+///
+/// It is also not [`Customer.credit`], which runs the other way. That is store
+/// credit the **shop owes the customer**, and spending it is `StoreCredit`.
 pub enum Tender {
     Cash
     Card
     Wallet
     StoreCredit
+    OnAccount
 }
 
 pub fn tender_code(t: Tender) -> str {
@@ -367,6 +389,7 @@ pub fn tender_code(t: Tender) -> str {
         Card => "card",
         Wallet => "wallet",
         StoreCredit => "store_credit",
+        OnAccount => "on_account",
     }
 }
 
@@ -376,17 +399,40 @@ pub fn tender_key(t: Tender) -> str {
         Card => "card",
         Wallet => "wallet",
         StoreCredit => "store_credit",
+        OnAccount => "on_account",
     }
 }
 
 /// Only cash can produce change, which is the rule the tender screen enforces
 /// before the server has to.
+///
+/// A tab emphatically cannot. Handing a customer money out of the drawer
+/// against a balance they have not paid is the shop lending them the change as
+/// well as the shopping.
 pub fn returns_change(t: Tender) -> bool {
     return match t {
         Cash => true,
         Card => false,
         Wallet => false,
         StoreCredit => false,
+        OnAccount => false,
+    }
+}
+
+/// Whether this tender has to know whose it is.
+///
+/// Both of the two are a balance on a person: store credit is one the shop
+/// owes, a tab is one the shop is owed, and neither can be settled against
+/// nobody. The till refuses these before the request leaves the lane, so a
+/// cashier finds out while the customer is still standing there rather than
+/// after pressing Pay.
+pub fn needs_customer(t: Tender) -> bool {
+    return match t {
+        Cash => false,
+        Card => false,
+        Wallet => false,
+        StoreCredit => true,
+        OnAccount => true,
     }
 }
 
@@ -401,10 +447,18 @@ pub struct Payment {
 /// Somebody with an account, as the customer search returns them.
 ///
 /// Derived for the same reason as [`Category`]: `/till/customers` selects these
-/// five columns and no others, and every one of them is `NOT NULL` — `phone`,
-/// `points` and `credit` all carry a default in the schema rather than a null.
-/// `credit` is money and would truncate rather than round, which matters only if
-/// the server ever sends a fraction of a kyat; it does not.
+/// seven columns and no others, and every one of them is `NOT NULL` — `phone`,
+/// `points`, `credit`, `credit_limit` and `owed` all carry a default in the
+/// schema rather than a null. `credit` is money and would truncate rather than
+/// round, which matters only if the server ever sends a fraction of a kyat; it
+/// does not.
+///
+/// **`credit` and `owed` point in opposite directions and are never added.**
+/// `credit` is store credit the shop owes this person; `owed` is shopping this
+/// person owes the shop. `credit_limit` is how much of the second they are
+/// allowed to run up, and a limit of zero — the default for everybody — means
+/// no tab. The lane needs all three in the row it already fetches, because
+/// "can this basket go on the tab" is a question asked with a queue waiting.
 @derive(Decode)
 pub struct Customer {
     pub id: str
@@ -412,7 +466,10 @@ pub struct Customer {
     pub phone: str
     pub points: int
     pub credit: int
+    pub credit_limit: int
+    pub owed: int
 }
+
 
 pub struct Receipt {
     pub id: str
@@ -574,6 +631,11 @@ pub struct Paid {
     pub number: int
     pub total: int
     pub change: int
+    /// How much of this sale went on the customer's tab, so the screen can say
+    /// "K3,000 to pay" rather than leaving somebody to work it out. Read back
+    /// from the rows by the Worker, which is why it is the same figure on a
+    /// replay as on the call that was lost.
+    pub on_account: int
     pub completed_at: int
     pub replayed: bool
 }
@@ -584,7 +646,29 @@ pub fn paid_of(d: doc.Doc) -> Paid {
         number: doc.int_of(d, "number", 0),
         total: doc.int_of(d, "total", 0),
         change: doc.int_of(d, "change", 0),
+        on_account: doc.int_of(d, "on_account", 0),
         completed_at: doc.int_of(d, "completed_at", 0),
+        replayed: doc.bool_of(d, "replayed", false),
+    }
+}
+
+/// A tab, after money came off it.
+///
+/// `owed` is what the customer still owes **across every tab**, not just the
+/// ones this settlement touched, because that is the figure the cashier reads
+/// back to them over the counter.
+pub struct Settled {
+    pub id: str
+    pub total: int
+    pub owed: int
+    pub replayed: bool
+}
+
+pub fn settled_of(d: doc.Doc) -> Settled {
+    return Settled{
+        id: doc.text(d, "id", ""),
+        total: doc.int_of(d, "total", 0),
+        owed: doc.int_of(d, "owed", 0),
         replayed: doc.bool_of(d, "replayed", false),
     }
 }
@@ -1483,6 +1567,10 @@ pub struct SaleRefund {
     pub reason: str
     pub method: str
     pub total: int
+    /// How much of it came off the customer's tab rather than out of a till.
+    /// `total - on_account` is what actually left by `method`, and it is that
+    /// figure a drawer expects to be missing.
+    pub on_account: int
     pub restock: bool
     pub created_at: int
     pub by_name: str
@@ -1499,6 +1587,7 @@ pub fn sale_refund_of(d: doc.Doc) -> SaleRefund {
         reason: doc.text(d, "reason", ""),
         method: doc.text(d, "method", "cash"),
         total: doc.int_of(d, "total", 0),
+        on_account: doc.int_of(d, "on_account", 0),
         // The server restocks unless the body said otherwise, so a missing flag
         // means the goods went back on the shelf.
         restock: doc.int_of(d, "restock", 1) == 1,
@@ -1768,6 +1857,13 @@ pub struct Drawer {
     pub cash_taken: int
     pub change_given: int
     pub cash_in: int
+    /// Cash a customer put on the counter to pay off a tab, at this lane.
+    ///
+    /// Its own term rather than a paid-in cash movement, because the two are
+    /// not the same event: a paid-in is the shopkeeper putting money in, and is
+    /// booked against owner capital. This is a debt being settled, and it has
+    /// to be in the count either way — the notes are physically in the drawer.
+    pub tabs_settled: int
     pub cash_out: int
     pub cash_refunds: int
     pub expected: int
@@ -2530,6 +2626,29 @@ pub struct StockDrift {
     pub moved: float
 }
 
+/// A customer whose balance has drifted from the rows that should explain it.
+///
+/// Derived, and the same idea as [`StockDrift`] one table along:
+/// `customers.owed` is a running cache of the tab rows, and this is what checks
+/// the cache against what it caches. Unlike the stock pair it is never
+/// legitimate — a debt has only one valuation — so any row here is a bug.
+/// A sale that completed without being paid for.
+@derive(Decode)
+pub struct UntenderedSale {
+    pub id: str
+    pub number: int
+    pub total: int
+    pub at: int
+}
+
+@derive(Decode)
+pub struct TabDrift {
+    pub id: str
+    pub name: str
+    pub owed: int
+    pub derived: int
+}
+
 /// Is any of this still true — `GET /accounting/health`.
 ///
 /// Derived whole, including both nested lists: every figure is computed with a
@@ -2554,6 +2673,22 @@ pub struct Health {
     pub stock_at_cost: int
     pub stock_in_ledger: int
     pub stock_gap: int
+    pub tab_drift: [TabDrift]
+    /// Sales marked completed whose payments do not add up to their total.
+    ///
+    /// A sale is claimed before the batch that writes what it means, so an
+    /// aborted batch can leave the row completed with nothing behind it — a
+    /// basket in every takings figure that the ledger has never heard of. It is
+    /// always empty; a row here is a bug.
+    pub untendered_sales: [UntenderedSale]
+    /// What every customer owes, and what account 1100 says the shop is owed.
+    ///
+    /// Shown side by side rather than compared, because the two are allowed to
+    /// differ for one reason: a shop that gave credit before switching the
+    /// books on has debts the ledger never saw. `tab_drift` is the check that
+    /// is not allowed to have rows in it.
+    pub owed_by_customers: int
+    pub receivable_in_ledger: int
     pub healthy: bool
 }
 
@@ -2794,7 +2929,12 @@ pub struct CustomerAccount {
     pub name: str
     pub phone: str
     pub points: int
+    /// Store credit the shop owes **them**. The opposite of `owed`.
     pub credit: int
+    /// How much they may run up on a tab. Zero, the default, means no tab.
+    pub credit_limit: int
+    /// Shopping they owe **the shop**. The opposite of `credit`.
+    pub owed: int
     pub note: str
     pub created_at: int
     pub visits: int
@@ -2809,12 +2949,111 @@ pub fn customer_account_of(d: doc.Doc) -> CustomerAccount {
         phone: doc.text(d, "phone", ""),
         points: doc.int_of(d, "points", 0),
         credit: doc.int_of(d, "credit", 0),
+        credit_limit: doc.int_of(d, "credit_limit", 0),
+        owed: doc.int_of(d, "owed", 0),
         note: doc.text(d, "note", ""),
         created_at: doc.int_of(d, "created_at", 0),
         visits: doc.int_of(d, "visits", 0),
         spent: doc.int_of(d, "spent", 0),
         last_seen: doc.int_of(d, "last_seen", 0),
     }
+}
+
+// ---- what customers owe ----------------------------------------------------
+
+/// One customer's debt, banded by how old it is — `GET /customers/receivables`.
+///
+/// Derived: every column is a `SUM` over a non-empty group or a `NOT NULL`
+/// customer column, and the Worker renames the name to **`customer`** exactly as
+/// the supplier aging beside it does.
+///
+/// Four bands, not the payables report's five, and the missing one is
+/// "current". A supplier invoice has a due date to be inside of; a shop tab has
+/// none — somebody said "put it on my account" and the clock started — so every
+/// figure here is money the shop is already waiting for and the only question
+/// is how long. `d30` is measured from the day the goods left, not from a date
+/// anybody agreed.
+@derive(Decode)
+pub struct DebtRow {
+    pub customer_id: str
+    pub customer: str
+    pub d30: int
+    pub d60: int
+    pub d90: int
+    pub d90up: int
+    pub total: int
+}
+
+/// The aging table's foot, and the count of people in it.
+@derive(Decode)
+pub struct DebtTotals {
+    pub owed: int
+    pub d30: int
+    pub d60: int
+    pub d90: int
+    pub d90up: int
+    pub debtors: int
+}
+
+/// Everything owed to the shop, banded — the aging half of
+/// `GET /customers/receivables`. Derived whole, rows and foot together.
+@derive(Decode)
+pub struct DebtAging {
+    pub rows: [DebtRow]
+    pub totals: DebtTotals
+}
+
+/// Money taken off a tab, as the back office lists it.
+///
+/// Not derived: `reference` and `note` are empty rather than null, but
+/// `customer` is only joined on the shop-wide list and is absent from the one
+/// hanging off a single customer.
+pub struct TabPayment {
+    pub id: str
+    pub customer_id: str
+    pub customer: str
+    pub method: str
+    pub total: int
+    pub note: str
+    pub taken_by: str
+    pub created_at: int
+}
+
+pub fn tab_payment_of(d: doc.Doc) -> TabPayment {
+    return TabPayment{
+        id: doc.text(d, "id", ""),
+        customer_id: doc.text(d, "customer_id", ""),
+        customer: doc.text(d, "customer", ""),
+        method: doc.text(d, "method", "cash"),
+        total: doc.int_of(d, "total", 0),
+        note: doc.text(d, "note", ""),
+        taken_by: doc.text(d, "taken_by", ""),
+        created_at: doc.int_of(d, "created_at", 0),
+    }
+}
+
+/// What the shop is owed — `GET /customers/receivables`.
+///
+/// Fallible, like [`payables_of`], and for the same reason: the debtor rows are
+/// read leniently for their nullable date while the totals and the aging table
+/// decode.
+///
+/// The two halves do **not** have the same scope, again as with payables.
+/// `debtors` is the first 200 by size; `aging` is summed by the database over
+/// every unsettled receipt with no limit. `totals.owed` will not equal the sum
+/// of the listed debtors once there are more than 200 of them.
+pub struct Receivables {
+    pub aging: DebtAging
+    pub payments: [TabPayment]
+}
+
+pub fn receivables_of(d: doc.Doc) -> (Receivables, error) {
+    let (aging, aerr) = DebtAging.decode(object_at(d, "aging"))
+    check errors.wrap(aerr, "the table of what is owed would not read")
+    return Receivables{
+        aging: aging,
+        payments: map(doc.items(doc.field(d, "payments")), tab_payment_of),
+    }, nil
 }
 
 /// An offer.

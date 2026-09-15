@@ -595,14 +595,25 @@ pub fn sale_detail(answer: model.SalePage, l: i18n.Lang, c: money.Currency) -> [
         foot.push(footer)
     }
 
+    // **How it was given back, in two columns, because it can be two things.**
+    // Anything the customer still owed on this sale came off their tab first;
+    // only the remainder left by `method`. Showing the total under the method
+    // said a refund had paid out cash it had not, which is the figure a drawer
+    // is reconciled against.
     var refunds: [desk.Row] = []
     for r in answer.refunds {
+        let tab = r.on_account
         refunds.push(row(r.id, [
                     when(r.created_at),
                     r.by_name,
                     r.reason,
-                    method_of(l, r.method),
-                    money.show(r.total, c),
+                    if tab >= r.total {
+                        words.t(l, "receivables.off_the_tab")
+                    } else {
+                        method_of(l, r.method)
+                    },
+                    money.show(r.total - tab, c),
+                    money.show(tab, c),
                 ], "warn"))
     }
 
@@ -621,7 +632,8 @@ pub fn sale_detail(answer: model.SalePage, l: i18n.Lang, c: money.Currency) -> [
         out.push(table(words.t(l, "reports.refunds"), "",
                 [words.t(l, "common.when"), words.t(l, "movements.by"),
                     words.t(l, "common.reason"), words.t(l, "sales.refund_to"),
-                    words.t(l, "common.amount")], refunds))
+                    words.t(l, "common.amount"),
+                    words.t(l, "receivables.off_the_tab")], refunds))
     }
     return out
 }
@@ -709,6 +721,8 @@ pub fn shift_detail(answer: model.ShiftPage, l: i18n.Lang, c: money.Currency) ->
         row("change", [words.t(l, "shift_detail.change_given"),
                 "−\(money.show(drawer.change_given, c))"], ""),
         row("in", [words.t(l, "shifts.paid_in"), money.show(drawer.cash_in, c)], ""),
+        row("tabs", [words.t(l, "receivables.payments_taken"),
+                money.show(drawer.tabs_settled, c)], ""),
         row("out", [words.t(l, "shifts.paid_out_and_safe_drops"),
                 "−\(money.show(drawer.cash_out, c))"], ""),
         row("refunds", [words.t(l, "shifts.cash_refunds"),
@@ -1227,14 +1241,40 @@ pub fn order_detail(answer: model.OrderPage, l: i18n.Lang, c: money.Currency) ->
 
 // ---- people ----------------------------------------------------------------
 
-pub fn customers(answer: [model.CustomerAccount], l: i18n.Lang,
-    c: money.Currency) -> [desk.Block] {
+/// The people, and what stands between them and the shop.
+///
+/// Two money columns that point in opposite directions sit on this screen, and
+/// the whole of the presentation problem is keeping them apart. `credit` is
+/// store credit the shop **owes** a customer — a liability, from a refund.
+/// `owed` is shopping the customer owes **the shop** — an asset, from a tab.
+/// They have different headings, different stat cards and different tones, and
+/// they are never summed into one figure, because a shop whose books net them
+/// together is a shop that cannot tell a debtor from a creditor.
+///
+/// `debts` is the aging half and is allowed to be absent: it is fetched beside
+/// the list and one may arrive without the other. Absent means the table is
+/// skipped rather than drawn with zeros in it — nobody owing anything and
+/// nobody having asked are different answers.
+pub fn customers(answer: [model.CustomerAccount], debts: Option<model.Receivables>,
+    l: i18n.Lang, c: money.Currency) -> [desk.Block] {
     let people = answer
     var rows: [desk.Row] = []
     var credit = 0
+    var owed = 0
     for cu in people {
         credit = credit + cu.credit
+        owed = owed + cu.owed
         let seen = cu.last_seen
+        // Somebody over their limit is a row a shopkeeper has to see: it can
+        // happen without anybody breaking a rule, because lowering a limit is
+        // allowed while the existing debt stands.
+        let tone = if cu.owed > 0 && cu.owed >= cu.credit_limit {
+            "stop"
+        } else if cu.owed > 0 {
+            "warn"
+        } else {
+            ""
+        }
         rows.push(touchable(cu.id, [
                     cu.name,
                     or_dash(cu.phone),
@@ -1242,8 +1282,10 @@ pub fn customers(answer: [model.CustomerAccount], l: i18n.Lang,
                     money.show(cu.spent, c),
                     "\(cu.points)",
                     money.show(cu.credit, c),
+                    money.show(cu.owed, c),
+                    money.show(cu.credit_limit, c),
                     if seen > 0 { browser.day_of(seen) } else { words.t(l, "common.never") },
-                ], "", "form-customer", cu.id))
+                ], tone, "form-customer", cu.id))
     }
     let best = take(sorted(people, |a: model.CustomerAccount, b: model.CustomerAccount|
             a.spent > b.spent), 8)
@@ -1255,17 +1297,90 @@ pub fn customers(answer: [model.CustomerAccount], l: i18n.Lang,
         best_spent.push(cu.spent)
         visits.push(words.fill_n(l, "register.n_visits", "\(cu.visits)"))
     }
-    return [
-        desk.Block.Stats(items: [
-                desk.Stat { label: words.t(l, "customers.customers"), value: "\(rows.len())",
-                    meta: words.t(l, "customers.on_the_loyalty_list"), tone: "info" },
-                desk.Stat { label: words.t(l, "customers.store_credit_owed"),
-                    value: money.show(credit, c),
-                    meta: words.t(l, "customers.a_liability_not_a_takings_figure"),
-                    tone: if credit > 0 { "warn" } else { "ok" } },
-            ]),
+    // The aging table, and the settlements that have come in against it.
+    var aged: [desk.Row] = []
+    var taken: [desk.Row] = []
+    var debtors = 0
+    var late = 0
+    for cu in people {
+        if cu.owed > 0 {
+            debtors = debtors + 1
+        }
+    }
+    if debts != nil {
+        // **The headline comes off the aging table, not off the list.** The
+        // customer list is capped at 200 by name, and summing `owed` across it
+        // put a smaller figure in the more prominent place than the "Everybody"
+        // row at the foot of the table below — two totals of the same thing,
+        // disagreeing, on one screen. The database sums the aging over every
+        // unsettled receipt with no limit, so that is the true one; the capped
+        // sum survives only as the fallback for when the request failed.
+        owed = debts.aging.totals.owed
+        let aging = debts.aging
+        debtors = aging.totals.debtors
+        // Over sixty days means over sixty days. `d60` is the 31–60 band — the
+        // table three blocks down heads that very column "31–60" — so counting
+        // it here put money in a card labelled "Owed over 60 days" that the
+        // table beneath said was not.
+        late = aging.totals.d90 + aging.totals.d90up
+        for a in aging.rows {
+            aged.push(row(a.customer_id, [
+                        a.customer,
+                        money.show(a.d30, c), money.show(a.d60, c),
+                        money.show(a.d90, c), money.show(a.d90up, c),
+                        money.show(a.total, c),
+                    ], if a.d90up > 0 { "stop" } else if a.d60 > 0 { "warn" } else { "" }))
+        }
+        if aged.len() > 0 {
+            let sums = aging.totals
+            aged.push(row("all", [
+                        words.t(l, "receivables.everybody"),
+                        money.show(sums.d30, c), money.show(sums.d60, c),
+                        money.show(sums.d90, c), money.show(sums.d90up, c),
+                        money.show(sums.owed, c),
+                    ], "ok"))
+        }
+        for p in debts.payments {
+            taken.push(row(p.id, [
+                        browser.day_of(p.created_at),
+                        p.customer,
+                        words.t(l, "common.\(p.method)"),
+                        money.show(p.total, c),
+                        or_dash(p.note),
+                        p.taken_by,
+                    ], "ok"))
+        }
+    }
+
+    // `owed` comes off the customer rows and is always known; how much of it is
+    // *late* comes from the aging request, which is allowed to fail on its own.
+    // The "over 60 days" card is therefore only drawn when somebody actually
+    // asked and got an answer — a zero there would say nothing is overdue,
+    // which is not the same as not knowing.
+    var stats: [desk.Stat] = [
+        desk.Stat { label: words.t(l, "customers.customers"), value: "\(rows.len())",
+            meta: words.t(l, "customers.on_the_loyalty_list"), tone: "info" },
+        desk.Stat { label: words.t(l, "receivables.owed_by_customers"),
+            value: money.show(owed, c),
+            meta: words.fill_n(l, "receivables.n_on_a_tab", "\(debtors)"),
+            tone: if late > 0 { "stop" } else if owed > 0 { "warn" } else { "ok" } },
+    ]
+    if debts != nil {
+        stats.push(desk.Stat { label: words.t(l, "receivables.owed_over_60_days"),
+                value: money.show(late, c),
+                meta: words.t(l, "receivables.the_part_worth_chasing"),
+                tone: if late > 0 { "stop" } else { "ok" } })
+    }
+    stats.push(desk.Stat { label: words.t(l, "customers.store_credit_owed"),
+            value: money.show(credit, c),
+            meta: words.t(l, "customers.a_liability_not_a_takings_figure"),
+            tone: if credit > 0 { "warn" } else { "ok" } })
+
+    var blocks: [desk.Block] = [
+        desk.Block.Stats(items: stats),
         desk.Block.Buttons(items: [
                 desk.action(words.t(l, "customers.add_a_customer"), "form-customer", "", "filled"),
+                desk.action(words.t(l, "receivables.take_a_payment"), "form-settle-tab", "", ""),
             ]),
         desk.Block.Meters(heading: words.t(l, "customers.best_customers"),
             note: words.t(l, "customers.by_what_they_have_spent"),
@@ -1274,8 +1389,24 @@ pub fn customers(answer: [model.CustomerAccount], l: i18n.Lang,
             [words.t(l, "common.name"), words.t(l, "common.phone"),
                 words.t(l, "customers.visits"), words.t(l, "customers.spent"),
                 words.t(l, "customers.points"), words.t(l, "customers.credit"),
+                words.t(l, "receivables.owed"), words.t(l, "receivables.limit"),
                 words.t(l, "customers.last_seen")], rows),
     ]
+    if aged.len() > 0 {
+        blocks.push(table(words.t(l, "receivables.what_is_owed"),
+                words.t(l, "receivables.measured_from_the_day_the_goods_left"),
+                [words.t(l, "common.customer"), words.t(l, "receivables.up_to_30_days"),
+                    words.t(l, "receivables.d60"), words.t(l, "receivables.d90"),
+                    words.t(l, "receivables.over_90"), words.t(l, "receivables.owed")], aged))
+    }
+    if taken.len() > 0 {
+        blocks.push(table(words.t(l, "receivables.payments_taken"),
+                words.t(l, "receivables.money_off_a_tab"),
+                [words.t(l, "common.when"), words.t(l, "common.customer"),
+                    words.t(l, "common.how"), words.t(l, "common.amount"),
+                    words.t(l, "common.note"), words.t(l, "movements.by")], taken))
+    }
+    return blocks
 }
 
 pub fn staff(answer: [model.Staff], rules: [model.CommandRule], l: i18n.Lang) -> [desk.Block] {
@@ -1746,6 +1877,7 @@ fn books_health(sweep: Option<model.Health>, l: i18n.Lang, c: money.Currency) ->
     let orphans = health.orphan_lines
     let holds = health.equation_holds
     let drift = health.stock_drift
+    let tabs = health.tab_drift
 
     let checks: [desk.Row] = [
         row("debits", [words.t(l, "accounting.debits_equal_credits"),
@@ -1770,6 +1902,28 @@ fn books_health(sweep: Option<model.Health>, l: i18n.Lang, c: money.Currency) ->
                     words.fill_n(l, "accounting.n_adrift", "\(drift.len())")
                 }],
             if drift.len() == 0 { "ok" } else { "stop" }),
+        row("tabs", [words.t(l, "receivables.owed_matches_its_rows"),
+                if tabs.len() == 0 {
+                    words.t(l, "accounting.yes")
+                } else {
+                    words.fill_n(l, "accounting.n_adrift", "\(tabs.len())")
+                }],
+            if tabs.len() == 0 { "ok" } else { "stop" }),
+        row("owed", [words.t(l, "receivables.owed_by_customers"),
+                money.show(health.owed_by_customers, c)], ""),
+        // Side by side rather than compared. The two are allowed to differ for
+        // one reason — a shop that gave credit before switching the books on
+        // has debts the ledger never saw — and the check that is *not* allowed
+        // to fail is the row above it.
+        row("receivable", [words.t(l, "receivables.owed_in_the_ledger"),
+                money.show(health.receivable_in_ledger, c)], ""),
+        row("untendered", [words.t(l, "receivables.every_sale_was_paid_for"),
+                if health.untendered_sales.len() == 0 {
+                    words.t(l, "accounting.yes")
+                } else {
+                    words.fill_n(l, "accounting.n_adrift", "\(health.untendered_sales.len())")
+                }],
+            if health.untendered_sales.len() == 0 { "ok" } else { "stop" }),
     ]
 
     var blocks: [desk.Block] = [
@@ -1795,6 +1949,23 @@ fn books_health(sweep: Option<model.Health>, l: i18n.Lang, c: money.Currency) ->
                     words.t(l, "accounting.on_the_product"),
                     words.t(l, "accounting.in_the_movements"),
                     words.t(l, "accounting.adrift_by")], rows))
+    }
+
+    if tabs.len() > 0 {
+        var owing: [desk.Row] = []
+        for t in tabs {
+            owing.push(row(t.id, [
+                        t.name,
+                        money.show(t.owed, c),
+                        money.show(t.derived, c),
+                        money.show(t.owed - t.derived, c),
+                    ], "stop"))
+        }
+        blocks.push(table(words.t(l, "receivables.balances_adrift_from_their_rows"),
+                words.t(l, "receivables.the_balance_against_what_moved_it"),
+                [words.t(l, "common.customer"), words.t(l, "receivables.on_the_customer"),
+                    words.t(l, "receivables.in_the_rows"),
+                    words.t(l, "accounting.adrift_by")], owing))
     }
 
     let shelf = health.stock_at_cost

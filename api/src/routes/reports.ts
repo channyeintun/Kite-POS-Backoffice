@@ -4,6 +4,7 @@ import { now } from "../env.js";
 import { all, currencyOf, one, readSettings } from "../lib/db.js";
 import { badRequest } from "../lib/http.js";
 import { csvDoc, csvResponse, isoDay, isoStamp, plainAmount, plainNumber, preamble } from "../lib/csv.js";
+import { OUTSTANDING_ON_SALE } from "../lib/credit.js";
 import { expectedInDrawer } from "./shifts.js";
 
 export const reports = new Hono<Ctx>();
@@ -278,7 +279,7 @@ reports.get("/inventory", async (c) => {
 
 const REPORTS = [
   "products", "categories", "sales", "tenders", "staff",
-  "shrinkage", "tax", "inventory", "shifts", "expenses",
+  "shrinkage", "tax", "inventory", "shifts", "expenses", "receivables",
 ] as const;
 
 /**
@@ -569,6 +570,59 @@ reports.get("/export", async (c) => {
     }
     rows.push([]);
     rows.push(["", "Totals", "", "", money(expenses.reduce((a, e) => a + e.amount, 0))]);
+  }
+
+  if (report === "receivables") {
+    const debts = await all<{
+      customer: string; phone: string; owed: number; credit_limit: number;
+      oldest: number | null; d30: number; d60: number; d90: number; d90up: number;
+    }>(
+      c.env.DB,
+      `SELECT cu.name AS customer, cu.phone AS phone, cu.credit_limit AS credit_limit,
+              MIN(x.at) AS oldest,
+              SUM(CASE WHEN days <= 30              THEN out ELSE 0 END) AS d30,
+              SUM(CASE WHEN days BETWEEN 31 AND 60  THEN out ELSE 0 END) AS d60,
+              SUM(CASE WHEN days BETWEEN 61 AND 90  THEN out ELSE 0 END) AS d90,
+              SUM(CASE WHEN days > 90               THEN out ELSE 0 END) AS d90up,
+              SUM(out) AS owed
+         FROM (
+           SELECT s.customer_id, s.completed_at AS at,
+                  ${OUTSTANDING_ON_SALE} AS out,
+                  (?1 - COALESCE(s.completed_at, ?1)) / 86400 AS days
+             FROM sales s
+            WHERE s.status = 'completed' AND s.customer_id IS NOT NULL
+         ) x
+         JOIN customers cu ON cu.id = x.customer_id
+        WHERE x.out > 0
+        GROUP BY cu.id, cu.name, cu.phone, cu.credit_limit
+        ORDER BY owed DESC`,
+      now(),
+    );
+    // Like the stock valuation: a debt is owed today whatever window was asked
+    // for, and a file that silently ignored the range would leave somebody
+    // wondering why last month's export matches this month's.
+    rows.push(["Note", "What is owed as at export time; the period above does not apply"]);
+    rows.push([]);
+    rows.push([
+      "Customer", "Phone", "Owed since", "Up to 30 days", "31-60", "61-90",
+      "Over 90", "Owed", "Credit limit",
+    ]);
+    for (const r of debts) {
+      rows.push([
+        r.customer, r.phone, r.oldest ? isoDay(r.oldest) : "",
+        money(r.d30), money(r.d60), money(r.d90), money(r.d90up),
+        money(r.owed), money(r.credit_limit),
+      ]);
+    }
+    rows.push([]);
+    rows.push([
+      "Totals", "", "",
+      money(debts.reduce((a, r) => a + r.d30, 0)),
+      money(debts.reduce((a, r) => a + r.d60, 0)),
+      money(debts.reduce((a, r) => a + r.d90, 0)),
+      money(debts.reduce((a, r) => a + r.d90up, 0)),
+      money(debts.reduce((a, r) => a + r.owed, 0)),
+    ]);
   }
 
   return csvResponse(`${report}-${isoDay(from)}.csv`, csvDoc(rows));

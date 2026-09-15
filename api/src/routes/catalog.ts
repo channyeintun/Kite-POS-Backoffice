@@ -119,10 +119,17 @@ catalog.post("/products", async (c) => {
 
   await run(
     c.env.DB,
+    // `photo_key` is bound and has to be *named*. It was passed as an
+    // eighteenth argument to a statement with seventeen placeholders, which D1
+    // refuses outright — "wrong number of parameter bindings" — so every
+    // attempt to add a product answered 500 and no product could be created at
+    // all. Naming the column fixes both halves at once: the count matches, and
+    // a picture taken at the counter is stored on the row it belongs to
+    // instead of being dropped.
     `INSERT INTO products (id, sku, name, name_my, category_id, supplier_id, cost, price,
                            tax_bp, min_age, unit, ask_price, stock, reorder_point, reorder_qty,
-                           quick_key, active, created_at, updated_at)
-     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,0,?13,?14,?15,?16,?17,?17)`,
+                           quick_key, active, created_at, updated_at, photo_key)
+     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,0,?13,?14,?15,?16,?17,?17,?18)`,
     id,
     sku,
     f.name,

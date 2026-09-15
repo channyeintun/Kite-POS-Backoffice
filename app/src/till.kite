@@ -399,6 +399,23 @@ fn taken_row(app: store.App, index: int, p: model.Payment) -> html.Node {
             ]))
 }
 
+/// What the tab can still take, in a sentence.
+///
+/// Three different refusals read as three different sentences, because "that
+/// cannot go on the tab" tells a cashier nothing they can act on: attach a
+/// customer, ask a manager to raise the limit, or take part of it in cash are
+/// three different next moves.
+fn tab_note(app: store.App) -> str {
+    if app.basket.customer_name.len() == 0 {
+        return t(app, "tab_needs_customer")
+    }
+    let room = store.tab_room(app)
+    if room <= 0 {
+        return t(app, "tab_no_room")
+    }
+    return "\(t(app, "tab_room")) \(amount(app, room))"
+}
+
 fn work_tender(app: store.App) -> html.Node {
     let due = store.balance_due(app)
     let change = store.change_due(app)
@@ -428,8 +445,18 @@ fn work_tender(app: store.App) -> html.Node {
                     tender_button(app, model.Tender.Card, "card"),
                     tender_button(app, model.Tender.Wallet, "wallet"),
                     tender_button(app, model.Tender.StoreCredit, "store_credit"),
+                    tender_button(app, model.Tender.OnAccount, "on_account"),
                 ])),
-        html.keyed("rule", html.txt("p", [html.class("rule")], t(app, "only_cash_change"))),
+        // What the tab will still take, said plainly and only when it is the
+        // tender in hand. A cashier choosing cash does not need to be told
+        // about somebody's credit limit, and a cashier choosing the tab needs
+        // to be told before they type rather than after they press Add.
+        html.keyed("rule", html.txt("p", [html.class("rule")],
+                if app.tender == model.Tender.OnAccount {
+                    tab_note(app)
+                } else {
+                    t(app, "only_cash_change")
+                })),
         html.keyed("entry", html.el("div", [html.class("entry")], [
                     html.keyed("k", html.txt("span", [html.class("entry-label")],
                             t(app, "cash_tendered"))),
@@ -551,14 +578,28 @@ fn found_body(app: store.App) -> html.Node {
 fn customers_body(app: store.App) -> html.Node {
     var rows: [html.Node] = []
     for cu in app.customers {
+        // What they owe sits where the points do, because at a counter it is
+        // the more urgent of the two: a customer with a tab is somebody the
+        // shopkeeper wants to mention it to before ringing anything else.
+        var cells: [html.Node] = [
+            html.keyed("name", html.txt("span", [html.class("name")], cu.name)),
+            html.keyed("phone", html.txt("span", [html.class("detail")], cu.phone)),
+        ]
+        if cu.owed > 0 {
+            cells.push(html.keyed("owed", html.txt("span", [html.class("now warn")],
+                        "\(t(app, "owes")) \(amount(app, cu.owed))")))
+            // Its own action, inside the row, so the tap that attaches somebody
+            // to a basket and the tap that takes money off their tab are two
+            // different targets rather than one button that guesses.
+            cells.push(html.keyed("settle", button(t(app, "pay_tab"), "ghost small",
+                        [html.data("action", "pay-tab"), html.data("id", cu.id)])))
+        } else {
+            cells.push(html.keyed("points", html.txt("span", [html.class("now")],
+                        "\(cu.points) pts")))
+        }
         rows.push(html.keyed(cu.id, html.el("li",
                     [html.class("held-row"), html.data("action", "customer-pick"),
-                        html.data("id", cu.id)], [
-                        html.keyed("name", html.txt("span", [html.class("name")], cu.name)),
-                        html.keyed("phone", html.txt("span", [html.class("detail")], cu.phone)),
-                        html.keyed("points", html.txt("span", [html.class("now")],
-                                "\(cu.points) pts")),
-                    ])))
+                        html.data("id", cu.id)], cells)))
     }
     if rows.len() == 0 {
         return html.keyed("none", html.txt("p", [html.class("lede")], t(app, "no_customers")))
@@ -800,6 +841,33 @@ fn overlay_of(app: store.App) -> [html.Node] {
                     html.keyed("price", html.txt("div", [html.class("entry-value")], price)),
                     html.keyed("actions", html.el("div", [html.class("panel-actions")], [
                                 html.keyed("close", button(t(app, "cancel"), "ghost", [act("dismiss")])),
+                            ])),
+                ]),
+        ],
+        // Settling a tab. The keypad opens with nothing in it rather than with
+        // the balance filled in, because part payment is the ordinary case at a
+        // counter — somebody pays what they have on them — and a prefilled
+        // field that has to be cleared first is a field that gets sent as it
+        // stands. The whole balance is one tap on the quick button instead.
+        PayTab(customer_id, name, owed) => [
+            shade("paytab", "\(t(app, "pay_tab")) · \(name)", [
+                    html.keyed("owed", html.el("div", [html.class("due")], [
+                                html.keyed("k", html.txt("span", [], t(app, "owes"))),
+                                html.keyed("v", html.txt("span", [html.class("due-value")],
+                                        amount(app, owed))),
+                            ])),
+                    html.keyed("entry", html.txt("div", [html.class("entry-value")],
+                            money.plain(or_else(money.from_keys(app.entry, store.currency_of(app)), 0),
+                                store.currency_of(app)))),
+                    html.keyed("quick", html.el("div", [html.class("quicks")], [
+                                html.keyed("all", button(t(app, "the_lot"), "quick",
+                                        [html.data("action", "quick"), html.data("id", "\(owed)")])),
+                            ])),
+                    keypad(app, "b"),
+                    html.keyed("actions", html.el("div", [html.class("panel-actions")], [
+                                html.keyed("no", button(t(app, "cancel"), "ghost", [act("dismiss")])),
+                                html.keyed("yes", button(t(app, "confirm"), "commit",
+                                        [html.data("action", "tab-ok"), html.data("id", customer_id)])),
                             ])),
                 ]),
         ],

@@ -391,6 +391,31 @@ fn add_tender(app: store.App) {
         repaint(app)
         return
     }
+    // A tab belongs to somebody, and only up to what they are trusted with.
+    //
+    // Both of these are refused by the server too — they have to be, because a
+    // limit enforced only at a lane is not a limit. Saying so here is about
+    // *when* the cashier finds out: while the customer is still choosing how
+    // to pay, rather than after pressing Pay on a basket that has to be taken
+    // apart again.
+    if model.needs_customer(app.tender) && app.basket.customer_name.len() == 0 {
+        // Two tenders need somebody and they need them for opposite reasons, so
+        // they say so differently: store credit is a balance the shop owes and
+        // has none to spend without a holder; a tab is a balance the shop is
+        // owed and has nobody to chase.
+        store.went_wrong(app, if app.tender == model.Tender.OnAccount {
+                i18n.t(app.lang, "tab_needs_customer")
+            } else {
+                i18n.t(app.lang, "credit_needs_customer")
+            })
+        repaint(app)
+        return
+    }
+    if app.tender == model.Tender.OnAccount && typed > store.tab_room(app) {
+        store.went_wrong(app, i18n.t(app.lang, "tab_no_room"))
+        repaint(app)
+        return
+    }
     store.add_payment(app, model.Payment{ tender: app.tender, amount: typed, reference: "" })
     repaint(app)
 }
@@ -425,13 +450,23 @@ async fn do_pay(app: store.App) {
     }
     let change = answer.change
     let number = answer.number
+    let owing = answer.on_account
     store.clear_payments(app)
     store.go_to_mode(app, store.Mode.Sale)
+    // The one line the cashier reads back to the customer: change first,
+    // because there is money in their hand waiting for it, then what went on
+    // the tab. **Both, not one or the other** — a customer who says "put 500 on
+    // my tab" and hands over the only note they have gets change *and* a debt,
+    // and an else-if told them about the change only. The tab figure comes back
+    // off the rows, so a replay says the same thing.
+    var said = "#\(number)"
     if change > 0 {
-        store.say(app, "#\(number) · \(i18n.t(app.lang, "change_due")) \(money.show(change, store.currency_of(app)))")
-    } else {
-        store.say(app, "#\(number)")
+        said = "\(said) · \(i18n.t(app.lang, "change_due")) \(money.show(change, store.currency_of(app)))"
     }
+    if owing > 0 {
+        said = "\(said) · \(i18n.t(app.lang, "on_account")) \(money.show(owing, store.currency_of(app)))"
+    }
+    store.say(app, said)
     repaint(app)
     refresh(app)
 }
@@ -539,6 +574,59 @@ async fn do_attach_customer(app: store.App, id: str) {
     settle(app, answer)
 }
 
+/// Money off a tab, taken at the counter.
+///
+/// A plain `fn` in front of the async one, like `finish`: an `async fn` body
+/// does not run when it is called, it queues — so a guard written at the top of
+/// one has not run when the next tap arrives. The busy flag has to be set here,
+/// before anything is awaited, or a double tap sends two settlements.
+fn settle_tab(app: store.App, customer_id: str) {
+    if app.busy {
+        return
+    }
+    let typed = money.from_keys(app.entry, store.currency_of(app))
+    if typed == nil {
+        return
+    }
+    if typed <= 0 {
+        return
+    }
+    store.working(app, true)
+    repaint(app)
+    do_settle_tab(app, customer_id, typed)
+}
+
+async fn do_settle_tab(app: store.App, customer_id: str, amount: int) {
+    // The key is kept on `App` against this customer, not made here and not
+    // held in the dialog — see `store.settle_key_of`. A key of its own, too,
+    // not the basket's: `pay_key` belongs to a sale and is reset when the
+    // basket changes, and borrowing it would let a retried settlement be
+    // answered with a sale.
+    let (answer, err) = await api.pay_tab(store.token_of(app), customer_id, amount,
+        model.Tender.Cash, store.settle_key_of(app, customer_id, crypto.token()))
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    store.reachable(app, true)
+    store.settled_tab(app)
+    store.dismiss(app)
+    // What was taken, and what is left — the two things the cashier reads back
+    // over the counter.
+    store.say(app, "\(i18n.t(app.lang, "tab_paid")) \(money.show(answer.total, store.currency_of(app))) · \(i18n.t(app.lang, "owes")) \(money.show(answer.owed, store.currency_of(app)))")
+    store.working(app, false)
+    // **Drawn here, before the refresh.** `refresh` is an `async fn`, so calling
+    // it only queues — nothing reaches the screen on this turn. Without this the
+    // dialog sat there for a whole round trip after the money had been taken,
+    // and if that basket read then failed on the same bad link, the first paint
+    // after a *successful* settlement was the red offline bar with the
+    // confirmation never shown at all.
+    repaint(app)
+    // The basket is refreshed because the customer on it may be the one who
+    // just settled, and the tender screen reads their remaining room off it.
+    refresh(app)
+}
+
 async fn do_new_customer(app: store.App, name: str, phone: str) {
     let (answer, err) = await api.new_customer(store.token_of(app), name, phone)
     if err != nil {
@@ -587,7 +675,23 @@ async fn do_return(app: store.App, sale_id: str, reason: str, manager_pin: str) 
         return
     }
     store.dismiss(app)
-    store.say(app, "\(i18n.t(app.lang, "return")) \(money.show(doc.int_of(answer, "total", 0), store.currency_of(app)))")
+    // **What leaves the drawer, not what the goods were worth.**
+    //
+    // A refund has two legs: anything the customer still owes on the sale comes
+    // off their tab first, and only the remainder is counted out of the till.
+    // Saying the total here told the cashier to hand over money the shop was
+    // never going to book — a K900 line on a basket half paid on account reads
+    // "Return K900" while the drawer only expects K400 to leave, so the lane
+    // closes short by the difference and the customer is up by it. Both figures
+    // are on the answer; both are said.
+    let back = doc.int_of(answer, "total", 0)
+    let tab = doc.int_of(answer, "on_account", 0)
+    let money_back = back - tab
+    var said = "\(i18n.t(app.lang, "return")) \(money.show(money_back, store.currency_of(app)))"
+    if tab > 0 {
+        said = "\(said) · \(i18n.t(app.lang, "on_account")) \(money.show(tab, store.currency_of(app)))"
+    }
+    store.say(app, said)
     repaint(app)
     refresh(app)
 }
@@ -681,6 +785,15 @@ fn clicked(app: store.App, e: dom.Event) {
         return
     }
     if name == "dismiss" {
+        // Not while something is in flight. Closing a dialog whose request has
+        // not answered yet is how a cashier ends up sending the same money
+        // twice — they are shown "the lane is offline", close the dialog
+        // *because* of it, and open a fresh one. The key on `App` makes the
+        // retry safe either way; this makes the dialog stop lying about being
+        // idle.
+        if app.busy {
+            return
+        }
         store.dismiss(app)
         repaint(app)
         return
@@ -700,7 +813,7 @@ fn clicked(app: store.App, e: dom.Event) {
         return
     }
     if name == "tender" {
-        // **The repaint stays outside.** These four arms do not return — the
+        // **The repaint stays outside.** These five arms do not return — the
         // tail below runs whichever fires, and for an id none of them names it
         // runs alone. Moving the repaint into the arms would stop an
         // unrecognised tender redrawing at all, which is a real change.
@@ -709,6 +822,7 @@ fn clicked(app: store.App, e: dom.Event) {
             "card" => store.choose_tender(app, model.Tender.Card),
             "wallet" => store.choose_tender(app, model.Tender.Wallet),
             "store_credit" => store.choose_tender(app, model.Tender.StoreCredit),
+            "on_account" => store.choose_tender(app, model.Tender.OnAccount),
             _ => { },
         }
         repaint(app)
@@ -855,6 +969,20 @@ fn clicked(app: store.App, e: dom.Event) {
         do_attach_customer(app, id)
         return
     }
+    if name == "pay-tab" {
+        let who = find(app.customers, |cu: model.Customer| cu.id == id)
+        if who == nil {
+            return
+        }
+        store.show(app, store.Overlay.PayTab(customer_id: id, name: who.name,
+                owed: who.owed))
+        repaint(app)
+        return
+    }
+    if name == "tab-ok" {
+        settle_tab(app, id)
+        return
+    }
     if name == "customer-new" {
         let typed_name = field_value("#who")
         if typed_name.len() == 0 {
@@ -949,6 +1077,9 @@ fn typed(app: store.App, e: dom.Event) {
             }
         },
         "Escape" => {
+            if app.busy {
+                return
+            }
             store.dismiss(app)
             repaint(app)
             return

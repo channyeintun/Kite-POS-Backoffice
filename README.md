@@ -57,7 +57,7 @@ category tabs, search, a merged basket (a rescan makes "×3", not three rows),
 offers shown on the line with the shelf price struck through, age checks that
 give the operator the date to check against, held baskets that survive a
 refresh because they are database rows, split tender across cash / card /
-wallet / store credit, price checks, and EN ⇄ မြန်မာ.
+wallet / store credit / **on account**, price checks, and EN ⇄ မြန်မာ.
 
 The full command bar is live, gated exactly as the matrix says: **Hold**,
 **Held**, **Customer** (search, attach, or sign somebody up at the counter),
@@ -78,9 +78,9 @@ out).
 | Products | the catalogue, flagged low and out, each with a picture taken at the counter or chosen from the device; categories add and — once empty — remove |
 | Inventory | valuation at cost and retail, what needs attention, and value by category |
 | Purchasing | the reorder worksheet from what actually sold, purchase orders, and payables aged into buckets by supplier — with an invoice raised in error cancellable rather than payable |
-| Customers | visits, spend, points and store credit |
+| Customers | visits, spend, points, store credit — and what they owe: each customer's limit and balance, the debt aged into bands, and the settlements taken against it |
 | Promotions | every offer, whether it is live, and what each one gave away |
-| Reports | the trading day by hour, products and categories by margin, tenders, by cashier, tax collected by rate, dead stock, and stock valuation — ten of them, all exportable |
+| Reports | the trading day by hour, products and categories by margin, tenders, by cashier, tax collected by rate, dead stock, and stock valuation — ten of them, all exportable, plus what customers owe |
 | Accounting | eight sheets — summary with a ledger-health sweep, profit and loss, balance sheet, trial balance, general ledger, journal, chart of accounts, periods — over a window you pick, each saving as CSV |
 | Expenses | what was spent, against which account, and the tax paid on it |
 | Staff & access | the two roles, and the command matrix the till's command bar is built from |
@@ -95,6 +95,56 @@ or the lot).
 
 The whole of `corner-mart-pos` except its AI assistant, which was excluded
 deliberately.
+
+### Selling on credit
+
+A corner shop gives credit, so the till does. **On account** is a fifth tender:
+the goods leave, the customer owes the shop, and the basket is fully tendered.
+Paying half now is then nothing new — it is a split between a tender that is
+money and one that is not, the same arithmetic as a split between cash and a
+card — which is why nothing downstream had to learn that a sale might not add
+up. The rule that payments must cover the total is untouched.
+
+- **A limit, per customer, defaulting to nothing.** Trusting somebody with the
+  shop's stock is a decision a person makes about a person, not a default, so
+  `credit_limit` starts at zero and a manager raises it in the back office. It
+  is enforced by the write that takes it — `WHERE owed + ? <= credit_limit` —
+  because D1 has no interactive transaction and two lanes reading the same
+  balance would both sell.
+- **`customers.owed` is a running figure**, kept so the lane can answer "can
+  this go on the tab" in one read, exactly as `products.stock` is. What makes
+  it trustworthy is that every change to it is a row that says what moved it: a
+  payment of method `on_account`, a settlement, or a refund against an unpaid
+  sale. The same number is derivable from those rows, and the two are equal by
+  construction.
+- **Settlements pay the oldest receipt first**, at a lane or in the back
+  office, allocated receipt by receipt so the aging report means what an
+  accountant reads it to mean. Cash taken at a lane is a term of that shift's
+  expected drawer; cash taken in the office comes out of the safe, which has no
+  drawer to count it in.
+- **Goods bought on a tab come back onto the tab first.** A cash refund on a
+  sale nobody has paid for hands over money the shop never received, against
+  goods it now has back on the shelf. So a refund has two legs: the debt is
+  paid down up to what it still holds, and only the remainder goes back as
+  money. `refunds.on_account` records the split, and a drawer expects
+  `total − on_account` to be missing — a refund that took nothing out of the
+  till must not be counted as though it did.
+
+  Refusing instead was the first attempt and it was wrong: a basket paid half
+  in cash and half on the tab could then not be returned by any method from any
+  screen, because whatever came back was worth more than the tab still held.
+  That is the most ordinary case this feature creates. Neither door asks the
+  operator to work the split out, and both say what actually leaves the till.
+- **Aged by how long the shop has been waiting**, in four bands from the day
+  the goods left — not five, because a shop tab has no agreed date to break.
+  Nobody signed terms; somebody said "put it on my account" and the clock
+  started.
+
+In the books it is account **1100 Owed by customers**, an asset. It is the
+mirror of `2200 Store credit owed`, which is what the shop owes a *customer*
+after a refund, and the two are never netted: a shop whose books collapse them
+into one figure cannot tell a debtor from a creditor. They have separate
+columns, separate accounts and separate words in both languages.
 
 ## How the money works
 
@@ -159,9 +209,19 @@ correction") has always told you to do.
 
 **The books re-check themselves** every time the page opens: debits against
 credits, every entry individually, lines with no entry, the accounting
-equation, and `products.stock` against the sum of its own movements. Structure
-stops most mistakes and the posting rules stop the rest, but neither catches a
-bug that already shipped.
+equation, `products.stock` against the sum of its own movements,
+`customers.owed` against the tab rows that are supposed to explain it, and every
+completed sale against the payments that should add up to it.
+
+The last two were added because adversarial reviewers produced exactly the
+failures they now look for. One fired a settlement and a refund at a single debt
+at the same moment, and both were allowed to clear it. Another closed the month
+under a sale so the journal trigger aborted its batch, and the sale stayed
+`completed` with no payment, no stock movement and no posting behind it —
+counted in every takings figure, invisible to the ledger, and the accounting
+equation holding *because* nothing was posted. Structure stops most mistakes and
+the posting rules stop the rest; neither catches a bug that has already shipped,
+and neither of those two would have raised a thing.
 
 The stock valuation note underneath is deliberately *not* a failure. The
 shelves are valued at what each product costs **today**; account 1200 carries
@@ -171,7 +231,7 @@ side with the reason rather than raised as an alarm.
 
 ### Exports
 
-Every accounting sheet and all ten operational reports save as CSV, over
+Every accounting sheet and all eleven operational reports save as CSV, over
 whatever window is on screen.
 
 The decisions in `api/src/lib/csv.ts` are all about the one place in this system
@@ -359,8 +419,14 @@ the same `tsconfig.json`; nothing in the config had to change.
 `test/smoke.mjs` sets a shop up, puts a cashier on a lane, rings a basket with
 an offer and an age-restricted line, refuses a short payment and a card charged
 more than the total, takes a split payment, and refunds a line twice to check
-the second is refused. Then it re-checks every bug the two audits found, saves
-all sixteen exports and reads their headers back, and confirms the ledger
+the second is refused. It sells a basket half in cash and half on a customer's
+tab, refuses one over the limit and one with nobody to charge, settles the tab
+at the counter and again from the office, replays the settlement to check the
+money is taken once, returns a part-paid item and checks the tab takes its
+share before any money moves, fires a settlement and a refund at one debt
+together and checks it is relieved once, and confirms the drawer expects the
+cash a lane took off a tab. Then it re-checks every bug the two audits found, saves
+all seventeen exports and reads their headers back, and confirms the ledger
 balances and the sheet does too.
 
 **It turns the books on itself**, so the accounting half runs on any shop
@@ -419,6 +485,12 @@ Stated rather than implied:
   build hit a codegen bug where it wasn't, and nothing caught it until the page
   was open. Fixed upstream in Kite 0.1.5; the validation stays, because it costs
   a millisecond and the failure mode is a blank screen with no error.
+- **Writing a debt off is not built.** A tab that will never be paid can be
+  cleared by refunding the goods against it, which is right when the goods came
+  back and wrong when they did not. A real write-off is a posting to a bad-debt
+  expense account — `5300`, kept free for it, below the range the expense
+  screen offers so the machinery-posted 5000-series cannot be hand-posted twice
+  — plus the allocation and the audit row that say who forgave what.
 - **The chart of accounts is seeded, not editable.** Corner Mart lets an
   account be added, renamed and deactivated; here the sixteen seeded accounts
   plus the seven operating ones are what a corner shop needs, and a migration

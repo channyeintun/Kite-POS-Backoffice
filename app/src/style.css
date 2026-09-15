@@ -482,7 +482,12 @@ main.lane { display: flex; flex: 1; min-width: 0; min-height: 0; }
   font-size: 15px;
 }
 
+/* Five tenders in two columns, so the fifth sits alone on the last row and is
+ * widened across both. That is the right accident: "on account" is the one
+ * tender that takes no money, and putting it on its own line beside nothing
+ * else is what keeps a cashier from pressing it for a card. */
 .tenders { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--gap); }
+.tenders .tender:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .tender {
   height: 64px;
   border: 1px solid var(--edge);
@@ -641,6 +646,9 @@ main.lane { display: flex; flex: 1; min-width: 0; min-height: 0; }
 .held-row {
   display: grid;
   grid-template-columns: 1fr auto auto auto;
+  /* `auto auto auto` covers the widest of these rows — a customer with a tab,
+   * which carries a phone number, what they owe, and the button that takes
+   * money for it. A row with fewer cells simply leaves the last tracks empty. */
   align-items: center;
   gap: 12px;
   padding: 12px;
@@ -648,6 +656,11 @@ main.lane { display: flex; flex: 1; min-width: 0; min-height: 0; }
   background: var(--raised);
 }
 .held-row .chip { height: 44px; padding: 0 14px; }
+/* What somebody owes, on the row the cashier is about to attach to a basket. */
+.held-row .now.warn { color: var(--warn); }
+/* A second action inside a row that already has one. Short enough not to
+ * compete with the row itself for the finger, tall enough to be hit. */
+.ghost.small { flex: none; height: 44px; padding: 0 14px; font-size: 14px; }
 
 /* ---- signing in ---------------------------------------------------------- */
 

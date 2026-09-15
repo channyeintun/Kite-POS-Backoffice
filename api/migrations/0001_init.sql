@@ -77,10 +77,11 @@ CREATE INDEX sessions_expiry ON sessions (expires_at);
 -- Shifts: a drawer session
 -- ---------------------------------------------------------------------------
 --
--- `expected` is never written by a human. It is opening_float + cash taken −
--- change given + cash in − cash out − cash refunds, derived at close from the
--- rows that caused each term. `counted` is the only figure a person types, and
--- the difference between them is the variance the books have to absorb.
+-- `expected` is never written by a human. It is derived at close from the rows
+-- that caused each term — see `expectedInDrawer` in `api/src/routes/shifts.ts`,
+-- which is the one place the formula lives and which has gained terms since
+-- this file was written. `counted` is the only figure a person types, and the
+-- difference between them is the variance the books have to absorb.
 
 CREATE TABLE shifts (
   id             TEXT PRIMARY KEY,

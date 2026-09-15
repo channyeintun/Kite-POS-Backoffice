@@ -513,6 +513,25 @@ pub async fn set_customer(token: str, customer_id: str) -> (Answer, error) {
     return answer_of(answer), nil
 }
 
+/// Money off a tab, taken at the counter.
+///
+/// `client_id` is the idempotency key and is not optional. This is money over a
+/// counter on a connection that drops: a settlement that completes and loses
+/// its answer must find itself on the retry rather than be taken a second time.
+/// It is minted per settlement — never the basket's `pay_key`, which belongs to
+/// a sale and is reset when the basket changes.
+pub async fn pay_tab(token: str, customer_id: str, amount: int, tender: model.Tender,
+    client_id: str) -> (model.Settled, error) {
+    var body: { str: json.Json } = { }
+    body["client_id"] = json.Json.Text(client_id)
+    body["customer_id"] = json.Json.Text(customer_id)
+    body["amount"] = json.Json.Number(amount as float)
+    body["method"] = json.Json.Text(model.tender_code(tender))
+    let (answer, err) = await post(token, "/till/account-payment", json.Json.Object(body))
+    check err
+    return model.settled_of(answer), nil
+}
+
 pub async fn new_customer(token: str, name: str, phone: str) -> (model.Created, error) {
     var body: { str: json.Json } = { }
     body["name"] = json.Json.Text(name)
@@ -700,6 +719,20 @@ pub async fn customers(token: str) -> ([model.CustomerAccount], error) {
     let (answer, err) = await get(token, "/customers")
     check err
     return map(doc.items(doc.field(answer, "customers")), model.customer_account_of), nil
+}
+
+/// Who owes the shop, how much, and how long they have owed it.
+pub async fn receivables(token: str) -> (model.Receivables, error) {
+    let (answer, err) = await get(token, "/customers/receivables")
+    check err
+    return model.receivables_of(answer)
+}
+
+/// Money off a tab, taken in the back office — out of the safe, not a drawer.
+pub async fn settle_tab(token: str, id: str, body: json.Json) -> (model.Created, error) {
+    let (answer, err) = await post(token, "/customers/\(id)/payments", body)
+    check err
+    return made_of(answer, "that payment was recorded but came back without an id")
 }
 
 /// Every offer, and the moment the server judged them at.

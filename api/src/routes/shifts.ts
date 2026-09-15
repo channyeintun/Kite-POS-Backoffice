@@ -12,9 +12,10 @@ export const shifts = new Hono<Ctx>();
  * What the drawer should hold.
  *
  * **Derived, never typed.** Opening float, plus cash taken, less change given,
- * plus cash in, less cash out, less cash refunds — each term summed from the
- * rows that caused it. The only figure a person enters is the counted total,
- * and the difference between the two is the variance the books absorb.
+ * plus cash in, plus tabs settled at this lane, less cash out, less cash
+ * refunds — each term summed from the rows that caused it. The only figure a
+ * person enters is the counted total, and the difference between the two is
+ * the variance the books absorb.
  *
  * Written as one query so the terms cannot be computed against different
  * moments: a sale landing between two round trips would otherwise appear in the
@@ -27,6 +28,7 @@ export async function expectedInDrawer(db: D1Database, shiftId: string): Promise
   cash_in: number;
   cash_out: number;
   cash_refunds: number;
+  tabs_settled: number;
   expected: number;
 }> {
   const row = await one<{
@@ -36,6 +38,7 @@ export async function expectedInDrawer(db: D1Database, shiftId: string): Promise
     cash_in: number;
     cash_out: number;
     cash_refunds: number;
+    tabs_settled: number;
   }>(
     db,
     `SELECT
@@ -50,8 +53,25 @@ export async function expectedInDrawer(db: D1Database, shiftId: string): Promise
                   WHERE m.shift_id = sh.id AND m.kind = 'paid_in'), 0) AS cash_in,
        COALESCE((SELECT SUM(m.amount) FROM cash_movements m
                   WHERE m.shift_id = sh.id AND m.kind IN ('paid_out', 'safe_drop')), 0) AS cash_out,
-       COALESCE((SELECT SUM(r.total) FROM refunds r
-                  WHERE r.shift_id = sh.id AND r.method = 'cash'), 0) AS cash_refunds
+       -- The money part only. A refund given back against a customer's tab
+       -- took nothing out of the drawer, so counting its full total here would
+       -- expect the till to be short by goods that were never paid for.
+       COALESCE((SELECT SUM(r.total - r.on_account) FROM refunds r
+                  WHERE r.shift_id = sh.id AND r.method = 'cash'), 0) AS cash_refunds,
+       -- Money paid off a tab at this lane.
+       --
+       -- It is a term of its own rather than a paid_in cash movement, and the
+       -- difference is not bookkeeping pedantry: cashMovementEntry posts a
+       -- paid_in against owner capital, which would say the shopkeeper put the
+       -- money in themselves and would leave the debt standing. This is a
+       -- customer settling a debt, and the drawer has to know about it either
+       -- way -- notes went into it, and a count that does not expect them reads
+       -- as a surplus booked to cash over and short against whoever was on the
+       -- lane.
+       --
+       -- Only cash. A tab settled by card or wallet never reaches the drawer.
+       COALESCE((SELECT SUM(cp.total) FROM customer_payments cp
+                  WHERE cp.shift_id = sh.id AND cp.method = 'cash'), 0) AS tabs_settled
      FROM shifts sh WHERE sh.id = ?1`,
     shiftId,
   );
@@ -59,7 +79,8 @@ export async function expectedInDrawer(db: D1Database, shiftId: string): Promise
   const expected =
     row.opening_float +
     (row.cash_taken - row.change_given) +
-    row.cash_in -
+    row.cash_in +
+    row.tabs_settled -
     row.cash_out -
     row.cash_refunds;
   return { ...row, expected };
