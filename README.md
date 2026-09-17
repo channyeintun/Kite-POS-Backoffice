@@ -496,14 +496,17 @@ Stated rather than implied:
   plus the seven operating ones are what a corner shop needs, and a migration
   adds more. The screen lists them and drills into each one's ledger, which is
   what the chart is read for.
-- **Two tablet items are CSS-complete but structurally deferred.** The command
-  strip still spans the full width rather than the work column in landscape,
-  and the tender screen keeps its summary in the work area rather than moving
-  the tender rows into the ledger. Both are `page()`/`work_tender()` changes in
+- **One tablet item is CSS-complete but structurally deferred.** The command
+  strip still spans the full width rather than the work column in landscape.
+  That is a `page()` change in
   `till.kite` that would invalidate the four-viewport verification behind the
-  rest of the tablet work, so they are written down rather than half-done. The
-  stacking rule at `max-width: 1331px` in `style.css` exists only because of
-  the second one, and its comment says so.
+  rest of the tablet work, so it is written down rather than half-done.
+
+  The other one is now done: the tender screen's summary has moved into the
+  ledger, which is what the design always said it should do. It frees the work
+  column for the numeric surface, so the chooser and the keys sit side by side
+  above 1311 px instead of stacking into a pad that scrolled — and the `0` key,
+  the one every kyat price ends in, is no longer the part below the fold.
 - **The currency defaults to MMK** with zero minor units, from the design
   documents. `currency.minor_units` changes it, but only before there is
   trading — it reinterprets every integer already stored, so it is a migration

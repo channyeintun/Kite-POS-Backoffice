@@ -230,6 +230,17 @@ fn ledger(app: store.App) -> html.Node {
                     html.keyed("v", html.txt("span", [html.class("grand-value")],
                             amount(app, app.basket.totals.total))),
                 ])))
+    // **In tender mode the running total belongs here, beside the basket it is
+    // the total of.** It used to sit in the work area next to the keypad, which
+    // is what the design says it should not do: what has been taken, what is
+    // still due and the two buttons that end the sale are all *about the
+    // basket*, and putting them in the work column left the numeric surface
+    // sharing a fixed height with them. Four rows of 20 mm keys plus a tender
+    // chooser plus a summary do not fit, so the pad scrolled — and the `0` key,
+    // the one every kyat price ends in, was the part below the fold.
+    if locked {
+        foot.push(tender_summary(app))
+    }
     if !locked {
         // Pinned, and it never scrolls. 118 px is 20 mm at this reference
         // density — the kiosk minimum from Colle & Hiszem.
@@ -418,7 +429,6 @@ fn tab_note(app: store.App) -> str {
 
 fn work_tender(app: store.App) -> html.Node {
     let due = store.balance_due(app)
-    let change = store.change_due(app)
     let typed = or_else(money.from_keys(app.entry, store.currency_of(app)), 0)
 
     // The notes a customer actually hands over: the exact amount, then the next
@@ -438,7 +448,7 @@ fn work_tender(app: store.App) -> html.Node {
         }
     }
 
-    var right: [html.Node] = [
+    var choose: [html.Node] = [
         html.keyed("label", html.txt("span", [html.class("region")], t(app, "tender_type"))),
         html.keyed("types", html.el("div", [html.class("tenders")], [
                     tender_button(app, model.Tender.Cash, "cash"),
@@ -464,10 +474,28 @@ fn work_tender(app: store.App) -> html.Node {
                             money.plain(typed, store.currency_of(app)))),
                 ])),
         html.keyed("quick", html.el("div", [html.class("quicks")], quick)),
-        keypad(app, "t"),
-        html.keyed("add", button("\(t(app, "add_tender")) · \(money.plain(typed, store.currency_of(app)))",
-                if typed > 0 { "commit wide" } else { "commit wide off" }, [act("add-tender")])),
     ]
+
+    return html.keyed("work-tender", html.el("section", [html.class("work tender-work")], [
+                html.keyed("choose", html.el("div", [html.class("tender-choose")], choose)),
+                html.keyed("keys", html.el("div", [html.class("tender-keys")], [
+                            keypad(app, "t"),
+                            html.keyed("add", button(
+                                    "\(t(app, "add_tender")) · \(money.plain(typed, store.currency_of(app)))",
+                                    if typed > 0 { "commit wide" } else { "commit wide off" },
+                                    [act("add-tender")])),
+                        ])),
+            ]))
+}
+
+/// What has been taken, what is still due, and the two ways out.
+///
+/// Drawn into the **ledger** rather than the work area — see the note in
+/// [`ledger`]. It is about the basket, not about the keypad, and every pixel it
+/// does not take from the work column is a pixel the numeric surface keeps.
+fn tender_summary(app: store.App) -> html.Node {
+    let due = store.balance_due(app)
+    let change = store.change_due(app)
 
     var summary: [html.Node] = []
     if app.taken.len() > 0 {
@@ -489,11 +517,7 @@ fn work_tender(app: store.App) -> html.Node {
                             if due <= 0 && app.taken.len() > 0 { "commit" } else { "commit off" },
                             [act("finish")])),
                 ])))
-
-    return html.keyed("work-tender", html.el("section", [html.class("work tender-work")], [
-                html.keyed("summary", html.el("div", [html.class("tender-summary")], summary)),
-                html.keyed("pad", html.el("div", [html.class("tender-pad")], right)),
-            ]))
+    return html.keyed("tender-summary", html.el("div", [html.class("tender-summary")], summary))
 }
 
 // ---- commands --------------------------------------------------------------
