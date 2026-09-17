@@ -600,6 +600,7 @@ fn english_error(key: str) -> str {
         // Written for this build rather than lifted from Corner Mart, so they
         // sit together: the reviewed set above has been through a native
         // speaker and these have not.
+        "error.answer_first" => "%s has to be answered first. Nothing was sent.",
         "error.not_a_number" => "%s is not a number this shop can hold. Nothing was sent.",
         "error.write_the_month_as" => "write the month as 2026-08",
         _ => "",
@@ -2421,6 +2422,7 @@ fn burmese_error(key: str) -> str {
         // Written for this build rather than lifted from Corner Mart, so they
         // sit together: the reviewed set above has been through a native
         // speaker and these have not.
+        "error.answer_first" => "%s ကို ဦးစွာ ဖြည့်ရမည်။ ဘာမျှ ပို့လိုက်ခြင်း မရှိပါ။",
         "error.not_a_number" => "%s သည် ဤဆိုင် လက်ခံနိုင်သော ကိန်းဂဏန်း မဟုတ်ပါ။ ဘာမျှ ပို့လိုက်ခြင်း မရှိပါ။",
         "error.write_the_month_as" => "လကို 2026-08 ပုံစံဖြင့် ရေးပါ",
         _ => "",

@@ -1125,6 +1125,13 @@ fn submit(app: desk.App) {
     if open.busy {
         return
     }
+    let missing = first_unanswered(open)
+    if missing.len() > 0 {
+        desk.form_refused(app,
+            words.fill(desk.lang_of(app), "error.answer_first", missing))
+        repaint(app)
+        return
+    }
     let bad = first_unreadable(app, open)
     if bad.len() > 0 {
         desk.form_refused(app,
@@ -1167,6 +1174,31 @@ fn first_unreadable(app: desk.App, open: desk.Form) -> str {
             if parse_float(value_of(f.name)) == nil {
                 return f.label
             }
+        }
+    }
+    return ""
+}
+
+/// The first required field nobody answered, or "".
+///
+/// **`desk.required` used to be decoration.** It put a `*` on the label and
+/// validated nothing, so a form could be sent with its required fields empty
+/// and the server was the only thing that noticed. For a text field that is
+/// survivable — the refusal comes back and says which field. For a **picker**
+/// it is not, because a picker with nothing to offer falls back to a single
+/// option whose value is the empty string, and sending that builds a URL with
+/// a hole in it: `/purchasing/invoices//cancel` matches no route at all, so
+/// the shopkeeper is told "no such endpoint" for what is really "there are no
+/// invoices to cancel".
+///
+/// Three pickers are built that way — cancel an invoice, remove a category,
+/// take money off a tab — and each one would have needed its own guard in
+/// `do_submit`. This is the guard they share, and the one every picker written
+/// after this gets for free.
+fn first_unanswered(open: desk.Form) -> str {
+    for f in open.fields {
+        if f.required && value_of(f.name).trim().len() == 0 {
+            return f.label
         }
     }
     return ""
@@ -1265,11 +1297,6 @@ async fn do_submit(app: desk.App, id: str, subject: str) {
         },
         "settle-tab" => {
             let who = value_of("customer_id")
-            if who.len() == 0 {
-                desk.form_refused(app, words.t(l, "receivables.nobody_owes_anything"))
-                repaint(app)
-                return
-            }
             body["amount"] = json.Json.Number(money_of(app, "amount") as float)
             body["method"] = json.Json.Text(value_of("method"))
             body["note"] = json.Json.Text(value_of("note"))
