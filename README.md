@@ -450,6 +450,14 @@ Stated rather than implied:
 - **Customer, Return, No sale and Close lane** appear in the till's command bar
   because the design says a command is never hidden, and they say plainly that
   they are not built yet rather than doing nothing.
+- **A receipt prints from the browser, not from a till roll.** **Receipt** in
+  the command bar opens the last twenty sales, and touching one draws it as a
+  slip — the shop's details, the lines as they were rung, the tax inside the
+  price, how it was paid and what change was given — which `window.print()`
+  then puts on paper. It is not driven from a thermal printer's own protocol
+  and it does not print automatically when a sale completes: a browser print
+  dialog in front of the next customer is worse than a cashier who taps twice
+  when somebody asks for their copy.
 - **Nothing is stubbed.** Every screen reads and every screen writes: products,
   categories, suppliers, barcodes, offers, customers, staff (add, PIN,
   password, deactivate), stock adjustments, purchase orders (raised from the

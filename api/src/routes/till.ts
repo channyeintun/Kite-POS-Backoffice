@@ -1282,6 +1282,64 @@ till.get("/receipts/:id", async (c) => {
 });
 
 /**
+ * One sale, as a slip to be printed.
+ *
+ * Separate from the receipt above, which exists to be *returned against* and
+ * carries what is still returnable on each line. A printed receipt is a
+ * different document: it needs the shop's own details, the tax the price
+ * included, how it was paid and what change was given — none of which a return
+ * cares about, and all of which a customer's copy has to say.
+ *
+ * Everything comes off the sale's own rows rather than being recomputed. A
+ * receipt reprinted a week later must say what the customer was charged, not
+ * what the same basket would cost today: `sale_items` snapshots the name and
+ * the price at the moment it was rung, and the tax with it.
+ */
+till.get("/receipts/:id/slip", async (c) => {
+  const id = c.req.param("id");
+  const settings = await readSettings(c.env.DB);
+  const sale = await need(
+    c.env.DB,
+    "that receipt",
+    `SELECT s.id, s.number, s.subtotal, s.promo_saved, s.discount, s.tax, s.total,
+            s.completed_at, u.name AS cashier, r.name AS register_name,
+            c.name AS customer
+       FROM sales s
+       JOIN users u ON u.id = s.user_id
+       LEFT JOIN registers r ON r.id = s.register_id
+       LEFT JOIN customers c ON c.id = s.customer_id
+      WHERE s.id = ?1 AND s.status = 'completed'`,
+    id,
+  );
+  const lines = await all(
+    c.env.DB,
+    `SELECT i.name, i.sku, i.qty, i.unit_price, i.total, i.tax, i.promo_name, i.promo_saved
+       FROM sale_items i WHERE i.sale_id = ?1 ORDER BY i.sort, i.rowid`,
+    id,
+  );
+  const payments = await all(
+    c.env.DB,
+    `SELECT method, amount, change, reference FROM payments
+      WHERE sale_id = ?1 ORDER BY rowid`,
+    id,
+  );
+  return c.json({
+    shop: {
+      name: settings["shop.name"] ?? "",
+      name_my: settings["shop.name_my"] ?? "",
+      address: settings["shop.address"] ?? "",
+      phone: settings["shop.phone"] ?? "",
+      tax_id: settings["shop.tax_id"] ?? "",
+      footer: settings["shop.receipt_footer"] ?? "",
+      tax_inclusive: settingBool(settings, "tax.inclusive", true),
+    },
+    sale,
+    lines,
+    payments,
+  });
+});
+
+/**
  * A return, taken at the lane.
  *
  * The same barrier as the back office's refund — the units must still be

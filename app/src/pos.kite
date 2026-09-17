@@ -527,7 +527,14 @@ fn command(app: store.App, id: str) {
             return
         },
         "return" => {
-            store.show(app, store.Overlay.Receipts)
+            store.show(app, store.Overlay.Receipts(purpose: "return"))
+            repaint(app)
+            browser.focus("#receipt")
+            load_receipts(app, "")
+            return
+        },
+        "receipt" => {
+            store.show(app, store.Overlay.Receipts(purpose: "print"))
             repaint(app)
             browser.focus("#receipt")
             load_receipts(app, "")
@@ -634,6 +641,16 @@ async fn do_new_customer(app: store.App, name: str, phone: str) {
         return
     }
     do_attach_customer(app, answer.id)
+}
+
+async fn load_slip(app: store.App, id: str) {
+    let (slip, err) = await api.slip(store.token_of(app), id)
+    if err != nil {
+        failed(app, err.message())
+        return
+    }
+    store.took_slip(app, slip)
+    repaint(app)
 }
 
 async fn load_receipts(app: store.App, q: str) {
@@ -994,7 +1011,22 @@ fn clicked(app: store.App, e: dom.Event) {
         return
     }
     if name == "receipt-pick" {
-        load_receipt(app, id)
+        // The same list serves two commands, so the tap follows the reason it
+        // was opened rather than assuming a return.
+        match app.overlay {
+            Receipts(purpose) => {
+                if purpose == "print" {
+                    load_slip(app, id)
+                } else {
+                    load_receipt(app, id)
+                }
+            },
+            _ => { },
+        }
+        return
+    }
+    if name == "slip-print" {
+        browser.print_page()
         return
     }
     if name == "return-less" {

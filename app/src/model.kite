@@ -527,6 +527,116 @@ pub fn return_line_of(d: doc.Doc) -> ReturnLine {
 /// and this is the flat pair the screen wants. A narrow projection, so there is
 /// no tax and no promotion here: what a return needs is the number to quote and
 /// how much of each line is still returnable.
+// ---- a receipt, to be printed ----------------------------------------------
+
+/// One line of a printed receipt.
+///
+/// Not derived: `promo_name` is empty on a line no offer touched, and every
+/// figure is the snapshot the sale was rung at rather than what the product
+/// costs today. A receipt reprinted next week says what the customer paid.
+pub struct SlipLine {
+    pub name: str
+    pub sku: str
+    pub qty: float
+    pub unit_price: int
+    pub total: int
+    pub tax: int
+    pub promo_name: str
+    pub promo_saved: int
+}
+
+pub fn slip_line_of(d: doc.Doc) -> SlipLine {
+    return SlipLine{
+        name: doc.text(d, "name", ""),
+        sku: doc.text(d, "sku", ""),
+        qty: doc.num_of(d, "qty", 0.0),
+        unit_price: doc.int_of(d, "unit_price", 0),
+        total: doc.int_of(d, "total", 0),
+        tax: doc.int_of(d, "tax", 0),
+        promo_name: doc.text(d, "promo_name", ""),
+        promo_saved: doc.int_of(d, "promo_saved", 0),
+    }
+}
+
+/// How one part of a receipt was paid.
+pub struct SlipPayment {
+    pub method: str
+    pub amount: int
+    pub change: int
+    pub reference: str
+}
+
+pub fn slip_payment_of(d: doc.Doc) -> SlipPayment {
+    return SlipPayment{
+        method: doc.text(d, "method", "cash"),
+        amount: doc.int_of(d, "amount", 0),
+        change: doc.int_of(d, "change", 0),
+        reference: doc.text(d, "reference", ""),
+    }
+}
+
+/// The shop, as it appears at the head of its own receipt.
+pub struct SlipShop {
+    pub name: str
+    pub name_my: str
+    pub address: str
+    pub phone: str
+    pub tax_id: str
+    pub footer: str
+    pub tax_inclusive: bool
+}
+
+/// A sale as a printed receipt — `GET /till/receipts/:id/slip`.
+///
+/// Not derived at any level: `register_name` and `customer` are LEFT JOINs and
+/// arrive null for a sale rung with neither, and the shop's own details are
+/// settings a shopkeeper may not have filled in.
+pub struct Slip {
+    pub shop: SlipShop
+    pub id: str
+    pub number: int
+    pub subtotal: int
+    pub promo_saved: int
+    pub discount: int
+    pub tax: int
+    pub total: int
+    pub completed_at: int
+    pub cashier: str
+    pub register_name: str
+    pub customer: str
+    pub lines: [SlipLine]
+    pub payments: [SlipPayment]
+}
+
+pub fn slip_of(d: doc.Doc) -> Slip {
+    let shop = doc.field(d, "shop")
+    let sale = doc.field(d, "sale")
+    return Slip{
+        shop: SlipShop{
+            name: doc.text(shop, "name", ""),
+            name_my: doc.text(shop, "name_my", ""),
+            address: doc.text(shop, "address", ""),
+            phone: doc.text(shop, "phone", ""),
+            tax_id: doc.text(shop, "tax_id", ""),
+            footer: doc.text(shop, "footer", ""),
+            tax_inclusive: doc.bool_of(shop, "tax_inclusive", true),
+        },
+        id: doc.text(sale, "id", ""),
+        number: doc.int_of(sale, "number", 0),
+        subtotal: doc.int_of(sale, "subtotal", 0),
+        promo_saved: doc.int_of(sale, "promo_saved", 0),
+        discount: doc.int_of(sale, "discount", 0),
+        tax: doc.int_of(sale, "tax", 0),
+        total: doc.int_of(sale, "total", 0),
+        completed_at: doc.int_of(sale, "completed_at", 0),
+        cashier: doc.text(sale, "cashier", ""),
+        register_name: doc.text(sale, "register_name", ""),
+        customer: doc.text(sale, "customer", ""),
+        lines: map(doc.items(doc.field(d, "lines")), slip_line_of),
+        payments: map(doc.items(doc.field(d, "payments")), slip_payment_of),
+    }
+}
+
 pub struct ReceiptDetail {
     pub id: str
     pub number: int

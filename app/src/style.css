@@ -1009,3 +1009,48 @@ img.tile-photo {
   font: 500 18px/1.35 Roboto, sans-serif;
   color: var(--ink-dim);
 }
+
+/* ---- the receipt ---------------------------------------------------------- */
+
+/* A receipt is 58 or 80 mm of fixed-pitch characters coming off a roll, so it
+ * is drawn as one on screen too: narrow, monospaced, left-aligned, with rules
+ * made of dashes rather than borders. A receipt that looks like a web page on
+ * screen prints as one, and a cashier holding the paper copy beside the screen
+ * has to be able to see they are the same document. */
+.slip {
+  width: 100%;
+  max-width: 340px;
+  margin-inline: auto;
+  padding: 12px 0;
+  font: 400 13px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--ink);
+}
+.s-shop { font-size: 16px; font-weight: 700; text-align: center; }
+.s-meta { text-align: center; color: var(--ink-dim); }
+.s-rule { border-top: 1px dashed var(--edge); margin: 8px 0; }
+.s-row { display: flex; justify-content: space-between; gap: 12px; }
+.s-row span:last-child { white-space: nowrap; }
+.s-name { margin-top: 4px; }
+.s-dim { color: var(--ink-dim); }
+.s-total { font-size: 16px; font-weight: 700; margin: 6px 0; }
+.s-foot { margin-top: 8px; text-align: center; color: var(--ink-dim); }
+
+/* Printing a receipt prints the receipt.
+ *
+ * The lane's chrome is a dark full-height app — a ledger, a grid, a command
+ * strip — and none of it belongs on a customer's copy. Everything goes except
+ * the slip, which is lifted out of its dialog and laid on white paper at its
+ * own width. `html, body` are `overflow: hidden` here, so they are released
+ * too or the sheet comes out blank whatever is visible on it. */
+@media print {
+  .status, .lane, .commands, .panel-actions,
+  .trouble-bar, .notice-bar { display: none !important; }
+  .shade { position: static; background: none; display: block; }
+  .panel { position: static; max-width: none; width: auto; padding: 0; background: #fff; box-shadow: none; }
+  /* The dialog's own heading says "Receipt"; the paper does not need telling. */
+  .panel > h2 { display: none !important; }
+  html, body, #app { display: block; height: auto; overflow: visible; background: #fff; }
+  .slip { max-width: none; color: #000; }
+  .s-rule { border-top-color: #000; }
+  .s-meta, .s-dim, .s-foot { color: #000; }
+}

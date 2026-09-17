@@ -50,8 +50,20 @@ pub enum Overlay {
     PriceCheck(name: str, detail: str, price: str)
     /// Attaching somebody to the basket, or signing them up at the counter.
     Customers
-    /// Picking the receipt a return is against, then the lines coming back.
-    Receipts
+    /// Picking a receipt, for one of two reasons.
+    ///
+    /// `purpose` is "return" or "print". The same list either way — the last
+    /// twenty sales, newest first — and the tap on a row goes somewhere
+    /// different depending on why it was opened. A separate overlay for each
+    /// would be the same list twice.
+    Receipts(purpose: str)
+
+    /// A receipt on screen, ready for the printer.
+    ///
+    /// The slip itself is on [`App`] rather than in the variant: it is a whole
+    /// document with lines and tenders in it, and the overlay only has to say
+    /// that it is being shown.
+    Slip
     Returning(sale_id: str, number: int)
     /// Somebody settling what they owe, at the counter.
     ///
@@ -83,6 +95,8 @@ pub struct App {
     pub var customers: [model.Customer]
     pub var receipts: [model.Receipt]
     pub var returning: [model.ReturnLine]
+    /// The receipt being looked at, if one is.
+    pub var slip: Option<model.Slip>
 
     /// Which category tab the grid is showing; "" is Favourites.
     pub var tab: str
@@ -160,6 +174,7 @@ pub fn holding(root: dom.Element, view: html.Mounted, lang: i18n.Lang) -> App {
         customers: [],
         receipts: [],
         returning: [],
+        slip: nil,
         tab: "",
         entry: "",
         taken: [],
@@ -462,6 +477,11 @@ pub fn settle_key_of(var app: App, customer_id: str, minted: str) -> str {
 pub fn settled_tab(var app: App) {
     app.settle_key = ""
     app.settle_key_for = ""
+}
+
+pub fn took_slip(var app: App, slip: model.Slip) {
+    app.slip = slip
+    app.overlay = Overlay.Slip
 }
 
 pub fn say(var app: App, notice: str) {

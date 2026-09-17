@@ -71,6 +71,19 @@ export const COMMANDS: readonly Command[] = [
     modes: ["sale"],
   },
   {
+    // Reprint a receipt. Always available: handing a customer their copy is not
+    // a decision anybody needs permission for, and the commonest ask — "the one
+    // I just rang" — is the first row of the list it opens.
+    id: "receipt",
+    label: "Receipt",
+    labelMy: "ပြေစာ",
+    fkey: 8,
+    gate: "always",
+    confirm: "none",
+    tone: "normal",
+    modes: ["sale"],
+  },
+  {
     id: "price_check",
     label: "Price check",
     labelMy: "စျေးနှုန်းစစ်",

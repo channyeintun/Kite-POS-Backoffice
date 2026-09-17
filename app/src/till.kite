@@ -695,6 +695,110 @@ fn returning_body(app: store.App) -> html.Node {
     return html.keyed("list", html.el("ul", [html.class("held-list")], rows))
 }
 
+/// A receipt, laid out the way it will come out of the printer.
+///
+/// Narrow, monospaced and left-aligned, because a thermal roll is 58 or 80 mm
+/// of fixed-pitch characters and a receipt that looks like a web page on screen
+/// prints as one. Everything here is what the sale was rung at rather than what
+/// the catalogue says now — a reprint a week later has to agree with the copy
+/// the customer is holding.
+fn slip_body(app: store.App, maybe: Option<model.Slip>) -> html.Node {
+    if maybe == nil {
+        return html.keyed("none", html.txt("p", [html.class("lede")], t(app, "no_receipts")))
+    }
+    let slip = maybe
+    let c = store.currency_of(app)
+    var out: [html.Node] = []
+
+    let title = if slip.shop.name.len() > 0 { slip.shop.name } else { t(app, "point_of_sale") }
+    out.push(html.keyed("shop", html.txt("div", [html.class("s-shop")], title)))
+    for (i, line) in enumerate([slip.shop.address, slip.shop.phone, slip.shop.tax_id]) {
+        if line.len() > 0 {
+            out.push(html.keyed("h\(i)", html.txt("div", [html.class("s-meta")], line)))
+        }
+    }
+    out.push(html.keyed("rule1", html.el("div", [html.class("s-rule")], [])))
+
+    out.push(html.keyed("no", html.el("div", [html.class("s-row")], [
+                html.keyed("k", html.txt("span", [], t(app, "receipt_number"))),
+                html.keyed("v", html.txt("span", [], "#\(slip.number)")),
+            ])))
+    out.push(html.keyed("when", html.el("div", [html.class("s-row")], [
+                html.keyed("k", html.txt("span", [], browser.day_of(slip.completed_at))),
+                html.keyed("v", html.txt("span", [], browser.clock_of(slip.completed_at))),
+            ])))
+    out.push(html.keyed("who", html.el("div", [html.class("s-row")], [
+                html.keyed("k", html.txt("span", [], slip.cashier)),
+                html.keyed("v", html.txt("span", [], slip.register_name)),
+            ])))
+    if slip.customer.len() > 0 {
+        out.push(html.keyed("cust", html.el("div", [html.class("s-row")], [
+                    html.keyed("k", html.txt("span", [], t(app, "customer"))),
+                    html.keyed("v", html.txt("span", [], slip.customer)),
+                ])))
+    }
+    out.push(html.keyed("rule2", html.el("div", [html.class("s-rule")], [])))
+
+    for (i, line) in enumerate(slip.lines) {
+        out.push(html.keyed("n\(i)", html.txt("div", [html.class("s-name")], line.name)))
+        out.push(html.keyed("l\(i)", html.el("div", [html.class("s-row")], [
+                    html.keyed("k", html.txt("span", [html.class("s-dim")],
+                            "\(money.quantity(line.qty)) × \(money.plain(line.unit_price, c))")),
+                    html.keyed("v", html.txt("span", [], money.plain(line.total, c))),
+                ])))
+        if line.promo_saved > 0 {
+            out.push(html.keyed("p\(i)", html.el("div", [html.class("s-row s-dim")], [
+                        html.keyed("k", html.txt("span", [], line.promo_name)),
+                        html.keyed("v", html.txt("span", [],
+                                "-\(money.plain(line.promo_saved, c))")),
+                    ])))
+        }
+    }
+    out.push(html.keyed("rule3", html.el("div", [html.class("s-rule")], [])))
+
+    if slip.promo_saved + slip.discount > 0 {
+        out.push(html.keyed("saved", html.el("div", [html.class("s-row")], [
+                    html.keyed("k", html.txt("span", [], t(app, "saved"))),
+                    html.keyed("v", html.txt("span", [],
+                            money.plain(slip.promo_saved + slip.discount, c))),
+                ])))
+    }
+    out.push(html.keyed("total", html.el("div", [html.class("s-row s-total")], [
+                html.keyed("k", html.txt("span", [], t(app, "total"))),
+                html.keyed("v", html.txt("span", [], money.plain(slip.total, c))),
+            ])))
+    if slip.tax > 0 {
+        out.push(html.keyed("tax", html.el("div", [html.class("s-row s-dim")], [
+                    html.keyed("k", html.txt("span", [],
+                            if slip.shop.tax_inclusive {
+                                t(app, "tax_included")
+                            } else {
+                                t(app, "tax_added")
+                            })),
+                    html.keyed("v", html.txt("span", [], money.plain(slip.tax, c))),
+                ])))
+    }
+
+    for (i, p) in enumerate(slip.payments) {
+        out.push(html.keyed("t\(i)", html.el("div", [html.class("s-row")], [
+                    html.keyed("k", html.txt("span", [], t(app, p.method))),
+                    html.keyed("v", html.txt("span", [], money.plain(p.amount, c))),
+                ])))
+        if p.change > 0 {
+            out.push(html.keyed("c\(i)", html.el("div", [html.class("s-row")], [
+                        html.keyed("k", html.txt("span", [], t(app, "change_due"))),
+                        html.keyed("v", html.txt("span", [], money.plain(p.change, c))),
+                    ])))
+        }
+    }
+
+    if slip.shop.footer.len() > 0 {
+        out.push(html.keyed("rule4", html.el("div", [html.class("s-rule")], [])))
+        out.push(html.keyed("foot", html.txt("div", [html.class("s-foot")], slip.shop.footer)))
+    }
+    return html.keyed("slip", html.el("div", [html.class("slip")], out))
+}
+
 fn shade(key: str, title: str, body: [html.Node]) -> html.Node {
     return html.keyed(key, html.el("div", [html.class("shade")], [
                 html.keyed("panel", html.el("div", [html.class("panel")], concat([
@@ -833,8 +937,9 @@ fn overlay_of(app: store.App) -> [html.Node] {
                             ])),
                 ]),
         ],
-        Receipts => [
-            shade("receipts", t(app, "return"), [
+        Receipts(purpose) => [
+            shade("receipts",
+                if purpose == "print" { t(app, "receipt") } else { t(app, "return") }, [
                     html.keyed("field", html.empty("input", [
                                 html.id("receipt"),
                                 html.class("scan-field"),
@@ -873,6 +978,16 @@ fn overlay_of(app: store.App) -> [html.Node] {
         // counter — somebody pays what they have on them — and a prefilled
         // field that has to be cleared first is a field that gets sent as it
         // stands. The whole balance is one tap on the quick button instead.
+        Slip => [
+            shade("slip", t(app, "receipt"), [
+                    slip_body(app, app.slip),
+                    html.keyed("actions", html.el("div", [html.class("panel-actions")], [
+                                html.keyed("close", button(t(app, "cancel"), "ghost", [act("dismiss")])),
+                                html.keyed("print", button(t(app, "print"), "commit",
+                                        [act("slip-print")])),
+                            ])),
+                ]),
+        ],
         PayTab(customer_id, name, owed) => [
             shade("paytab", "\(t(app, "pay_tab")) · \(name)", [
                     html.keyed("owed", html.el("div", [html.class("due")], [

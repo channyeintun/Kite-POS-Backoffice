@@ -547,6 +547,14 @@ pub async fn receipts(token: str, q: str) -> ([model.Receipt], error) {
     return map(doc.items(doc.field(answer, "receipts")), model.receipt_of), nil
 }
 
+/// One sale as a printable receipt — the shop's details, the lines as they were
+/// rung, the tax inside the price, and how it was paid.
+pub async fn slip(token: str, id: str) -> (model.Slip, error) {
+    let (answer, err) = await get(token, "/till/receipts/\(id)/slip")
+    check err
+    return model.slip_of(answer), nil
+}
+
 pub async fn receipt(token: str, id: str) -> (model.ReceiptDetail, error) {
     let (answer, err) = await get(token, "/till/receipts/\(id)")
     check err
