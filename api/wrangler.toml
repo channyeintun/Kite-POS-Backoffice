@@ -1,5 +1,5 @@
 #:schema node_modules/wrangler/config-schema.json
-name = "kite-pos-api"
+name = "thirisan-store-api"
 main = "src/index.ts"
 compatibility_date = "2025-01-15"
 compatibility_flags = ["nodejs_compat"]
@@ -9,13 +9,18 @@ compatibility_flags = ["nodejs_compat"]
 # Set it to the deployed Pages URLs before the shop opens; `*` is refused by
 # `cors.ts` whenever credentials are involved, which is always here.
 [vars]
-ALLOWED_ORIGINS = "https://kite-pos.pages.dev"
+ALLOWED_ORIGINS = "https://thirisan-store.pages.dev"
 SESSION_HOURS = "14"
 
 # D1 free tier: 5 GB storage, 5 million rows read a day. A corner shop writes a
 # few thousand rows a day, so the binding cost of this project is the reads on
 # the reports — which is why every report here is a GROUP BY the database does
 # rather than rows this Worker pulls across and adds up itself.
+# **The database keeps its old name on purpose.** Cloudflare cannot rename a D1
+# database, and renaming it here would mean creating a second one and moving
+# every row into it — a migration with a window where a sale could be lost, to
+# change a string nobody outside this file ever reads. The Worker and the Pages
+# project were renamed because their names are the *address*; this one is not.
 [[d1_databases]]
 binding = "DB"
 database_name = "kite-pos"
@@ -24,6 +29,8 @@ migrations_dir = "migrations"
 
 # Product photos. R2's free tier has no egress charge, which is the whole
 # reason the pictures live here and not as base64 in a D1 column.
+# Same reasoning as the database: the bucket name is not an address, and moving
+# the pictures would be work with a risk attached and nothing at the end of it.
 [[r2_buckets]]
 binding = "PHOTOS"
 bucket_name = "kite-pos-photos"

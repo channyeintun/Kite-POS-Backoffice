@@ -378,12 +378,12 @@ reach both at once. A fix goes out with two deploys and no branch.
 The only thing that differs in the front end is which Worker it talks to, and
 that is a build variable rather than an edited file — `VITE_API_BASE`,
 substituted into the `api-base` meta in both HTML entries. It lives in
-`app/.env` for the default shop and is overridden per shop on the command line,
+`app/.env` for Thiri San and is overridden per shop on the command line,
 because a file somebody has to remember to put back is a file that ends up
 deployed wrong.
 
 ```bash
-# Corner Mart
+# Thiri San
 npm run deploy:api && npm run deploy:app
 
 # Khant's
