@@ -12,7 +12,9 @@
     "fmt": "npx kitec fmt src/*.kite",
     "fmt:check": "npx kitec fmt --check src/*.kite",
     "test": "node test/run-kite.mjs test/money_test.kite",
-    "deploy": "wrangler pages deploy dist --project-name kite-pos"
+    "deploy": "wrangler pages deploy dist --project-name kite-pos",
+    "build:khant": "VITE_API_BASE=https://khant-pos-api.chanyeintun.workers.dev/api vite build",
+    "deploy:khant": "wrangler pages deploy dist --project-name khant-pos"
   },
   "devDependencies": {
     "@kite-lang/compiler-wasm": "^0.1.9",

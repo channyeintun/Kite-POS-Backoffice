@@ -19,7 +19,7 @@
      development build is refused rather than silent: ALLOWED_ORIGINS in
      api/wrangler.toml lists only the Pages origin, so localhost fails CORS
      loudly instead of writing to the shop's books. -->
-<meta name="api-base" content="https://kite-pos-api.chanyeintun.workers.dev/api">
+<meta name="api-base" content="%VITE_API_BASE%">
 
 <link rel="manifest" href="/manifest-till.webmanifest">
 <link rel="icon" href="/icon-till-192.png">

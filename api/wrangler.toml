@@ -30,3 +30,37 @@ bucket_name = "kite-pos-photos"
 
 [observability]
 enabled = true
+
+# ---------------------------------------------------------------------------
+# A second shop
+# ---------------------------------------------------------------------------
+#
+# One codebase, one deploy per shop. Everything above is Corner Mart; this is
+# Khant's, with its own database, its own bucket and its own Pages origin —
+# nothing is shared but the code, which is the point: a fix goes to both with
+# two deploys and no branch.
+#
+#     npm run deploy --workspace=@kite-pos/api -- --env khant
+#     npx wrangler d1 migrations apply khant-pos --remote
+#
+# The database is in APAC for the same reason the first one is: a till is a
+# round trip per scan, and the shop is in Myanmar.
+[env.khant]
+name = "khant-pos-api"
+
+[env.khant.vars]
+ALLOWED_ORIGINS = "https://khant-pos.pages.dev"
+SESSION_HOURS = "14"
+
+[[env.khant.d1_databases]]
+binding = "DB"
+database_name = "khant-pos"
+database_id = "aa734b88-c305-411e-ba5b-49fcd446682f"
+migrations_dir = "migrations"
+
+[[env.khant.r2_buckets]]
+binding = "PHOTOS"
+bucket_name = "khant-pos-photos"
+
+[env.khant.observability]
+enabled = true

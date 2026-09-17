@@ -368,6 +368,37 @@ nowhere to put one, so a `data-action` attribute names what an element means and
 one listener on the root reads it off whatever was touched. A rebuilt
 description has nothing to reattach.
 
+## More than one shop
+
+One codebase, one deploy per shop. Nothing is shared but the code: each shop
+has its own D1 database, its own R2 bucket, its own Worker and its own Pages
+origin, so a shopkeeper cannot see another's takings and a bad migration cannot
+reach both at once. A fix goes out with two deploys and no branch.
+
+The only thing that differs in the front end is which Worker it talks to, and
+that is a build variable rather than an edited file — `VITE_API_BASE`,
+substituted into the `api-base` meta in both HTML entries. It lives in
+`app/.env` for the default shop and is overridden per shop on the command line,
+because a file somebody has to remember to put back is a file that ends up
+deployed wrong.
+
+```bash
+# Corner Mart
+npm run deploy:api && npm run deploy:app
+
+# Khant's
+npm run setup:khant        # migrations, once and after every schema change
+npm run deploy:api:khant
+npm run deploy:app:khant
+```
+
+A new shop is five things: `wrangler d1 create <name> --location apac`
+(**apac** — a till is a round trip per scan and the shops are in Myanmar),
+`wrangler r2 bucket create <name>-photos`, an `[env.<name>]` block in
+`api/wrangler.toml`, `wrangler pages project create <name>`, and a
+`POST /api/auth/setup` to make the first owner. The chart of accounts, the
+settings and Lane 1 come from the migrations.
+
 ## Deploying
 
 ```bash

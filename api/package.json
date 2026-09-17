@@ -14,7 +14,9 @@
     "db:seed:local": "wrangler d1 execute kite-pos --local --file=./seed/demo.sql",
     "db:seed": "wrangler d1 execute kite-pos --remote --file=./seed/demo.sql",
     "db:console:local": "wrangler d1 execute kite-pos --local --command",
-    "test": "vitest run"
+    "test": "vitest run",
+    "deploy:khant": "wrangler deploy --env khant",
+    "db:migrate:khant": "wrangler d1 migrations apply khant-pos --remote --env khant"
   },
   "dependencies": {
     "hono": "^4.13.1"
