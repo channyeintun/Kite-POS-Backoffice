@@ -467,6 +467,14 @@ fn work_tender(app: store.App) -> html.Node {
                 } else {
                     t(app, "only_cash_change")
                 })),
+    ]
+
+    // **The amount lives with the keys that type it.** What is being tendered,
+    // the notes a customer is likely to hand over and the pad itself are one
+    // question — how much — and the chooser beside them is a different one:
+    // which tender. Splitting them that way fills a column that was empty from
+    // the last key down and leaves the chooser free to grow its own rows.
+    var keys: [html.Node] = [
         html.keyed("entry", html.el("div", [html.class("entry")], [
                     html.keyed("k", html.txt("span", [html.class("entry-label")],
                             t(app, "cash_tendered"))),
@@ -474,17 +482,16 @@ fn work_tender(app: store.App) -> html.Node {
                             money.plain(typed, store.currency_of(app)))),
                 ])),
         html.keyed("quick", html.el("div", [html.class("quicks")], quick)),
+        keypad(app, "t"),
+        html.keyed("add", button(
+                "\(t(app, "add_tender")) · \(money.plain(typed, store.currency_of(app)))",
+                if typed > 0 { "commit wide" } else { "commit wide off" },
+                [act("add-tender")])),
     ]
 
     return html.keyed("work-tender", html.el("section", [html.class("work tender-work")], [
                 html.keyed("choose", html.el("div", [html.class("tender-choose")], choose)),
-                html.keyed("keys", html.el("div", [html.class("tender-keys")], [
-                            keypad(app, "t"),
-                            html.keyed("add", button(
-                                    "\(t(app, "add_tender")) · \(money.plain(typed, store.currency_of(app)))",
-                                    if typed > 0 { "commit wide" } else { "commit wide off" },
-                                    [act("add-tender")])),
-                        ])),
+                html.keyed("keys", html.el("div", [html.class("tender-keys")], keys)),
             ]))
 }
 
