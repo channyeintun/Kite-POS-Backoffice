@@ -727,8 +727,15 @@ body:has(.shade) .scroll { overflow: hidden; }
   /* A page with a receipt on it prints the receipt and nothing else. Any other
    * page prints its cards — which is what an accounting sheet *is*, and the
    * blanket `.card { display: none }` that used to be here meant printing the
-   * trial balance produced an empty sheet of paper. */
-  .page:has(.receipt-card) .card,
+   * trial balance produced an empty sheet of paper.
+   *
+   * `:not(.receipt-card)` is load-bearing, and leaving it out is how the fix
+   * for the trial balance broke the thing it was protecting. The receipt is a
+   * `section.card.receipt-card` — it carries *both* classes — so a bare
+   * `.card` here matched the receipt itself and hid it with `!important`,
+   * which the `display: block` two rules down cannot outrank. Printing a
+   * receipt produced the blank sheet the trial balance used to. */
+  .page:has(.receipt-card) .card:not(.receipt-card),
   .page:has(.receipt-card) .detail { display: none !important; }
   .card { break-inside: avoid; box-shadow: none; background: #fff; }
   .receipt-card { display: block; padding: 0; }
