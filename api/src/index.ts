@@ -47,6 +47,26 @@ app.use("*", async (c, next) => {
   })(c, next);
 });
 
+/**
+ * Nothing this Worker says is worth keeping.
+ *
+ * Every JSON route here is a live read of a shop's state: a price, a stock
+ * level, what a drawer should hold. None of them carried a cache header at all,
+ * which left the answer to a browser's heuristics — and the one thing a till or
+ * a back office must never do is show yesterday's figure as though it were
+ * today's.
+ *
+ * Only when the route has not already said otherwise. A product photo is
+ * `public, max-age=31536000, immutable` on purpose — it is fetched by an
+ * `<img src>` with no token, and re-downloading the whole tile grid on every
+ * paint is the cost this shop's connection cannot afford — and a CSV export
+ * already says `no-store` for itself.
+ */
+app.use("*", async (c, next) => {
+  await next();
+  if (!c.res.headers.has("cache-control")) c.res.headers.set("cache-control", "no-store");
+});
+
 app.get("/health", (c) => c.json({ ok: true }));
 
 // Open: setting the shop up, and getting in.
@@ -134,8 +154,12 @@ app.onError((err, c) => {
     console.error("ledger refused an entry", err.message);
     return c.json({ error: { code: "unbalanced", message: err.message } }, 500);
   }
-  // A Response thrown directly, as the lockout does.
-  if (err instanceof Response) return err;
+  // Nothing throws a bare `Response` any more, and nothing may: Hono routes a
+  // thrown value to this handler only when it is an `Error`, so the arm that
+  // used to be here could never fire. The lockout was the one caller, and it
+  // reached the lane as `500 Error: [object Response]` for as long as it
+  // existed — see `guardAttempts` in `routes/auth.ts`, which now throws the
+  // same `Refused` as every other refusal in this Worker.
   console.error("unhandled", err);
   return c.json({ error: { code: "internal", message: "something went wrong here" } }, 500);
 });

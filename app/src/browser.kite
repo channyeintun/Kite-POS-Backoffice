@@ -200,10 +200,77 @@ pub fn focus(selector: str) {
     }
 }
 
+/// The document itself, as something a listener can be attached to.
+///
+/// A keystroke lands on whatever holds the focus, and when nothing holds it
+/// that is `<body>` — which sits *above* the mounted tree, not inside it. A
+/// listener on the application's own root never sees those, and the till hid
+/// that for a long time by dragging the focus back into the scan box after
+/// every single repaint. With the focus left where the operator put it, the
+/// listener has to sit where every keystroke passes instead.
+///
+/// `dom.wrap` calls a host object an element. The document is not one, but
+/// `dom.on` only ever calls `addEventListener` on what it is handed, and the
+/// document has that.
+pub fn document_element() -> dom.Element {
+    return dom.wrap(js.global("document"))
+}
+
+/// Whether a keystroke is the operator typing rather than a shortcut.
+///
+/// A barcode scanner sends bare characters. ⌘R and Ctrl-F are the browser's,
+/// and routing them into the scan box would both swallow them and fill the box
+/// with letters nobody typed.
+pub fn plain_key(e: dom.Event) -> bool {
+    let raw = dom.raw_event(e)
+    if js.bool_or(raw, "ctrlKey", false) {
+        return false
+    }
+    if js.bool_or(raw, "metaKey", false) {
+        return false
+    }
+    return !js.bool_or(raw, "altKey", false)
+}
+
+/// Empty a field and leave the focus where the operator put it.
+///
+/// The focusing twin below is for a dialog that has just opened, where taking
+/// the caret is the whole point. This one is for the scan box after a barcode
+/// lands: the box has to be empty and ready for the next one, and pulling the
+/// caret back out of whatever the operator tapped in between is the thing this
+/// till used to do — on every repaint, which is every tap.
+pub fn clear_field(selector: str) {
+    let target = dom.find(selector)
+    if target == nil {
+        return
+    }
+    let err = dom.set_value(target, "")
+    if err != nil {
+        io.error("browser: could not clear \(selector)")
+    }
+}
+
+/// Add to what a field already holds, without touching the focus.
+///
+/// Where a scanner's characters go when the caret is somewhere else. One
+/// character at a time, so the box fills exactly as it would have if it had
+/// been focused all along — and the operator's own tap keeps the focus it
+/// earned.
+pub fn append_value(selector: str, suffix: str) {
+    let target = dom.find(selector)
+    if target == nil {
+        return
+    }
+    let err = dom.set_value(target, dom.value(target) + suffix)
+    if err != nil {
+        io.error("browser: could not type into \(selector)")
+    }
+}
+
 /// Empty a field and put the caret back in it.
 ///
-/// The scan box has to be ready for the next barcode the instant the last one
-/// lands, and a scanner is a fast keyboard that types wherever the focus is.
+/// For a dialog whose first field should be ready to type in the moment it
+/// opens. Not for the scan box on an ordinary repaint — see `clear_field`.
 pub fn clear_and_focus(selector: str) {
     let target = dom.find(selector)
     if target == nil {

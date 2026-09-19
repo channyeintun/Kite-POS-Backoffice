@@ -19,6 +19,7 @@
 
 use std/dom
 use std/html
+use std/math
 use std/window
 use doc
 use i18n
@@ -301,6 +302,20 @@ pub fn action(label: str, what: str, id: str, tone: str) -> Action {
     return Action{ label: label, action: what, id: id, tone: tone }
 }
 
+/// One line of a delivery being booked into stock.
+///
+/// **Held here, not on the server.** A shopkeeper adds lines one at a time
+/// while the driver waits, and every one of those would otherwise be a request
+/// that can fail on its own and leave half a delivery behind. Nothing is
+/// written until the single press at the end, which carries the lot — and the
+/// key that makes repeating that press free.
+pub struct GoodsInLine {
+    pub product_id: str
+    pub name: str
+    pub qty: float
+    pub unit_cost: int
+}
+
 /// A pair of label and value, for a detail header.
 pub struct Fact {
     pub label: str
@@ -376,6 +391,15 @@ pub struct Form {
     pub fields: [Field]
     pub submit: str
     pub subject: str
+    /// The idempotency key this dialog's write carries, minted when it opened.
+    ///
+    /// Separate from `subject`, which is the thing being changed and is often
+    /// already spoken for — an invoice's subject is the invoice being paid, and
+    /// a key cannot be the invoice or every payment against it would be the
+    /// first one. `busy` stops a second press while the first is in flight;
+    /// this is for the press after an answer was lost, which no client-side
+    /// flag can catch.
+    pub key: str
     /// Shown in red under the title when the server refused.
     pub trouble: str
     pub busy: bool
@@ -384,8 +408,13 @@ pub struct Form {
 pub fn form(id: str, title: str, submit: str, fields: [Field]) -> Form {
     return Form{
         id: id, title: title, lede: "", fields: fields,
-        submit: submit, subject: "", trouble: "", busy: false,
+        submit: submit, subject: "", key: "", trouble: "", busy: false,
     }
+}
+
+/// The key a form's write carries. See [`Form.key`].
+pub fn keyed(f: Form, key: str) -> Form {
+    return Form{..f, key: key }
 }
 
 pub fn about(f: Form, subject: str) -> Form {
@@ -499,6 +528,28 @@ pub struct App {
     pub var journal_account: str
     pub var journal_query: str
 
+    /// The delivery being booked on Purchasing, before it is written.
+    ///
+    /// `goods_in_key` is minted when the first line is added and thrown away
+    /// when the delivery lands or is abandoned, so every press of "Book it into
+    /// stock" for *this* delivery carries the same key and only the first one
+    /// writes anything.
+    pub var goods_in: [GoodsInLine]
+    pub var goods_in_supplier: str
+    pub var goods_in_settlement: str
+    pub var goods_in_key: str
+
+    /// What Purchasing was last drawn from.
+    ///
+    /// Kept so that adding a line to a delivery can redraw the screen without
+    /// asking the Worker for the worksheet, the orders and the payables again.
+    /// A shopkeeper enters a delivery note line by line; three requests per
+    /// line, on the connection this shop actually has, is the thing that made
+    /// them tap buttons twice in the first place.
+    pub var purchasing_sheet: [model.WorksheetLine]
+    pub var purchasing_orders: [model.PurchaseOrder]
+    pub var purchasing_payables: Option<model.Payables>
+
     pub var trouble: str
     pub var notice: str
     pub var busy: bool
@@ -549,6 +600,13 @@ pub fn holding(root: dom.Element, view: html.Mounted) -> App {
         journal_cause: "",
         journal_account: "",
         journal_query: "",
+        goods_in: [],
+        goods_in_supplier: "",
+        goods_in_settlement: "cash",
+        goods_in_key: "",
+        purchasing_sheet: [],
+        purchasing_orders: [],
+        purchasing_payables: nil,
         trouble: "",
         notice: "",
         busy: false,
@@ -707,6 +765,140 @@ pub fn working(var app: App, busy: bool) {
     app.busy = busy
 }
 
+// ---- the delivery being booked ---------------------------------------------
+
+/// Add a line, or fold it into the one already there for that product.
+///
+/// Folding rather than appending, for the same reason the till merges a rescan
+/// into "×3": two cases of the same cola off one van is one line on one
+/// delivery note, and two rows that have to be added up by eye is how a
+/// shopkeeper loses track of what actually arrived. The later cost wins,
+/// because it is the one the operator has just read off the note.
+pub fn goods_in_add(var app: App, minted: str, line: GoodsInLine) {
+    if app.goods_in.len() == 0 && app.goods_in_key.len() == 0 {
+        app.goods_in_key = minted
+    }
+    var out: [GoodsInLine] = []
+    var folded = false
+    for held in app.goods_in {
+        if held.product_id == line.product_id {
+            out.push(GoodsInLine{
+                product_id: held.product_id,
+                name: held.name,
+                qty: held.qty + line.qty,
+                unit_cost: line.unit_cost,
+            })
+            folded = true
+        } else {
+            out.push(held)
+        }
+    }
+    if !folded {
+        out.push(line)
+    }
+    app.goods_in = out
+}
+
+pub fn goods_in_drop(var app: App, product_id: str) {
+    var out: [GoodsInLine] = []
+    for held in app.goods_in {
+        if held.product_id != product_id {
+            out.push(held)
+        }
+    }
+    app.goods_in = out
+    if out.len() == 0 {
+        app.goods_in_key = ""
+    }
+}
+
+/// Take off exactly the lines a request carried, and nothing else.
+///
+/// Not `goods_in_clear`. A line added while the booking was in flight was
+/// never sent, and wiping the whole delivery on success would throw away
+/// something the shopkeeper has just typed with nothing on screen to say it is
+/// gone. What was sent goes; what arrived after it stays, and the key is
+/// released only when the list is actually empty.
+pub fn goods_in_took(var app: App, sent: [GoodsInLine]) {
+    var out: [GoodsInLine] = []
+    for held in app.goods_in {
+        var left = held.qty
+        for gone in sent {
+            if gone.product_id == held.product_id {
+                left = left - gone.qty
+            }
+        }
+        // Subtracted rather than matched, because a second case of the same
+        // cola added while the request was in flight is folded into the line
+        // that went — see `goods_in_add`. What is left is what arrived late.
+        // The floor is a tolerance and not zero: `qty` is a float, and a
+        // delivery of 0.35 kg does not subtract to exactly nothing.
+        if left > 0.000001 {
+            out.push(GoodsInLine{
+                product_id: held.product_id,
+                name: held.name,
+                qty: left,
+                unit_cost: held.unit_cost,
+            })
+        }
+    }
+    app.goods_in = out
+    if out.len() == 0 {
+        app.goods_in_key = ""
+        app.goods_in_supplier = ""
+        app.goods_in_settlement = "cash"
+    }
+}
+
+/// Forget the delivery — after it lands, or when the operator abandons it.
+///
+/// The key goes with it. Keeping it would mean the *next* delivery repeated
+/// the last one's answer, which is the failure an idempotency key is supposed
+/// to prevent rather than cause.
+pub fn goods_in_clear(var app: App) {
+    app.goods_in = []
+    app.goods_in_key = ""
+    app.goods_in_supplier = ""
+    app.goods_in_settlement = "cash"
+}
+
+pub fn took_purchasing(var app: App, sheet: [model.WorksheetLine],
+    orders: [model.PurchaseOrder], payables: Option<model.Payables>) {
+    app.purchasing_sheet = sheet
+    app.purchasing_orders = orders
+    app.purchasing_payables = payables
+}
+
+pub fn goods_in_about(var app: App, supplier_id: str, settlement: str) {
+    app.goods_in_supplier = supplier_id
+    app.goods_in_settlement = settlement
+}
+
+/// What one line of a delivery comes to.
+///
+/// The arithmetic is here rather than in `money.kite`, which is a formatter and
+/// says so — "the server owns every total". It still does: this figure is shown
+/// to the operator before they commit, and the Worker computes the one that is
+/// written from the same quantities and costs. If the two ever disagreed, the
+/// Worker's is the delivery.
+fn line_value(qty: float, unit_cost: int) -> int {
+    return math.round_to(qty * (unit_cost as float))
+}
+
+/// What the delivery is worth, at the costs entered against it.
+pub fn goods_in_total(app: App) -> int {
+    var total = 0
+    for line in app.goods_in {
+        total = total + line_value(line.qty, line.unit_cost)
+    }
+    return total
+}
+
+/// The same figure, for one line, so a table can show it beside the quantity.
+pub fn goods_in_line_value(line: GoodsInLine) -> int {
+    return line_value(line.qty, line.unit_cost)
+}
+
 pub fn signing_in(var app: App, on: bool) {
     app.signing_in = on
 }
@@ -822,15 +1014,25 @@ pub fn took_sale_lines(var app: App, lines: [model.SaleLine]) {
 /// accountant closes months, not rolling windows, so "this month" has to mean
 /// the one that will be closed. `"all"` starts at the epoch, which is before
 /// any shop in this system opened.
+/// The window a books sheet is asked over, as `[from, to]`.
+///
+/// **The upper bound is always zero, and zero means "up to now" — the
+/// *Worker's* now.** It used to be this device's, and that is a different
+/// number: a tablet whose clock runs a minute behind asked for everything up to
+/// a moment that had already passed on the server, so the last minute of
+/// trading fell outside its own window and today's figures came back short by
+/// however far the clock was out. The lower bound stays a device figure, which
+/// is harmless — it is a rounding of a week or a month, not a boundary a fresh
+/// row is sitting on.
 pub fn window_seconds(name: str, now: int) -> [int] {
     return match name {
-        "today" => [now - (now % 86400), now],
-        "7" => [now - 7 * 86400, now],
-        "month" => [now - 30 * 86400, now],
-        "all" => [0, now],
+        "today" => [now - (now % 86400), 0],
+        "7" => [now - 7 * 86400, 0],
+        "month" => [now - 30 * 86400, 0],
+        "all" => [0, 0],
         // An unrecognised name gets thirty days — the same window
         // `window_label` names it, so the figures and the label agree.
-        _ => [now - 30 * 86400, now],
+        _ => [now - 30 * 86400, 0],
     }
 }
 

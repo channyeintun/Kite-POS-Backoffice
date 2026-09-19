@@ -1032,8 +1032,60 @@ pub fn movements(answer: [model.StockMovement], l: i18n.Lang,
 
 // ---- buying ----------------------------------------------------------------
 
+/// The buttons at the top of Purchasing.
+///
+/// Two states, because a delivery half entered is the only thing on this screen
+/// that is unfinished: while there are lines on it, the press that matters is
+/// the one that books them, and the one that abandons them has to be reachable
+/// too.
+fn buying_actions(booking: bool, l: i18n.Lang) -> [desk.Action] {
+    if booking {
+        return [
+            desk.action(words.t(l, "purchasing.book_it_into_stock"), "form-goods-in-book", "", "filled"),
+            desk.action(words.t(l, "purchasing.add_a_line"), "form-goods-in-line", "", "soft"),
+            desk.action(words.t(l, "purchasing.start_again"), "goods-in-clear", "", "danger"),
+        ]
+    }
+    return [
+        desk.action(words.t(l, "purchasing.goods_in"), "form-goods-in-line", "", "filled"),
+        desk.action(words.t(l, "purchasing.raise_orders_from_the_worksheet"),
+            "raise-orders", "", "soft"),
+        desk.action(words.t(l, "payables.record_an_invoice"), "form-invoice", "", "quiet"),
+        desk.action(words.t(l, "payables.cancel_invoice"), "form-cancel-invoice", "", "quiet"),
+        desk.action(words.t(l, "common.suppliers"), "go", "suppliers", "quiet"),
+    ]
+}
+
+/// The delivery being entered, before anything is written.
+///
+/// An empty table rather than no table when there is nothing on it: the heading
+/// is where a shopkeeper looks to see whether the last press landed, and a
+/// region that appears and disappears is one they have to hunt for.
+fn delivery_table(lines: [desk.GoodsInLine], value: int, l: i18n.Lang,
+    c: money.Currency) -> desk.Block {
+    var rows: [desk.Row] = []
+    for line in lines {
+        rows.push(touchable(line.product_id, [
+                    line.name,
+                    money.quantity(line.qty),
+                    money.show(line.unit_cost, c),
+                    money.show(desk.goods_in_line_value(line), c),
+                ], "warn", "goods-in-drop", line.product_id))
+    }
+    if rows.len() > 0 {
+        rows.push(row("total", [
+                    words.t(l, "common.total"), "", "", money.show(value, c),
+                ], "ok"))
+    }
+    return table(words.t(l, "purchasing.delivery_being_booked"),
+        words.t(l, "purchasing.touch_a_line_to_take_it_off"),
+        [words.t(l, "common.product"), words.t(l, "purchasing.qty_arrived"),
+            words.t(l, "purchasing.cost_each"), words.t(l, "common.value")], rows)
+}
+
 pub fn purchasing(sheet: [model.WorksheetLine], orders: [model.PurchaseOrder],
-    payables: Option<model.Payables>, l: i18n.Lang, c: money.Currency) -> [desk.Block] {
+    payables: Option<model.Payables>, delivery: [desk.GoodsInLine], delivery_value: int,
+    l: i18n.Lang, c: money.Currency) -> [desk.Block] {
     var lines: [desk.Row] = []
     var value = 0
     for line in sheet {
@@ -1061,13 +1113,18 @@ pub fn purchasing(sheet: [model.WorksheetLine], orders: [model.PurchaseOrder],
         order_rows.push(touchable(o.id, [
                     "#\(o.number)",
                     o.supplier_name,
-                    order_status_of(l, status),
+                    // A delivery booked straight in says so, rather than
+                    // reading as an order somebody placed and forgot.
+                    if o.direct {
+                        "\(order_status_of(l, status)) · \(words.t(l, "purchasing.direct"))"
+                    } else { order_status_of(l, status) },
                     "\(o.lines)",
                     money.show(o.total, c),
                     browser.day_of(o.created_at),
                 ], match status {
                     "received" => "ok",
                     "draft" => "",
+                    "cancelled" => "",
                     _ => "warn",
                 },
                 "open-order", o.id))
@@ -1150,13 +1207,12 @@ pub fn purchasing(sheet: [model.WorksheetLine], orders: [model.PurchaseOrder],
                     meta: words.t(l, "payables.past_the_due_date"),
                     tone: if late_over_30 > 0 { "stop" } else { "ok" } },
             ]),
-        desk.Block.Buttons(items: [
-                desk.action(words.t(l, "purchasing.raise_orders_from_the_worksheet"),
-                    "raise-orders", "", "filled"),
-                desk.action(words.t(l, "payables.record_an_invoice"), "form-invoice", "", "soft"),
-                desk.action(words.t(l, "payables.cancel_invoice"), "form-cancel-invoice", "", "quiet"),
-                desk.action(words.t(l, "common.suppliers"), "go", "suppliers", "quiet"),
-            ]),
+        // **Goods in comes first**, because it is what a shop does most: a van
+        // turns up and the stock has to go on. Raising an order against a
+        // wholesaler is the less frequent thing, and it used to be the only
+        // door — which is why buying anything meant inventing an order first.
+        desk.Block.Buttons(items: buying_actions(delivery.len() > 0, l)),
+        delivery_table(delivery, delivery_value, l, c),
         table(words.t(l, "replenishment.reorder_worksheet"),
             words.t(l, "replenishment.what_to_buy_over_28_days"),
             [words.t(l, "common.product"), words.t(l, "common.supplier"),
@@ -1198,6 +1254,11 @@ pub fn order_detail(answer: model.OrderPage, l: i18n.Lang, c: money.Currency) ->
         desk.Fact { label: words.t(l, "purchasing.raised"),
             value: browser.day_of(order.created_at), tone: "" },
     ]
+    var facts_with_reason = facts
+    if order.cancel_reason.len() > 0 {
+        facts_with_reason.push(desk.Fact { label: words.t(l, "purchasing.why_cancelled"),
+                value: order.cancel_reason, tone: "stop" })
+    }
     var actions: [desk.Action] = []
     if status == "draft" {
         actions.push(desk.action(words.t(l, "purchasing.send_to_supplier"),
@@ -1207,9 +1268,27 @@ pub fn order_detail(answer: model.OrderPage, l: i18n.Lang, c: money.Currency) ->
         actions.push(desk.action(words.t(l, "purchasing.receive_everything_outstanding"),
                 "receive-all", id, "filled"))
     }
-    if status != "draft" {
+    // **Not on a Goods In.** That one wrote its own invoice in the same press
+    // that booked the stock, and offering to record another is how a shop ends
+    // up owing a supplier twice for one van — with `1300 Goods received not
+    // invoiced` left permanently credited, because two invoices cleared an
+    // accrual that was raised once.
+    if status != "draft" && !order.direct {
         actions.push(desk.action(words.t(l, "payables.record_an_invoice"),
                 "form-invoice", id, "soft"))
+    }
+    // **The way out.** A draft is deleted, because nothing happened to it; an
+    // order the supplier was told about is cancelled and keeps its row with the
+    // reason on it. Both go through a form rather than a bare press, which is
+    // also what gives them the guard that stops a slow line turning one tap
+    // into four.
+    if status == "draft" {
+        actions.push(desk.action(words.t(l, "purchasing.delete_draft"),
+                "form-delete-order", id, "danger"))
+    }
+    if status == "sent" {
+        actions.push(desk.action(words.t(l, "purchasing.cancel_this_order"),
+                "form-cancel-order", id, "danger"))
     }
 
     var lines: [desk.Row] = []
@@ -1231,7 +1310,7 @@ pub fn order_detail(answer: model.OrderPage, l: i18n.Lang, c: money.Currency) ->
     return [
         desk.Block.Detail(
             title: words.fill(l, "purchase_order.order_n", "#\(order.number)"),
-            subtitle: order.supplier_name, facts: facts, actions: actions),
+            subtitle: order.supplier_name, facts: facts_with_reason, actions: actions),
         table(words.t(l, "common.lines"), words.t(l, "purchase_order.touch_a_line_to_receive"),
             [words.t(l, "common.product"), words.t(l, "products.sku"),
                 words.t(l, "common.ordered"), words.t(l, "common.received"),

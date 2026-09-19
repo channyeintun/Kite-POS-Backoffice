@@ -41,6 +41,17 @@
   --commit: 118px;
   --key: 118px;
   --command: 64px;
+  /* What the tender keys column cannot do without: 20 px of padding top and
+   * bottom, the amount it is typing into, the quick-note row, four 56 px keys
+   * with their gaps, the commit, and the three 10 px gaps between them. The
+   * ledger above it in portrait is capped so this is always left over — a
+   * keypad with its bottom row cut off is worse than a shorter basket. */
+  --tender-min: 504px;
+  /* The height the transient message band takes when there is one. Zero until
+   * a layout says otherwise — only phone landscape, where `#app` is a wrapping
+   * row and the two regions beside the rail state their own height, has to
+   * budget for it by hand. */
+  --band: 0px;
 }
 
 * { box-sizing: border-box; }
@@ -409,31 +420,89 @@ main.lane { display: flex; flex: 1; min-width: 0; min-height: 0; }
  * else. What has been taken, what is still due and the two buttons that end the
  * sale sit in the *ledger* — see `tender_summary` in `till.kite`.
  *
- * **The numeric surface must not need scrolling**, because the last key on it
- * is `0` and every kyat price ends in one. Two arrangements keep that, and the
- * media query below picks between them on the one thing that decides it: is the
- * work area wide enough to stand the chooser beside the keys.
+ * **The numeric surface must not need scrolling, at any size, in either
+ * orientation.** The last key on it is `0` and every kyat price ends in one, so
+ * a keypad below the fold is a keypad that cannot be used.
  *
- * This is the narrow one — stacked, keys at their drawn size, and the column
- * scrolls if it must with `Add tender` sticky so the commit is never the thing
- * below the fold. */
+ * It used to scroll, and it scrolled on the most ordinary tablet a shop owns.
+ * Two arrangements existed — a stacked one that declared itself a scroller, and
+ * a side-by-side one that did not — and the side-by-side one was gated at
+ * `min-width: 1264px` in landscape. A 10.9" iPad in landscape is 1180 px wide,
+ * so it fell into the stacked branch, and the operator got five tender buttons,
+ * a rule, an amount and three quick-note keys above the fold with the keypad
+ * below it. The gate was derived from the drawn sizes of two columns that
+ * never had to hold those sizes.
+ *
+ * **So the side-by-side arrangement is the default now, and both columns give.**
+ * The keys shrink from their drawn width down to the 9.5 mm floor the whole
+ * stylesheet is built on, the chooser takes what is left, and the keypad
+ * divides the height it is given into four exact rows. Stacking is what a phone
+ * in portrait gets, at the bottom of this section, and it is the only place it
+ * happens.
+ *
+ * `overflow: hidden` rather than `auto` states the rule rather than describing
+ * it: there is no scrollbar to reach for, so anything that does not fit is a
+ * bug in the arithmetic below rather than a thing the cashier has to work
+ * around. */
 .tender-work {
-  flex-direction: column;
+  flex-direction: row;
+  align-items: stretch;
   gap: 16px;
   padding: 20px;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
 }
-.tender-choose { display: flex; flex-direction: column; gap: 10px; flex: none; min-width: 0; }
-.tender-choose .tenders { display: flex; flex-direction: column; gap: var(--gap); }
-.tender-keys { display: flex; flex-direction: column; gap: 10px; flex: none; width: 100%; align-items: center; }
-.tender-keys .keypad { width: min(100%, calc(var(--key) * 4 + var(--gap) * 3)); }
-.tender-keys .commit.wide {
-  position: sticky;
-  bottom: 0;
-  width: 100%;
-  box-shadow: 0 -12px 16px -8px var(--bg);
+
+/* The chooser sits beside the keys and takes the width it needs. 156 px is what
+ * "KBZPay / Wave" wants at 14 px plus the button's own border — below that the
+ * label wraps, and a wrapped label is clipped by the button's height.
+ *
+ * **The buttons keep their own height and the column is allowed to end.**
+ * They used to be `flex: 1`, dividing the whole column between five of them —
+ * the idea being that a column which stops halfway down looks unfinished. What
+ * it actually produced was five 100 px slabs to choose between cash and card,
+ * each the size of a commit button, on a screen where the keypad is the thing
+ * the cashier needs to reach. Dead space below a list costs nothing; a tender
+ * button four times the size of the decision it carries costs the operator
+ * every time they look at it. */
+.tender-choose {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 200px;
+  min-width: 156px;
+  min-height: 0;
 }
+.tender-choose .tenders { display: flex; flex-direction: column; gap: var(--gap); flex: none; }
+.tender-choose .tender { height: 64px; flex: none; }
+
+/* Drawn at four keys and three gaps wide, floored at four 56 px keys and three
+ * gaps — 9.5 mm a key, which is the smallest a thumb can be asked to hit. The
+ * `0 1` is what lets it come down off the first figure toward the second as the
+ * work area narrows, instead of pushing the chooser off the screen. */
+.tender-keys {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 0 1 calc(var(--key) * 4 + var(--gap) * 3);
+  min-width: calc(56px * 4 + var(--gap) * 3);
+  min-height: 0;
+  align-items: stretch;
+}
+/* A flex child of a column whose height is known, so it divides that height
+ * into four exact rows: capped at the 20 mm it is drawn at, floored at 56 px a
+ * key, and incapable of running past the bottom. */
+.tender-keys .keypad {
+  flex: 1;
+  min-height: calc(56px * 4 + var(--gap) * 3);
+  max-height: calc(var(--key) * 4 + var(--gap) * 3);
+  grid-auto-rows: minmax(0, 1fr);
+  width: auto;
+  max-width: none;
+  margin-inline: 0;
+}
+.tender-keys .key { min-height: 0; }
+.tender-keys .commit.wide { margin-top: auto; }
 
 /* The notes on one line. Five offers at a 96 px floor need 512 px, which is
  * more than the column is often wide, so the row wrapped and left `50,000`
@@ -443,48 +512,69 @@ main.lane { display: flex; flex: 1; min-width: 0; min-height: 0; }
 
 /* The summary in its ledger home. It is a column at the foot of the basket, not
  * a 300 px panel in the middle of the work area. */
-.tender-summary { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.tender-summary { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; min-height: 0; }
 
-/* Side by side, wherever the work area can hold both columns: 496 px of keys,
- * a 16 px gap and about 232 px of chooser is 744 px. In landscape the ledger
- * takes 480 of the viewport and the padding 40, so that wants 1264 px; in
- * portrait the ledger is a band *above* the work area rather than beside it,
- * so the whole width is available and 784 px is enough. Two conditions, one
- * rule, and the arithmetic is the same both times.
+/* **What the keys need is reserved on the keys' own column.**
  *
- * Here the keypad is a flex child of a column whose height is known, so it
- * divides that height into four exact rows: capped at the 20 mm it is drawn
- * at, floored at 56 px a key, and incapable of running past the bottom. The
- * methods take the slack beside it, which is what fills a column that was
- * otherwise empty from the last key down. */
-@media (min-width: 1264px), (orientation: portrait) and (min-width: 784px) {
-  .tender-work { flex-direction: row; align-items: stretch; overflow: visible; }
-  .tender-choose { flex: 1; min-height: 0; }
-  .tender-choose .tenders { flex: 1; min-height: 0; }
-  .tender-choose .tender { flex: 1; height: auto; min-height: 56px; }
-  .tender-keys {
-    flex: none;
-    min-height: 0;
-    align-items: stretch;
-    width: min(100%, calc(var(--key) * 4 + var(--gap) * 3));
-  }
-  .tender-keys .keypad {
-    flex: 1;
-    min-height: calc(56px * 4 + var(--gap) * 3);
-    max-height: calc(var(--key) * 4 + var(--gap) * 3);
-    grid-auto-rows: minmax(0, 1fr);
-    width: auto;
-    max-width: none;
-    margin-inline: 0;
-  }
-  .tender-keys .key { min-height: 0; }
-  .tender-keys .commit.wide { position: static; margin-top: auto; }
-}
+ * It used to be stated the other way round, as a cap on the ledger in
+ * portrait — which meant landscape had no reservation at all, and in portrait
+ * the ledger's foot simply painted outside the box it had been capped to.
+ * `.ledger-foot` is not a thing that can be shrunk by being told it is smaller:
+ * it carries the running total, what has been taken, and the two buttons that
+ * end the sale, and those buttons ended up hanging over the tender chooser,
+ * where a tap selected `On account` instead of `Finish`.
+ *
+ * So the work column asks for what it needs and does not give it back, and the
+ * ledger takes what is left. Inside the ledger, what gives is the list of
+ * payments already taken — a list, which is the one thing this layout is
+ * allowed to scroll. The due figure and both exits never move. */
+.tendering .work { flex: 1 0 auto; min-height: var(--tender-min); }
+/* **A hard stop, so an overlap is not among the outcomes.**
+ *
+ * Everything below negotiates: the basket rows scroll away, the list of
+ * payments taken scrolls, the summary stops at its own content. On a window
+ * shorter than the two regions together can be drawn in, the last of those
+ * negotiations still has to end somewhere — and the one ending this layout may
+ * not have is the band's foot painting over the tender chooser, because there
+ * a tap meant for `Finish` selects `On account` and the sale is put on a
+ * customer's tab. Clipped is recoverable; rung to the wrong tender is not. */
+.tendering .ledger { min-height: 0; overflow: hidden; }
+/* A column, so that what is inside it can be told to give. As a block the foot
+ * simply grew to its content and the summary ran straight out of the bottom of
+ * it, which is not something `min-height` on the foot can prevent — nothing
+ * inside a block shrinks. */
+.tendering .ledger-foot { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; }
+/* The totals, the grand total and the summary's own rows keep their size. */
+.tendering .ledger-foot > * { flex: none; }
+/* **The summary stops shrinking at its own content.**
+ *
+ * `min-height: 0` let it take whatever was left, and what was left was three
+ * pixels less than the balance due, the gap and the two buttons actually
+ * occupy — so those two buttons painted past the bottom of the band and over
+ * the tender chooser, and a tap on `Finish` chose `On account`. Three pixels
+ * is enough to ring the wrong thing. The list of payments above them still
+ * gives, and gives first; this is the floor it gives down to. */
+.tendering .tender-summary { flex: 0 1 auto; min-height: min-content; }
+/* **Three payments, then the list scrolls.**
+ *
+ * A split tender is normally two — part cash, part wallet — and the band has
+ * room for three without asking anything else to give. Beyond that the list is
+ * a list, and a list is the one thing this layout is allowed to scroll; what it
+ * may not do is push the balance due and the two exits down the screen, which
+ * is exactly what it did. 132 px is three rows and their gaps.
+ *
+ * Capped rather than only `min-height: 0`, because a scroll container's
+ * min-content height does not make its *parent's* max-content any smaller —
+ * the summary sized itself to all five rows and overflowed the foot before
+ * anything had a chance to shrink. */
+.tender-summary .takens { flex: 0 1 auto; min-height: 0; max-height: 132px; overflow-y: auto; }
+.tender-summary .due, .tender-summary .tender-actions { flex: none; }
 
 /* Short windows get smaller keys rather than a scrollbar. 20 mm is the figure
  * the layout is built on and it is kept wherever the height is there for it; a
  * desktop window 700 px tall is not a till, and a cashier reaching past the
- * bottom of the screen for `0` is worse than a 88 px key. */
+ * bottom of the screen for `0` is worse than a 88 px key. These lower the
+ * *ceiling* above; the 56 px floor is never traded away here. */
 @media (max-height: 820px) { :root { --key: 100px; } }
 @media (max-height: 740px) { :root { --key: 88px; } }
 @media (max-height: 660px) { :root { --key: 76px; } }
@@ -606,31 +696,53 @@ main.lane { display: flex; flex: 1; min-width: 0; min-height: 0; }
   align-items: center;
   gap: var(--gap);
   flex: none;
-  /* Grown by the bottom inset rather than padded into: at 96 px flat, the home
-   * indicator would eat 21 px of a strip that has to hold a 64 px button. */
-  height: calc(96px + env(safe-area-inset-bottom));
-  padding: 0 20px;
-  padding-bottom: env(safe-area-inset-bottom);
+  /* Grown by the bottom inset rather than padded into: at a flat height the
+   * home indicator would eat 21 px of a strip that has to hold a 64 px button. */
+  /* **It wraps; it does not scroll sideways.**
+   *
+   * The strip was one row with `overflow-x: auto`. Twelve commands at their
+   * 104 px floor, eleven gaps and the strip's own padding want about 1390 px —
+   * more than the 1280 px this stylesheet is dimensioned for, and more than any
+   * tablet a shop buys. So on every landscape lane the last commands sat past
+   * the right edge, reachable only by dragging a strip nobody expects to drag.
+   * That is the main layout scrolling, and this till does not do that.
+   *
+   * Wrapping was ruled out once on the grounds that a row which changes height
+   * moves the commit button. In landscape the commit is in the ledger, beside
+   * the total, and nothing above this strip moves when it grows; in portrait
+   * the commit is a fixed bar below it. So the objection does not hold here,
+   * and the strip is allowed to be as tall as the command set makes it.
+   *
+   * The buttons divide the width rather than sitting at a fixed minimum with
+   * dead space after them, and they stop shrinking at 88 px — the width at
+   * which "Customer" still reads whole. */
+  height: auto;
+  min-height: calc(var(--command) + 2 * var(--gap) + env(safe-area-inset-bottom));
+  flex-wrap: wrap;
+  align-content: center;
+  padding: var(--gap) 20px;
+  padding-bottom: calc(var(--gap) + env(safe-area-inset-bottom));
   padding-left: max(20px, env(safe-area-inset-left));
   padding-right: max(20px, env(safe-area-inset-right));
   background: #14181c;
-  /* The commands region's own colour, 3 px of it. `html, body` are
-   * `overflow: hidden`, so without `overflow-x` here a long enough command list
-   * — the set is per-role data — puts its last commands past the edge with no
-   * way to reach them at all. */
+  /* The commands region's own colour, 3 px of it. */
   border-top: 3px solid var(--warn);
-  overflow-x: auto;
+  overflow: hidden;
 }
-.commands .gap { flex: 1; }
-.command-group { display: flex; gap: var(--gap); }
+/* The spacer pushed the restricted group to the right edge of a single row.
+ * Across a wrapping strip it would claim a whole line of its own, so it stops
+ * growing and the two groups simply sit next to each other. */
+.commands .gap { flex: none; }
+.command-group { display: flex; flex-wrap: wrap; gap: var(--gap); flex: 1 1 auto; }
 /* Destructive commands sit in their own pinned group, never adjacent to a
  * high-frequency target. */
 .command-group.restricted { padding-left: 14px; border-left: 1px solid var(--line); }
 
 .command {
   height: var(--command);
-  min-width: 104px;
-  padding: 0 16px;
+  flex: 1 1 auto;
+  min-width: 88px;
+  padding: 0 12px;
   border: 1px solid var(--edge);
   border-radius: 8px;
   background: var(--raised);
@@ -717,11 +829,30 @@ main.lane { display: flex; flex: 1; min-width: 0; min-height: 0; }
 
 /* ---- what just happened -------------------------------------------------- */
 
+/* **In the flow, and a stated height.**
+ *
+ * It stays a region rather than floating over the bottom edge, because the
+ * bottom edge is where the commands are in sale and where `Add tender` is in
+ * tender, and a message that covers the thing it is complaining about is worse
+ * than one that costs a strip of height.
+ *
+ * The height is stated rather than left to the text, so every calculation
+ * below it can subtract a number instead of guessing one — and so a long
+ * sentence in မြန်မာ, whose line box is half again as tall, cannot quietly take
+ * a second line out of the keypad. `go_to_mode` in `store.kite` clears the
+ * message when the mode changes, which is what stops a sale-screen complaint
+ * sitting under the tender keypad for the rest of the transaction. */
 .notice-bar, .trouble-bar {
   flex: none;
-  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 38px;
+  padding: 0 16px;
   font-size: 14px;
+  line-height: 18px;
   text-align: center;
+  overflow: hidden;
 }
 .notice-bar { background: rgba(18, 163, 92, 0.16); color: #7fe3b0; }
 .trouble-bar { background: rgba(208, 52, 44, 0.18); color: #ffb4ae; }
@@ -789,7 +920,22 @@ main.lane { display: flex; flex: 1; min-width: 0; min-height: 0; }
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }
-  .tendering .ledger { height: auto; max-height: 62%; }
+  /* In tender the band carries what has been taken, the balance due and the
+   * two buttons that end the sale. It takes whatever the keys below have not
+   * reserved — see `.tendering .work` in the tender section, which is where
+   * that budget is now stated for both orientations rather than here for one.
+   *
+   * `flex: 0 1 auto` is what lets it actually give. `.ledger` is `flex: none`
+   * everywhere else, and in landscape that is about its *width* as a side
+   * column — but stacked, `none` meant the band sized to its content and the
+   * foot painted straight over the keypad below it, where a tap on `Finish`
+   * selected a tender instead. Only the stacked case is released. */
+  /* **`max-height: none`** — the 420 px ceiling above is the sale screen's, and
+   * it is a *band* of basket rows. In tender the same element carries the
+   * total, what has been taken and the two buttons that end the sale, and a
+   * ceiling meant for four rows of shopping cut the bottom off all three. What
+   * bounds it here is the keys below asking for theirs first. */
+  .tendering .ledger { height: auto; max-height: none; flex: 0 1 auto; min-height: 0; }
   .work { flex: 1; min-height: 0; }
 
   /* Everything in the ledger steps down a notch so four rows and the totals fit
@@ -844,6 +990,20 @@ main.lane { display: flex; flex: 1; min-width: 0; min-height: 0; }
    * shrinking past their buttons and letting the buttons spill out of the group
    * box, where `.commands` clips them without ever offering a scrollbar. */
   .commands .command-group { flex: 1 1 auto; }
+
+  /* **Two rows, and then the ledger gives way — not the tile grid.**
+   *
+   * The strip sizes to its content, and in portrait the ledger is a fixed band
+   * at the top, so every row the strip gained came out of the product grid
+   * underneath it. At 360 px that took the grid to eight pixels: not one tile
+   * visible, which removes the only way to ring loose produce and anything
+   * else with no barcode on it. The scan box alone is not a till.
+   *
+   * So the strip stops at two rows here, and the band above it becomes a
+   * ceiling rather than a height — the basket scrolls inside it, which it is
+   * allowed to do, and the grid keeps a row of tiles. */
+  .commands { max-height: calc(2 * var(--command) + 3 * var(--gap) + env(safe-area-inset-bottom)); }
+  .ledger { height: auto; max-height: 420px; flex: 0 1 auto; min-height: 0; }
   /* Grows to fill, but stops shrinking at 88 px. The design draws six buttons
    * here and lets them divide the width; the set is per-role data and this lane
    * has eleven, at which point `flex: 1` alone gives each 58 px and clips
@@ -883,29 +1043,128 @@ main.lane { display: flex; flex: 1; min-width: 0; min-height: 0; }
  * the number they are responsible for. */
 @media (max-width: 560px) {
   .row .detail .unit, .row .was { display: none; }
-  .ledger { height: 300px; }
+  .ledger { height: auto; max-height: 300px; }
   /* 2 · the customer panel collapses. The portrait block above gives it back at
    * tablet width; at 390 px there is no room for it. */
   .ledger-head .customer { display: none; }
   .grand-value { font-size: 32px; }
   .lang button { height: 30px; min-width: 34px; font-size: 11px; }
   .lang button:last-child { min-width: 44px; }
+  /* **The status bar fits, rather than running off the edge.**
+   *
+   * Its children are `flex: none` on purpose — a bar whose contents squeeze as
+   * the mode name gets longer reads differently in tender than in sale, which
+   * is the one thing it must not do. At 390 px that left it 25 px wider than
+   * the screen, and `html, body` are `overflow: hidden`, so the operator's own
+   * name and the way off the lane were the part past the edge.
+   *
+   * The lane id is what goes. It is the least useful thing here on a phone —
+   * there is one till in a pocket, and the cashier is standing at it — and
+   * dropping it buys back more than the overflow. What is below the line in the
+   * ladder above stays: the connection dot, the operator's name, and sign-off.
+   */
+  .status { gap: 10px; }
+  .status .register { display: none; }
+  /* `flex: 0 1 auto`, and it is the point of the rule. Everything in this bar
+   * is `flex: none` so the layout does not read differently in tender than in
+   * sale — but a `min-width: 0` on an item that may not shrink is inert, so
+   * the ellipsis below never fired and the operator's name and the way off the
+   * lane ran off a 360 px screen exactly as before. This is the one group
+   * allowed to give, and it gives by truncating rather than by moving. */
+  .status-right { gap: 10px; flex: 0 1 auto; min-width: 0; }
+  .who { flex: 0 1 auto; min-width: 0; padding: 0 6px; }
+  .who-name, .who-out { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* Content-sized again: a fixed 96 px on both chips plus the scan field does
    * not fit across 390 px. */
   .scan .chip:nth-last-child(2), .scan .chip:last-child { width: auto; min-width: 0; padding: 0 12px; }
   .tile { padding: 8px; }
   .grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); grid-auto-rows: 132px; }
-  /* Scrolls horizontally rather than wrapping: a wrapped row changes height and
-   * moves the commit button. */
-  .commands { height: calc(84px + env(safe-area-inset-bottom)); overflow-x: auto; }
-  .command { min-width: 76px; font-size: 12px; }
+  /* Three rows of four rather than a sideways drag. Twelve commands do not fit
+   * across 390 px at any legible width, so the strip wraps and the shorter key
+   * below buys back the height it costs. */
+  :root { --command: 52px; }
+  .command { min-width: 72px; padding: 0 6px; font-size: 12px; }
   /* The pinned bar from the portrait block, at the phone's height. 112 px is a
    * seventh of an 844 px screen. */
   .ledger-foot > .commit { height: calc(72px + env(safe-area-inset-bottom)); padding: 0 16px; font-size: 18px; }
   #app:has(.ledger-foot > .commit) { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
-  /* Already stacked by the 1311 px rule above; the summary is in the ledger and
-   * needs no width of its own. What this block still decides is the key size. */
-  :root { --key: 84px; }
+
+  /* **The one viewport where tender stacks.**
+   *
+   * 390 px will not hold a keypad beside a column of tender buttons at any
+   * width either of them can be read at, so here — and only here — the two
+   * become one column. Which means the column has to be made to fit, because
+   * nothing scrolls: the basket gives way (it was reviewed before Pay, and the
+   * due figure and both exits stay in the band), the chooser drops back to the
+   * two-across grid it is drawn as everywhere else, and the label and the rule
+   * above it go. That is the "what gives way, in order" ladder above, applied
+   * to the smallest screen this till runs on. */
+  :root { --key: 76px; --tender-min: 420px; }
+  .tender-work { flex-direction: column; gap: 10px; padding: 12px 16px; }
+  .tender-choose { flex: none; min-width: 0; }
+  .tender-choose .region, .tender-choose .rule { display: none; }
+  .tender-choose .tenders { display: grid; grid-template-columns: repeat(2, 1fr); flex: none; }
+  .tender-choose .tender { height: 44px; min-height: 0; flex: none; }
+  /* The exact-amount button is the only quick note that matters once the
+   * operator is typing, and it is the first thing the keypad types. */
+  .tender-keys .quicks { display: none; }
+  .tender-keys { flex: 1; min-width: 0; }
+  /* **The 9.5 mm floor is the last thing to go, and here it goes.** Everywhere
+   * else the keys hold 56 px and something above them gives way instead; at
+   * 390 px there is nothing left above them to give. A key a little under the
+   * floor is still a key the operator can reach, and a bottom row below the
+   * fold is not. */
+  .tender-keys .keypad { min-height: 0; }
+  .tender-keys .commit.wide { height: 60px; }
+  .entry { padding: 8px 12px; }
+  .entry-value { font-size: 26px; }
+  .tendering .ledger-body { display: none; }
+  .tendering .ledger-head { display: none; }
+}
+
+/* **A short window gives up the quick notes before it gives up the total.**
+ *
+ * Stacked, the band above the keys and the keys themselves both want a fixed
+ * amount, and below about 900 px of height there is not enough for both: the
+ * band gets squeezed under what its own foot needs and the two buttons that
+ * end the sale paint over the tender chooser, where a tap on `Finish` selects
+ * `On account` instead. Every real portrait tablet is 1024 px tall or more and
+ * never reaches this; a half-screen window on a desktop does.
+ *
+ * What goes is the quick-note row — `4,500`, `5,000`, `10,000`. It is a
+ * shortcut for a number the keypad below it can type, and it is the highest
+ * thing on the ladder that is not load-bearing. The running total, the balance
+ * due and both exits stay, because they are the ones a cashier is answerable
+ * for. `--tender-min` comes down by exactly what the row and its gap cost. */
+@media (orientation: portrait) and (max-height: 900px) {
+  :root { --tender-min: 420px; }
+  .tender-keys .quicks { display: none; }
+  /* And the subtotal line goes with them. It is the same trade one rung
+   * further down: TOTAL stays, because that is the figure the cashier is
+   * answerable for, and the breakdown above it is available on the receipt. */
+  .tendering .totals { display: none; }
+  /* Two payments visible rather than three, for the same reason and one rung
+   * further again. The list still holds every one of them and still scrolls;
+   * what it may not do is take the room the balance due and the two exits
+   * need, on a screen that has none spare. */
+  .tender-summary .takens { max-height: 76px; }
+  /* The band's own heading — "LEDGER · 3 items · locked" — is chrome. In
+   * tender the basket is already reviewed and locked, and the rows below it
+   * have scrolled away; the heading is naming a list nobody is reading. */
+  .tendering .ledger-head { display: none; }
+}
+
+/* The last rung, for a screen that is genuinely too small for this layout: an
+ * old 320 x 640 phone. The keys come down to their own floor — four 56 px rows
+ * and nothing spare — so the band still gets the total, the balance due and
+ * both exits. Below this there is no arrangement left to try. */
+@media (orientation: portrait) and (max-height: 700px) {
+  :root { --tender-min: 368px; }
+  /* And the list of what has been taken goes entirely. The balance due says
+   * what is left to pay, which is the number the operator is acting on; the
+   * breakdown of how it got there is on the receipt. This is the bottom of the
+   * ladder — below it there is no arrangement left to try. */
+  .tender-summary .takens { display: none; }
 }
 
 /* 7 · phone landscape. Below ~420 px of height a stacked layout leaves nothing
@@ -926,11 +1185,27 @@ main.lane { display: flex; flex: 1; min-width: 0; min-height: 0; }
   .ledger-body .detail { display: none; }
   .grand-value { font-size: 24px; }
   .commit { height: 64px; font-size: 16px; }
+  /* **Two columns of buttons, not one column that scrolls.**
+   *
+   * Twelve commands at 52 px in a single 92 px column is 624 px of rail in a
+   * 356 px-tall lane, and the four at the bottom — Return, Void sale, No sale,
+   * Close lane — were only reachable by dragging. Two columns of six fit
+   * exactly, and the rail pays for it in width: 168 px against 92, taken from a
+   * work column that in sale mode holds a grid which scrolls anyway. Tender has
+   * no rail at all, so it is untouched.
+   *
+   * `overflow-y` stays as the backstop. The command set is per-role data; if a
+   * shop ever has more than twelve, a scroll is still better than four buttons
+   * clipped off the bottom with nothing to say so. */
+  :root { --rail: 168px; }
   .commands {
     order: -1;
-    flex-direction: column;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-content: flex-start;
     height: auto;
-    width: 92px;
+    width: var(--rail);
+    min-height: 0;
     padding: 8px;
     padding-left: max(8px, env(safe-area-inset-left));
     border-top: 0;
@@ -950,12 +1225,53 @@ main.lane { display: flex; flex: 1; min-width: 0; min-height: 0; }
    * free space between lines and would leave a gap under the rail. */
   #app { flex-direction: row; flex-wrap: wrap; }
   .status { order: -2; width: 100%; flex: none; }
+  /* **The lane has to be told to take a line of its own.**
+   *
+   * It is `flex: 1 1 0` everywhere else, and a flex item whose basis is zero
+   * fits on any line — including the one the full-width status bar has already
+   * filled. In sale mode that was invisible, because the 92 px command rail
+   * wrapped first and dragged the lane onto line 2 behind it. In **tender**
+   * there is no command rail — `page()` only draws one in sale — so the lane
+   * stayed on line 1 beside the status bar, collapsed to nothing, and the whole
+   * screen rendered off the right-hand edge. Stating the basis as the width
+   * left over from the rail makes it wrap whether the rail is there or not. */
+  main.lane { flex: 1 1 calc(100% - var(--rail)); }
   .commands, main.lane {
     height: calc(100dvh - 34px - env(safe-area-inset-top));
   }
-  .command { min-width: 0; width: 100%; height: 52px; font-size: 11px; }
-  .command-group { flex-direction: column; width: 100%; }
+  /* 42 px, and it is the one place in this stylesheet under the 9.5 mm floor.
+   *
+   * Twelve commands in two columns is six rows, and the two groups do not
+   * interleave — four rows of ordinary commands, a rule, then two of
+   * destructive ones: 6 x button + 5 x gap + the group's own 4 px and 1 px
+   * rule. At 46 px that is 317 px against the 326 px a 360 px-tall phone
+   * leaves, which fits until a message band takes 38 px of it and the last two
+   * go under the fold. At 42 px it is 293 px and holds with the band up.
+   *
+   * A phone held sideways is the most degraded thing this till runs on, and a
+   * command the operator can see and hit slightly small beats one they have to
+   * know is there and drag for. `overflow-y` above stays as the backstop for a
+   * command set longer than twelve. */
+  .command { min-width: 0; flex: 0 0 calc(50% - 4px); height: 42px; padding: 0 4px; font-size: 11px; }
+  .command-group.restricted { padding-top: 4px; }
+  .command-group { flex-direction: row; flex-wrap: wrap; width: 100%; flex: none; gap: var(--gap); }
   .command-group.restricted { padding-left: 0; padding-top: 8px; border-left: 0; border-top: 1px solid var(--line); }
+  .commands .gap { display: none; }
+
+  /* **The message band takes a line of its own.**
+   *
+   * `#app` is a wrapping *row* here, and a `flex: none` child with no width
+   * sizes to its own text — so the band rendered as a 230 px vertical strip
+   * down the right edge and took that much off the work column. A stated width
+   * puts it back where it belongs, and `order` keeps it under the lane rather
+   * than between the rail and the work area. The two regions above subtract it
+   * from their stated height; `--band` is zero until there is one. */
+  .notice-bar, .trouble-bar { order: 3; width: 100%; }
+  .commands, main.lane {
+    height: calc(100dvh - 34px - var(--band) - env(safe-area-inset-top));
+  }
+  #app:has(.trouble-bar), #app:has(.notice-bar) { --band: 38px; }
+
   /* 132 and 110 px for Search and Keypad are tablet numbers. With a 260 px
    * ledger and a 92 px thumb rail the work column is 176 px wide, and the two
    * chips alone are wider than the row. */
@@ -965,6 +1281,49 @@ main.lane { display: flex; flex: 1; min-width: 0; min-height: 0; }
   .tabs { height: 48px; padding: 0 8px; }
   .grid { grid-auto-rows: 108px; padding: 8px 8px 0; }
   :root { --key: 68px; }
+
+  /* Tender, on a screen 390 px tall. The chooser and the keys stay side by
+   * side — stacking them here is hopeless — and everything that is not a key
+   * or a tender button goes: the label, the rule, the quick notes. The keys
+   * take what is left, below their usual floor, for the reason given in the
+   * phone-portrait block above. */
+  /* **The floors come off here, because they cannot be met here.**
+   *
+   * A 667 x 375 phone in landscape leaves the work column 407 px, and the
+   * side-by-side tender asks for 440 before it will shrink: a 156 px chooser
+   * and a 248 px keypad, neither of which will give. With `overflow: hidden`
+   * the difference is not a scrollbar, it is backspace, `Clear` and `000`
+   * sliced off the right edge — and a tender typed wrong with no backspace
+   * cannot be corrected at all. At 568 px wide those three keys are off the
+   * screen entirely.
+   *
+   * So the two minimums are released and the columns divide what there is; the
+   * keypad's tracks are already `minmax(0, 1fr)` and shrink cleanly. The
+   * ledger narrows too — it is showing nothing but its foot here. */
+  .tender-work { padding: 10px 12px; gap: 10px; }
+  .tender-choose { min-width: 0; flex: 0 1 34%; }
+  .tender-choose .region, .tender-choose .rule { display: none; }
+  .tender-choose .tenders { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); flex: none; }
+  .tender-choose .tender { height: 40px; font-size: 11px; padding: 0 4px; }
+  .tender-keys { min-width: 0; flex: 1 1 auto; }
+  .tender-keys .quicks { display: none; }
+  .tender-keys .keypad { min-height: 0; }
+  .tender-keys .commit.wide { height: 48px; }
+  .entry { padding: 6px 10px; }
+  .entry-value { font-size: 22px; }
+  .tendering .ledger { width: 200px; }
+  .tendering .ledger-body { display: none; }
+
+  /* **Sign in, in two columns.** One column wants 534 px of a 390 px screen:
+   * a title, four rows of dots-and-keys, a message and the language pair. The
+   * pad keeps its own block on the right and everything that is words stacks
+   * beside it, which is the only arrangement that fits without taking the pad
+   * below the 9.5 mm floor a PIN is tapped at. */
+  .signin { flex-direction: row; flex-wrap: wrap; align-content: center; justify-content: center; gap: 8px 28px; padding: 10px 20px; }
+  .signin h1 { font-size: 17px; }
+  .signin > *:not(.pin-pad) { flex: 1 1 40%; min-width: 0; text-align: center; }
+  .signin .pin-pad { flex: none; order: 2; }
+  .signin .lang { justify-content: center; }
 }
 
 /* ---- returns and customers ----------------------------------------------- */

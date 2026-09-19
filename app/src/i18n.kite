@@ -127,7 +127,7 @@ fn english(key: str) -> str {
         "discount" => "Discount",
         "each" => "each",
         "empty_basket" => "Scan something to begin",
-        "enter_pin" => "Enter your PIN",
+        "enter_pin" => "Enter your PIN, then press →",
         "favourites" => "Favourites",
         "finish" => "Finish",
         "held" => "Held",
@@ -197,6 +197,8 @@ fn english(key: str) -> str {
         "void_line" => "Void line",
         "wallet" => "KBZPay / Wave",
         "why" => "Why",
+        "finish_this_first" => "Finish this first — that scan was not rung up",
+        "pin_too_short" => "A PIN is at least four digits",
         "wrong_pin" => "That PIN was not recognised",
         // `str` is unbounded, so a `_` arm is required rather than optional.
         // It is also the missing-key path: "" tells `t` to try English, then
@@ -228,7 +230,7 @@ fn burmese(key: str) -> str {
         "discount" => "လျှော့ဈေး",
         "each" => "တစ်ခုလျှင်",
         "empty_basket" => "စတင်ရန် စကန်ဖတ်ပါ",
-        "enter_pin" => "သင့် PIN ရိုက်ထည့်ပါ",
+        "enter_pin" => "သင့် PIN ရိုက်ထည့်ပြီး → ကို နှိပ်ပါ",
         "favourites" => "အသုံးများ",
         "finish" => "ပြီးဆုံး",
         "held" => "ဆိုင်းငံ့စာရင်း",
@@ -295,6 +297,8 @@ fn burmese(key: str) -> str {
         "void_line" => "စာကြောင်းဖျက်",
         "wallet" => "KBZPay / Wave",
         "why" => "အကြောင်းပြချက်",
+        "finish_this_first" => "ဤအဆင့်ကို အရင်ပြီးအောင်လုပ်ပါ — ထိုစကန်ကို မသွင်းရသေးပါ",
+        "pin_too_short" => "PIN သည် အနည်းဆုံး ဂဏန်း ၄ လုံး ဖြစ်ရမည်",
         "wrong_pin" => "PIN မမှန်ကန်ပါ",
         // `str` is unbounded, so a `_` arm is required rather than optional.
         // It is also the missing-key path: "" tells `t` to try English, then

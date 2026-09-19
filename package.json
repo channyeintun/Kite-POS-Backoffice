@@ -20,7 +20,8 @@
     "deploy:app": "npm run build --workspace=@kite-pos/app && npm run deploy --workspace=@kite-pos/app",
     "deploy:api:khant": "npm run deploy --workspace=@kite-pos/api -- --env khant",
     "deploy:app:khant": "npm run build:khant --workspace=@kite-pos/app && npm run deploy:khant --workspace=@kite-pos/app",
-    "setup:khant": "npm run db:migrate:khant --workspace=@kite-pos/api"
+    "setup:khant": "npm run db:migrate:khant --workspace=@kite-pos/api",
+    "test:purchasing": "node api/test/purchasing.mjs"
   },
   "//allowScripts": "Hoisted from both workspaces. Each fetches a platform binary its tool is useless without: esbuild bundles, and workerd is the runtime `wrangler dev` runs the Worker in.",
   "allowScripts": {

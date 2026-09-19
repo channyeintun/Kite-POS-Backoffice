@@ -793,7 +793,16 @@ pub fn page(app: desk.App) -> [html.Node] {
     var out: [html.Node] = [
         html.keyed("shell", html.el("div", [html.class("office")], [
                     rail(app),
-                    html.keyed("main", html.el("main", [html.class("page")], main)),
+                    // **The page says when it is working.**
+                    //
+                    // Not decoration: the buttons inside it write, and a shop on
+                    // a slow line taps a button again when nothing happens. The
+                    // handlers refuse the second press, but a button that looks
+                    // exactly as it did before the first one is a button that
+                    // invites it. The rail is deliberately outside this — moving
+                    // to another screen while one is loading is legitimate.
+                    html.keyed("main", html.el("main",
+                            [html.class(if app.busy { "page working" } else { "page" })], main)),
                 ])),
     ]
     let open = app.form

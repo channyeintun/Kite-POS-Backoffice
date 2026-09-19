@@ -474,8 +474,9 @@ pub fn receive(item_id: str, name: str, outstanding: float, unit_cost: int,
 }
 
 pub fn invoice(supplier_ids: [str], supplier_names: [str], po_id: str, supplier_id: str,
-    total: int, l: i18n.Lang, c: money.Currency) -> desk.Form {
-    return desk.about(
+    total: int, key: str, l: i18n.Lang, c: money.Currency) -> desk.Form {
+    return desk.keyed(
+        desk.about(
         desk.explained(
             desk.form("invoice", words.t(l, "payables.record_an_invoice"),
                 words.t(l, "shifts.record"), [
@@ -487,12 +488,14 @@ pub fn invoice(supplier_ids: [str], supplier_names: [str], po_id: str, supplier_
                         words.t(l, "payables.due_days_hint")),
                 ]),
             words.t(l, "payables.invoice_lede")),
-        po_id)
+        po_id),
+        key)
 }
 
-pub fn pay_invoice(id: str, supplier: str, outstanding: int, l: i18n.Lang,
+pub fn pay_invoice(id: str, supplier: str, outstanding: int, key: str, l: i18n.Lang,
     c: money.Currency) -> desk.Form {
-    return desk.about(
+    return desk.keyed(
+        desk.about(
         desk.form("pay-invoice", words.t(l, "payables.pay_supplier"), words.t(l, "common.pay"), [
                 readonly_field("supplier", words.t(l, "common.supplier"), supplier),
                 readonly_field("outstanding", words.t(l, "common.outstanding"),
@@ -503,7 +506,8 @@ pub fn pay_invoice(id: str, supplier: str, outstanding: int, l: i18n.Lang,
                     [words.t(l, "common.cash"), words.t(l, "common.card"),
                         words.t(l, "common.wallet")], "cash"),
             ]),
-        id)
+        id),
+        key)
 }
 
 pub fn expense(accounts: [model.AccountOption], l: i18n.Lang, c: money.Currency) -> desk.Form {
@@ -802,5 +806,147 @@ pub fn reverse_entry(id: str, l: i18n.Lang) -> desk.Form {
                     desk.required(text_field("reason", words.t(l, "common.why"), "")),
                 ]),
             words.t(l, "accounting.reverse_entry_lede")),
+        id)
+}
+
+// ---- goods in --------------------------------------------------------------
+//
+// A delivery booked straight into stock. Three forms rather than one, because
+// a delivery has a variable number of lines and a `desk.Form` has a fixed list
+// of fields: lines are added one at a time into `desk.App.goods_in`, which
+// costs no request, and the last form is the one press that writes the lot.
+
+/// One line of a delivery: what arrived, how many, and what it cost.
+///
+/// The cost is pre-filled from the product's current cost price, because most
+/// deliveries are at the price the last one was — and the one that is not is
+/// the one a shopkeeper wants to type, not read.
+pub fn goods_in_line(products: [model.CatalogProduct], l: i18n.Lang,
+    c: money.Currency) -> desk.Form {
+    var ids: [str] = []
+    var names: [str] = []
+    var cost = 0
+    for p in products {
+        if p.active {
+            ids.push(p.id)
+            names.push("\(p.name) · \(p.sku)")
+        }
+    }
+    if ids.len() == 0 {
+        ids = [""]
+        names = [words.t(l, "products.no_products_match")]
+    } else {
+        // The cost of the product the list opens on — and it follows the
+        // chooser from there: `changed` in `office.kite` rewrites this field
+        // whenever the product does. It used to be pre-filled once and left,
+        // so an operator who picked the second row saw the first row's cost
+        // sitting under it, and that number is written onto `products.cost`.
+        // Every margin the shop reports afterwards is computed against a price
+        // it never paid.
+        for p in products {
+            if p.id == ids[0] {
+                cost = p.cost
+            }
+        }
+    }
+    return desk.explained(
+        desk.form("goods-in-line", words.t(l, "purchasing.add_a_line"),
+            words.t(l, "common.add"), [
+                desk.required(choice_field("product_id", words.t(l, "purchasing.which_product"),
+                        ids, names, ids[0])),
+                desk.required(qty_field("qty", words.t(l, "purchasing.qty_arrived"), 1.0)),
+                desk.required(
+                    desk.hinted(money_field("unit_cost", words.t(l, "purchasing.cost_each"), cost, c),
+                        words.t(l, "purchasing.cost_each_hint"))),
+            ]),
+        words.t(l, "purchasing.goods_in_lede"))
+}
+
+/// The press that writes the delivery.
+///
+/// `subject` carries the key minted when the first line was added, so tapping
+/// this four times on a bad line books one delivery — see
+/// `desk.goods_in_add` and the `client_id` the Worker reads.
+pub fn goods_in_book(suppliers: [model.Supplier], key: str, supplier_id: str,
+    settlement: str, total: int, l: i18n.Lang, c: money.Currency) -> desk.Form {
+    // **The shop itself comes first.**
+    //
+    // Most of what a corner shop buys is not ordered from anybody: the owner
+    // walks to the market with notes in their pocket and carries the cases
+    // back. `sup_cash` is the supplier the shop is given for exactly that, so
+    // that run is add the lines, say cash, book it — and nobody has to invent a
+    // wholesaler to record their own shopping. Hoisted by id rather than by
+    // name, because the name is the shopkeeper's to change.
+    var ids: [str] = []
+    var names: [str] = []
+    for s in suppliers {
+        if s.active && s.id == "sup_cash" {
+            ids.push(s.id)
+            names.push(s.name)
+        }
+    }
+    for s in suppliers {
+        if s.active && s.id != "sup_cash" {
+            ids.push(s.id)
+            names.push(s.name)
+        }
+    }
+    if ids.len() == 0 {
+        ids = [""]
+        names = [words.t(l, "common.none_dash")]
+    }
+    var chosen = supplier_id
+    if chosen.len() == 0 {
+        chosen = ids[0]
+    }
+    return desk.about(
+        desk.explained(
+            desk.form("goods-in-book", words.t(l, "purchasing.book_a_delivery"),
+                words.t(l, "purchasing.book_it_into_stock"), [
+                    readonly_field("value", words.t(l, "common.total"), money.show(total, c)),
+                    desk.required(choice_field("supplier_id", words.t(l, "common.supplier"),
+                            ids, names, chosen)),
+                    desk.hinted(choice_field("settlement", words.t(l, "purchasing.how_it_is_paid"),
+                            ["cash", "card", "wallet", "on_account"],
+                            [words.t(l, "purchasing.paid_cash"), words.t(l, "purchasing.paid_card"),
+                                words.t(l, "purchasing.paid_wallet"),
+                                words.t(l, "purchasing.paid_on_account")],
+                            settlement),
+                        words.t(l, "purchasing.settlement_hint")),
+                    text_field("reference", words.t(l, "purchasing.delivery_note"), ""),
+                    text_field("note", words.t(l, "purchasing.anything_the_supplier_should_know"), ""),
+                ]),
+            words.t(l, "purchasing.goods_in_lede")),
+        key)
+}
+
+/// A draft nobody wants, removed.
+///
+/// A confirmation rather than a bare press, and not only so it can be thought
+/// about: a form carries the in-flight guard that a plain press does not, which
+/// is the whole reason there were twelve of these to delete in the first place.
+pub fn delete_order(id: str, number: int, l: i18n.Lang) -> desk.Form {
+    return desk.about(
+        desk.explained(
+            desk.form("delete-order", words.t(l, "purchasing.delete_draft"),
+                words.t(l, "purchasing.delete_draft_confirm"), [
+                    readonly_field("order", words.t(l, "nav.purchase_order"),
+                        words.fill(l, "purchase_order.order_n", "\(number)")),
+                ]),
+            words.t(l, "purchasing.delete_draft_lede")),
+        id)
+}
+
+/// An order the supplier was told about, withdrawn — with the reason on it.
+pub fn cancel_order(id: str, number: int, l: i18n.Lang) -> desk.Form {
+    return desk.about(
+        desk.explained(
+            desk.form("cancel-order", words.t(l, "purchasing.cancel_this_order"),
+                words.t(l, "purchase_order.cancel_order"), [
+                    readonly_field("order", words.t(l, "nav.purchase_order"),
+                        words.fill(l, "purchase_order.order_n", "\(number)")),
+                    desk.required(text_field("reason", words.t(l, "purchasing.why_cancelled"), "")),
+                ]),
+            words.t(l, "purchasing.cancel_order_lede")),
         id)
 }

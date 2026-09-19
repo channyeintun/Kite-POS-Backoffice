@@ -267,8 +267,10 @@ async fn load_tills(app: desk.App) {
 }
 
 async fn load_sales(app: desk.App) {
-    let to = browser.now()
-    let (answer, err) = await api.sales_history(desk.token_of(app), to - 7 * DAY, to)
+    // Seven days back from this device's clock, and no upper bound — the
+    // Worker's own now is the only honest end for a window that means "until
+    // now". See `api.sales_history`.
+    let (answer, err) = await api.sales_history(desk.token_of(app), browser.now() - 7 * DAY)
     if err != nil {
         failed(app, err.message())
         return
@@ -383,7 +385,9 @@ async fn load_purchasing(app: desk.App) {
         ps = payables
         desk.took_invoices(app, payables.invoices)
     }
-    done(app, screens.purchasing(sheet, os, ps, desk.lang_of(app), desk.currency_of(app)))
+    desk.took_purchasing(app, sheet, os, ps)
+    done(app, screens.purchasing(sheet, os, ps, app.goods_in, desk.goods_in_total(app),
+            desk.lang_of(app), desk.currency_of(app)))
 }
 
 async fn load_order(app: desk.App, id: str) {
@@ -461,8 +465,10 @@ async fn load_promotions(app: desk.App) {
 
 async fn load_reports(app: desk.App) {
     let token = desk.token_of(app)
-    let to = browser.now()
-    let from = to - 30 * DAY
+    // Zero is "up to now", resolved by the Worker — the same rule
+    // `desk.window_seconds` states for the books.
+    let to = 0
+    let from = browser.now() - 30 * DAY
     let (products, err) = await api.product_report(token, from, to)
     if err != nil {
         failed(app, err.message())
@@ -623,8 +629,7 @@ async fn do_export_books(app: desk.App, view: str) {
 }
 
 async fn load_expenses(app: desk.App) {
-    let to = browser.now()
-    let (answer, err) = await api.expenses(desk.token_of(app), to - 90 * DAY, to)
+    let (answer, err) = await api.expenses(desk.token_of(app), browser.now() - 90 * DAY, 0)
     if err != nil {
         failed(app, err.message())
         return
@@ -667,6 +672,20 @@ fn supplier_by(list: [model.Supplier], id: str) -> Option<model.Supplier> {
 
 fn customer_by(list: [model.CustomerAccount], id: str) -> Option<model.CustomerAccount> {
     return find(list, |cu: model.CustomerAccount| cu.id == id)
+}
+
+/// A product's name, for a line of a delivery held on this device.
+///
+/// Carried on the line rather than looked up when the table is drawn, because
+/// the line outlives one screen's reference list — and a delivery whose rows
+/// read as blank while the catalogue reloads is one a shopkeeper cannot check
+/// against the note in their hand.
+fn product_name_by(list: [model.CatalogProduct], id: str) -> str {
+    let hit = find(list, |p: model.CatalogProduct| p.id == id)
+    if hit == nil {
+        return id
+    }
+    return hit.name
 }
 
 fn supplier_ids(list: [model.Supplier]) -> [str] {
@@ -729,6 +748,14 @@ fn subject_order_supplier(app: desk.App) -> str {
     return o.supplier_id
 }
 
+fn subject_order_number(app: desk.App) -> int {
+    let o = app.subject_order
+    if o == nil {
+        return 0
+    }
+    return o.number
+}
+
 fn subject_order_total(app: desk.App) -> int {
     let o = app.subject_order
     if o == nil {
@@ -783,7 +810,18 @@ fn open_form(app: desk.App, what: str, id: str) {
                 register_names(app.ref_registers), l, c)),
         "form-invoice" => desk.open_form(app, forms.invoice(supplier_ids(app.ref_suppliers),
                 supplier_names(app.ref_suppliers), id, subject_order_supplier(app),
-                subject_order_total(app), l, c)),
+                subject_order_total(app), crypto.token(), l, c)),
+        "form-goods-in-line" => desk.open_form(app, forms.goods_in_line(app.ref_products, l, c)),
+        // The key rides on the form's subject, the way `form-settle-tab` does —
+        // but it was minted when the first line was added, not here, because
+        // what is being repeated is the delivery rather than the press.
+        "form-goods-in-book" => desk.open_form(app,
+            forms.goods_in_book(app.ref_suppliers, app.goods_in_key, app.goods_in_supplier,
+                app.goods_in_settlement, desk.goods_in_total(app), l, c)),
+        "form-delete-order" => desk.open_form(app,
+            forms.delete_order(id, subject_order_number(app), l)),
+        "form-cancel-order" => desk.open_form(app,
+            forms.cancel_order(id, subject_order_number(app), l)),
         // A developer's message, not a shopkeeper's: it only appears when a
         // button names a form nobody wrote, which is a bug rather than a state.
         _ => desk.went_wrong(app, "\(what) is not wired up"),
@@ -812,7 +850,8 @@ async fn open_pay_invoice(app: desk.App, id: str) {
     for i in answer.invoices {
         if i.id == id {
             desk.open_form(app, forms.pay_invoice(id, i.supplier_name,
-                    i.outstanding, desk.lang_of(app), desk.currency_of(app)))
+                    i.outstanding, crypto.token(), desk.lang_of(app),
+                    desk.currency_of(app)))
             repaint(app)
             return
         }
@@ -924,6 +963,47 @@ fn text_if(body: { str: json.Json }, key: str, value: str) -> { str: json.Json }
 
 // ---- what a press means ----------------------------------------------------
 
+/// A press that writes. **It happens once, however many times it is tapped.**
+///
+/// Forms have had this guard since they were built — `submit` refuses while
+/// `form.busy` — but a plain press had nothing at all, and the plainest press
+/// in the back office is the one that writes a purchase order per supplier.
+/// On a slow line nothing on screen changed, so the shopkeeper tapped again;
+/// four taps across three suppliers wrote twelve draft orders, and until now
+/// there was no door out of any of them.
+///
+/// The flag is the one the screen loads behind, so it clears itself: `desk.took`
+/// and `desk.went_wrong` both put it down, and `done`/`failed` route through
+/// them. Written and painted *before* the async call, because calling an
+/// `async fn` in Kite only queues it — a guard inside the body has not run yet
+/// when the next tap arrives.
+///
+/// Deliberately not applied to `pressed` as a whole: `load` raises the same
+/// flag on every screen change, so a blanket test would make the rail dead
+/// while a list was settling. Navigation is not a write.
+/// Draw Purchasing again from what is already in hand.
+///
+/// Not `load`. Adding or removing a line of a delivery changes nothing on the
+/// server, and re-asking for the worksheet, the orders and the payables to show
+/// one more row would make the shop wait — three requests per line of a
+/// delivery note, on the connection this shop actually has, which is the
+/// pattern that had a shopkeeper tapping buttons twice in the first place.
+/// `load_purchasing` keeps its answers on the app for exactly this.
+fn redraw_purchasing(app: desk.App) {
+    done(app, screens.purchasing(app.purchasing_sheet, app.purchasing_orders,
+            app.purchasing_payables, app.goods_in, desk.goods_in_total(app),
+            desk.lang_of(app), desk.currency_of(app)))
+}
+
+fn writing(app: desk.App) -> bool {
+    if app.busy {
+        return false
+    }
+    desk.working(app, true)
+    repaint(app)
+    return true
+}
+
 fn pressed(app: desk.App, what: str, id: str) {
     if what == "sign-in" {
         submit_sign_in(app)
@@ -1033,7 +1113,9 @@ fn pressed(app: desk.App, what: str, id: str) {
         return
     }
     if what == "photo-remove" {
-        do_remove_photo(app)
+        if writing(app) {
+            do_remove_photo(app)
+        }
         return
     }
     if what == "books-filter" {
@@ -1048,7 +1130,9 @@ fn pressed(app: desk.App, what: str, id: str) {
         return
     }
     if what == "books-reopen" {
-        do_reopen_period(app, id)
+        if writing(app) {
+            do_reopen_period(app, id)
+        }
         return
     }
     if what == "form-close-shift" {
@@ -1077,23 +1161,48 @@ fn pressed(app: desk.App, what: str, id: str) {
         return
     }
     if what == "retire-product" {
-        do_retire_product(app, id)
+        if writing(app) {
+            do_retire_product(app, id)
+        }
         return
     }
     if what == "drop-barcode" {
-        do_drop_barcode(app, id)
+        if writing(app) {
+            do_drop_barcode(app, id)
+        }
         return
     }
     if what == "send-order" {
-        do_send_order(app, id)
+        if writing(app) {
+            do_send_order(app, id)
+        }
         return
     }
     if what == "receive-all" {
-        do_receive_all(app, id)
+        if writing(app) {
+            do_receive_all(app, id)
+        }
         return
     }
     if what == "raise-orders" {
-        do_raise_orders(app)
+        if writing(app) {
+            do_raise_orders(app)
+        }
+        return
+    }
+    // Taking a line back off the delivery, and abandoning the whole of it.
+    // Neither writes anything, so neither needs the in-flight guard — and
+    // neither may be refused while a screen is loading, because the lines are
+    // held here and a shopkeeper correcting a mistyped quantity should not have
+    // to wait for a worksheet.
+    if what == "goods-in-drop" {
+        desk.goods_in_drop(app, id)
+        redraw_purchasing(app)
+        return
+    }
+    if what == "goods-in-clear" {
+        desk.goods_in_clear(app)
+        redraw_purchasing(app)
         return
     }
     if what == "close-lane" {
@@ -1141,7 +1250,7 @@ fn submit(app: desk.App) {
     }
     desk.form_working(app)
     repaint(app)
-    do_submit(app, open.id, open.subject)
+    do_submit(app, open.id, open.subject, open.key)
 }
 
 /// The label of the first amount or quantity the parser refuses, or "".
@@ -1214,7 +1323,7 @@ fn first_unanswered(open: desk.Form) -> str {
 /// `body` is a plain map that each arm fills and wraps once, at the call. It
 /// cannot be a document handed round and written into: `Json.Object(m)` copies
 /// `m`, so a write after the wrap would not show through.
-async fn do_submit(app: desk.App, id: str, subject: str) {
+async fn do_submit(app: desk.App, id: str, subject: str, key: str) {
     let token = desk.token_of(app)
     let c = desk.currency_of(app)
     let l = desk.lang_of(app)
@@ -1347,6 +1456,7 @@ async fn do_submit(app: desk.App, id: str, subject: str) {
             settle(app, err, words.t(l, "common.received"))
         },
         "invoice" => {
+            body["client_id"] = json.Json.Text(key)
             body["supplier_id"] = json.Json.Text(value_of("supplier_id"))
             body = text_if(body, "po_id", subject)
             body["reference"] = json.Json.Text(value_of("reference"))
@@ -1357,6 +1467,7 @@ async fn do_submit(app: desk.App, id: str, subject: str) {
             settle(app, err, words.t(l, "toast.invoice_recorded"))
         },
         "pay-invoice" => {
+            body["client_id"] = json.Json.Text(key)
             body["amount"] = json.Json.Number(money_of(app, "amount") as float)
             body["method"] = json.Json.Text(value_of("method"))
             let (_, err) = await api.pay_invoice(token, subject, json.Json.Object(body))
@@ -1466,6 +1577,101 @@ async fn do_submit(app: desk.App, id: str, subject: str) {
             let (_, err) = await api.close_period(token, json.Json.Object(body))
             settle(app, err, words.t(l, "toast.month_closed"))
         },
+        // A line of a delivery. **This one writes nothing.**
+        //
+        // It puts the line on `app.goods_in` and closes the dialog, so a
+        // shopkeeper can enter a delivery note line by line with the van driver
+        // waiting and never touch the network until the end. Which is also why
+        // a mistyped quantity costs nothing to correct: the row is taken off
+        // again with one tap and no request.
+        "goods-in-line" => {
+            let product_id = value_of("product_id")
+            if product_id.len() == 0 {
+                desk.form_refused(app, words.t(l, "purchasing.which_product"))
+                repaint(app)
+                return
+            }
+            let qty = qty_of("qty")
+            if qty <= 0.0 {
+                desk.form_refused(app,
+                    words.fill(l, "error.not_a_number", words.t(l, "purchasing.qty_arrived")))
+                repaint(app)
+                return
+            }
+            desk.goods_in_add(app, crypto.token(), desk.GoodsInLine{
+                    product_id: product_id,
+                    name: product_name_by(app.ref_products, product_id),
+                    qty: qty,
+                    unit_cost: money_of(app, "unit_cost"),
+                })
+            desk.close_form(app)
+            redraw_purchasing(app)
+        },
+        // The one press that writes the delivery — stock, the bill, the payment
+        // and the postings, in one request the Worker runs as one transaction.
+        // `subject` is the key minted when the first line went on, so four taps
+        // on a slow line book one delivery.
+        "goods-in-book" => {
+            if app.goods_in.len() == 0 {
+                desk.form_refused(app, words.t(l, "purchasing.nothing_on_the_delivery"))
+                repaint(app)
+                return
+            }
+            let supplier_id = value_of("supplier_id")
+            let settlement = value_of("settlement")
+            desk.goods_in_about(app, supplier_id, settlement)
+            body["client_id"] = json.Json.Text(subject)
+            body["supplier_id"] = json.Json.Text(supplier_id)
+            body["settlement"] = json.Json.Text(settlement)
+            body["reference"] = json.Json.Text(value_of("reference"))
+            body["note"] = json.Json.Text(value_of("note"))
+            var lines: [json.Json] = []
+            for held in app.goods_in {
+                var line: { str: json.Json } = { }
+                line["product_id"] = json.Json.Text(held.product_id)
+                line["qty"] = json.Json.Number(held.qty)
+                line["unit_cost"] = json.Json.Number(held.unit_cost as float)
+                lines.push(json.Json.Object(line))
+            }
+            body["lines"] = json.Json.Array(lines)
+            // The lines as they were when the request went out. A line added
+            // while it was in flight was never sent, and clearing the whole
+            // delivery afterwards would throw it away without telling anybody.
+            let sent = app.goods_in
+            let (replayed, err) = await api.goods_in(token, json.Json.Object(body))
+            if err != nil {
+                settle(app, err, "")
+                return
+            }
+            desk.goods_in_took(app, sent)
+            // **Say which of the two happened.** A press whose answer was lost
+            // and is pressed again books nothing — correctly — and a shopkeeper
+            // told "booked into stock" would go looking for a delivery that is
+            // there once, having typed it twice.
+            settle(app, nil,
+                if replayed {
+                    words.t(l, "purchasing.already_booked")
+                } else { words.t(l, "purchasing.delivery_booked") })
+        },
+        "delete-order" => {
+            let (_, err) = await api.delete_order(token, subject)
+            if err != nil {
+                desk.form_refused(app, err.message())
+                repaint(app)
+                return
+            }
+            desk.close_form(app)
+            desk.say(app, words.t(l, "purchasing.draft_deleted"))
+            // Back to the list: the order this page was about is gone, and
+            // leaving the manager looking at a 404 is not an answer.
+            desk.go(app, desk.Screen.Purchasing)
+            browser.set_hash(desk.href_of(desk.Screen.Purchasing))
+            load(app)
+        },
+        "cancel-order" => {
+            let (_, err) = await api.cancel_order(token, subject, value_of("reason"))
+            settle(app, err, words.t(l, "purchasing.order_cancelled"))
+        },
         _ => {
             // Left in English on purpose, like "is not wired up": it can only
             // appear when a form was written and its submit arm was not, which
@@ -1544,7 +1750,17 @@ async fn do_remove_photo(app: desk.App) {
     let (_, err) = await api.remove_photo(desk.token_of(app), key)
     if err != nil {
         failed(app, err.message())
+        return
     }
+    // **The flag has to come down on the way out as well.**
+    //
+    // `writing` raises `app.busy` before this is called, and the failure path
+    // lowers it through `went_wrong` — the success path lowered nothing, so a
+    // picture removed cleanly left every button on the page inert until the
+    // manager navigated away and back. A screen that stops responding after a
+    // press that worked is worse than one that stops after a press that failed.
+    desk.working(app, false)
+    repaint(app)
 }
 
 /// What a field currently holds, from the form rather than from the document —
@@ -1630,6 +1846,15 @@ async fn do_receive_all(app: desk.App, id: str) {
 /// The worksheet already knows what to buy and from whom; this is the press
 /// that writes it down. Grouped by supplier because that is how it will be
 /// sent, and left as a draft because somebody should look at it first.
+///
+/// **The key is the supplier and the day, not the press.** This is the button
+/// that wrote twelve draft orders: nothing on screen changed while it was in
+/// flight, so on a slow line it was tapped again and again, and each tap wrote
+/// one order per supplier with nothing anywhere to tell them apart.
+/// `writing` now refuses the second tap while the first is running, and this
+/// key covers the case the guard cannot — a tap after the answer was lost.
+/// Today's reorder for a supplier is one order however many times it is asked
+/// for, which is what the button already meant.
 async fn do_raise_orders(app: desk.App) {
     let token = desk.token_of(app)
     let (lines, err) = await api.worksheet(token, 28)
@@ -1651,9 +1876,11 @@ async fn do_raise_orders(app: desk.App) {
         return
     }
 
+    let today = browser.iso_day(browser.now())
     var raised = 0
     for supplier in suppliers {
         var body: { str: json.Json } = { }
+        body["client_id"] = json.Json.Text("worksheet:\(supplier):\(today)")
         body["supplier_id"] = json.Json.Text(supplier)
         body["status"] = json.Json.Text("draft")
         var items: [json.Json] = []
@@ -1667,10 +1894,22 @@ async fn do_raise_orders(app: desk.App) {
             }
         }
         body["lines"] = json.Json.Array(items)
-        let (_, oerr) = await api.raise_order(token, json.Json.Object(body))
+        let (replayed, oerr) = await api.raise_order(token, json.Json.Object(body))
+        // Nested rather than `&&`: a value is unreadable until its error is
+        // disproved, and narrowing does not cross an `&&`.
         if oerr == nil {
-            raised = raised + 1
+            if !replayed {
+                raised = raised + 1
+            }
         }
+    }
+    // Nothing new: the key above matched, which means today's orders are
+    // already on the list. Said plainly rather than reported as "0 raised",
+    // which reads like a failure and is not one.
+    if raised == 0 {
+        desk.say(app, words.t(desk.lang_of(app), "purchasing.orders_already_raised"))
+        load(app)
+        return
     }
     // No singular against plural: မြန်မာ does not mark it, and the reviewed
     // phrase already says "one per supplier", which is the fact worth saying.
@@ -1744,6 +1983,32 @@ fn changed(app: desk.App, e: dom.Event) {
     let target = dom.target(e)
     if target == nil {
         return
+    }
+    // **The cost follows the product.**
+    //
+    // The Goods In line form opens with the first product's cost under the
+    // chooser so the common case is one field fewer to type. That number is
+    // written onto `products.cost` by the Worker, and it used to sit there
+    // unchanged while the operator picked a different row — so a delivery of
+    // crisps could reprice the cola, and every margin the shop reported
+    // afterwards was computed against a price it never paid. There is no
+    // per-field handler in the form model, so the one change listener the
+    // office has is where this belongs.
+    let open_form = app.form
+    if open_form != nil {
+        if open_form.id == "goods-in-line" {
+            if or_else(dom.attribute(target, "data-field"), "") == "product_id" {
+                let chosen = dom.value(target)
+                for p in app.ref_products {
+                    if p.id == chosen {
+                        desk.set_field(app, "unit_cost",
+                            money.plain(p.cost, desk.currency_of(app)))
+                        repaint(app)
+                    }
+                }
+                return
+            }
+        }
     }
     let acted = browser.closest(target, "[data-action]")
     if acted == nil {

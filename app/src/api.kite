@@ -637,8 +637,17 @@ pub async fn inventory(token: str) -> (model.Inventory, error) {
     return model.inventory_of(answer)
 }
 
-pub async fn sales_history(token: str, from: int, to: int) -> ([model.SaleRow], error) {
-    let (answer, err) = await get(token, "/sales?from=\(from)&to=\(to)")
+/// Receipts since `from`, and **no upper bound at all**.
+///
+/// It used to send one, taken from this device's clock — and `completed_at` is
+/// stamped by the Worker. A back office whose tablet ran a minute behind asked
+/// for sales up to a moment that had already passed on the server, so a sale
+/// rung in that minute was excluded by the upper bound of its own window. The
+/// manager saw the stock movement, which has a lower bound and nothing else,
+/// and no sale; waiting made it appear. The window a list means by "the last
+/// seven days" ends now, and only the Worker knows when now is.
+pub async fn sales_history(token: str, from: int) -> ([model.SaleRow], error) {
+    let (answer, err) = await get(token, "/sales?from=\(from)")
     check err
     return map(doc.items(doc.field(answer, "sales")), model.sale_row_of), nil
 }
@@ -903,10 +912,14 @@ pub async fn save_customer(token: str, id: str, body: json.Json) -> (doc.Doc, er
     return await post(token, "/customers", body)
 }
 
-pub async fn raise_order(token: str, body: json.Json) -> (model.Created, error) {
+/// Answers **whether that order already existed**, for the same reason
+/// [`goods_in`] does: the worksheet button is keyed by supplier and day, so a
+/// second press raises nothing, and a count that includes the ones it did not
+/// raise is a sentence that is not true.
+pub async fn raise_order(token: str, body: json.Json) -> (bool, error) {
     let (answer, err) = await post(token, "/purchasing/orders", body)
     check err
-    return made_of(answer, "that order was raised but came back without an id")
+    return doc.bool_of(answer, "replayed", false), nil
 }
 
 pub async fn order(token: str, id: str) -> (model.OrderPage, error) {
@@ -921,6 +934,39 @@ pub async fn send_order(token: str, id: str) -> (doc.Doc, error) {
 
 pub async fn receive_order(token: str, id: str, body: json.Json) -> (doc.Doc, error) {
     return await post(token, "/purchasing/orders/\(id)/receive", body)
+}
+
+/// A delivery booked straight into stock: one request, one transaction.
+///
+/// Stock, the movement, the bill and — when it is paid on the spot — the
+/// payment, all written together by the Worker or not at all. The client has no
+/// business doing that as four calls: on a slow line each of them can be lost
+/// on its own, which is how the shop ended up with orders it never meant to
+/// raise.
+/// Answers **whether the Worker had already booked this delivery**.
+///
+/// The id is not what the caller needs — the key is. A press whose answer was
+/// lost and is pressed again gets the first delivery back rather than a second
+/// one, which is the whole purpose of the key; but the operator may have
+/// edited the lines in between, and saying "booked into stock" while quietly
+/// discarding what they just typed is worse than saying nothing. `true` here
+/// is the back office's cue to say it was already booked.
+pub async fn goods_in(token: str, body: json.Json) -> (bool, error) {
+    let (answer, err) = await post(token, "/purchasing/goods-in", body)
+    check err
+    return doc.bool_of(answer, "replayed", false), nil
+}
+
+/// A draft nobody wants. Deleted, because nothing happened to it.
+pub async fn delete_order(token: str, id: str) -> (doc.Doc, error) {
+    return await remove(token, "/purchasing/orders/\(id)")
+}
+
+/// An order the supplier was told about, withdrawn with a reason on it.
+pub async fn cancel_order(token: str, id: str, reason: str) -> (doc.Doc, error) {
+    var body: { str: json.Json } = { }
+    body["reason"] = json.Json.Text(reason)
+    return await post(token, "/purchasing/orders/\(id)/cancel", json.Json.Object(body))
 }
 
 pub async fn add_invoice(token: str, body: json.Json) -> (model.Created, error) {

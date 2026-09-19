@@ -359,10 +359,24 @@ pub fn dismiss(var app: App) {
     app.found = []
 }
 
+/// Sale ⇄ Tender.
+///
+/// **The message band is cleared with the mode.** A complaint raised on the
+/// sale screen is about the sale screen — "Scan barcode or type SKU…" is the
+/// answer to a Price check with an empty box, and the command bar that asks for
+/// one is not even drawn in tender. It used to follow the cashier across
+/// anyway: nothing cleared `trouble` on the way to Pay, so a stale red band sat
+/// under the keypad for the rest of the transaction, taking a strip of height
+/// off a screen that had none to spare.
+///
+/// Cleared here rather than in the tender handlers: every one of those raises
+/// its own message *after* this call, so none of them is swallowed.
 pub fn go_to_mode(var app: App, mode: Mode) {
     app.mode = mode
     app.overlay = Overlay.None
     app.entry = ""
+    app.trouble = ""
+    app.notice = ""
 }
 
 pub fn set_tab(var app: App, tab: str) {

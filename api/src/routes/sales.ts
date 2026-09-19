@@ -9,9 +9,27 @@ import { applyRefund } from "../lib/refunds.js";
 
 export const sales = new Hono<Ctx>();
 
+/**
+ * Seven days of receipts.
+ *
+ * **An absent `to` means "no upper bound", not "the server's this instant".**
+ *
+ * It used to mean the latter, and the back office supplied its own `to` from
+ * the tablet's clock. `completed_at` is stamped by this Worker, so an office
+ * device running even a minute behind asked for everything up to a moment that
+ * had already passed on the server — and a sale rung in that minute was
+ * excluded by the upper bound of its own window. The manager saw the stock
+ * movement, which has a lower bound and nothing else, and no sale. Waiting made
+ * it appear, which is the shape of the report: nothing was lost, nothing was
+ * cached, and reloading inside the skew window could not help.
+ *
+ * Only this Worker ever writes `completed_at`, so an open upper bound cannot
+ * admit a row that should not be there. An explicit `to` is still honoured, for
+ * a window a manager actually picks.
+ */
 sales.get("/", async (c) => {
   const from = Number(c.req.query("from") ?? "0");
-  const to = Number(c.req.query("to") ?? String(now()));
+  const to = Number(c.req.query("to") ?? String(Number.MAX_SAFE_INTEGER));
   const status = c.req.query("status") ?? "completed";
   const q = (c.req.query("q") ?? "").trim();
 

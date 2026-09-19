@@ -611,6 +611,16 @@ input { font: inherit; }
 /* ---- buttons, details, receipts ------------------------------------------ */
 
 .buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+/* **While the page is working, the things that write it are inert.**
+ *
+ * The handlers already refuse a second press — see `writing` in `office.kite` —
+ * but a button that looks untouched is a button a shopkeeper on a slow line
+ * taps again, and again, which is how one press of "Raise orders from the
+ * worksheet" became twelve draft orders nobody could delete. This is the half
+ * of that fix the operator can see. Rows stay touchable: opening a receipt
+ * while a list is still settling writes nothing. */
+.page.working .buttons .pill,
+.page.working .detail-actions .pill { opacity: 0.5; pointer-events: none; }
 
 .detail { padding: 20px; }
 .detail-top { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; }

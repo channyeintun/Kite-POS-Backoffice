@@ -3,7 +3,7 @@ import type { Ctx, Role } from "../env.js";
 import { now } from "../env.js";
 import { all, one, run, settingInt, readSettings } from "../lib/db.js";
 import { hashSecret, newId, newToken, verifySecret } from "../lib/crypto.js";
-import { badRequest, conflict, forbidden, optStr, str, unauthorized } from "../lib/http.js";
+import { Refused, badRequest, conflict, forbidden, optStr, str, unauthorized } from "../lib/http.js";
 import { authenticate } from "../lib/auth.js";
 
 export const auth = new Hono<Ctx>();
@@ -29,12 +29,21 @@ async function guardAttempts(db: D1Database, scope: string): Promise<void> {
   );
   if (row && row.locked_until > now()) {
     const wait = row.locked_until - now();
-    throw new Response(
-      JSON.stringify({
-        error: { code: "locked_out", message: `too many attempts — wait ${wait}s` },
-      }),
-      { status: 429, headers: { "content-type": "application/json" } },
-    );
+    // **A `Refused`, not a bare `Response`.**
+    //
+    // This threw a raw `Response` and `index.ts` had an arm to catch it —
+    // `if (err instanceof Response) return err`. That arm is unreachable: Hono
+    // only routes a thrown value to `onError` when it is an `Error`, so a bare
+    // Response fell out of the dispatcher and the lane got
+    // `500 Error: [object Response]` with no code and no number in it.
+    //
+    // Which means the one defence a four-digit PIN has — five wrong tries and
+    // the lane stops for two minutes — has never been able to say so. A manager
+    // setting a new cashier up, getting it wrong five times and then being told
+    // "something went wrong here" is exactly the confusion this application was
+    // reported for. `Refused` is what every other refusal in this Worker
+    // already uses, and the till prints its sentence verbatim.
+    throw new Refused(429, "locked_out", `too many attempts — wait ${wait}s`, { wait });
   }
 }
 

@@ -1254,6 +1254,10 @@ pub struct PurchaseOrder {
     pub supplier_name: str
     pub created_by_name: str
     pub lines: int
+    /// Written by Goods In rather than raised as an order. Nothing branches on
+    /// it; the list says which is which so a shopkeeper reading it can tell a
+    /// van that turned up from an order placed with a wholesaler.
+    pub direct: bool
 }
 
 pub fn purchase_order_of(d: doc.Doc) -> PurchaseOrder {
@@ -1271,6 +1275,7 @@ pub fn purchase_order_of(d: doc.Doc) -> PurchaseOrder {
         supplier_name: doc.text(d, "supplier_name", ""),
         created_by_name: doc.text(d, "created_by_name", ""),
         lines: doc.int_of(d, "lines", 0),
+        direct: doc.int_of(d, "direct", 0) == 1,
     }
 }
 
@@ -1293,6 +1298,8 @@ pub struct OrderHead {
     pub received_at: int
     pub supplier_name: str
     pub supplier_phone: str
+    pub cancel_reason: str
+    pub direct: bool
 }
 
 pub fn order_head_of(d: doc.Doc) -> OrderHead {
@@ -1309,6 +1316,8 @@ pub fn order_head_of(d: doc.Doc) -> OrderHead {
         received_at: doc.int_of(d, "received_at", 0),
         supplier_name: doc.text(d, "supplier_name", ""),
         supplier_phone: doc.text(d, "supplier_phone", ""),
+        cancel_reason: doc.text(d, "cancel_reason", ""),
+        direct: doc.int_of(d, "direct", 0) == 1,
     }
 }
 

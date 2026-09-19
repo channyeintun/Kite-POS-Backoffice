@@ -43,13 +43,21 @@ fn repaint(app: store.App) {
         io.error("till: could not draw: \(err.message())")
         return
     }
-    // The scan field takes focus back the moment anything else finishes,
-    // because a barcode scanner is a fast keyboard and whatever it types has to
-    // land in the box. This is the line that keeps that promise after a dialog
-    // closes, a tile is tapped, or the basket is redrawn.
-    if app.session != nil && app.mode == store.Mode.Sale && app.overlay == store.Overlay.None {
-        browser.focus("#scan")
-    }
+    // **Nothing is focused from here.**
+    //
+    // This used to end with `browser.focus("#scan")`, unconditionally, on every
+    // repaint — and every tap repaints. The promise it was keeping is real: a
+    // barcode scanner is a fast keyboard and whatever it types has to land in
+    // the box. The way it kept it was not. Tapping a tile, a tab, a basket line
+    // or the language chip pulled the caret out of wherever the operator had
+    // just put it, and on a tablet it did so inside the tap's own gesture — so
+    // the on-screen keyboard came back up and the layout jumped, on every
+    // single touch.
+    //
+    // The promise is kept at the other end now: `typed` listens on the document
+    // rather than on this tree, so a scanner's burst reaches the till with
+    // nothing focused at all, and is written into the box a character at a
+    // time. The focus is left where the operator put it.
 }
 
 fn field_value(selector: str) -> str {
@@ -62,14 +70,22 @@ fn field_value(selector: str) -> str {
 
 // ---- signing in ------------------------------------------------------------
 
+/// A digit on the pad. **The pad never submits by itself.**
+///
+/// It used to, on the fourth digit — "four digits is the common case, and
+/// submitting on the fourth saves a tap at the busiest moment of the day. A
+/// longer PIN uses the → key." The → key was unreachable: the auto-submit fired
+/// before a fifth digit could be pressed. So every PIN of five to eight digits
+/// — which the back office invites, in so many words, on the form that sets one
+/// — was sent to the Worker as its first four characters, refused, and the pad
+/// cleared itself before the cashier could finish. A shop could add staff all
+/// day and none of them could sign in, while the one person whose PIN happened
+/// to be exactly four digits worked perfectly.
+///
+/// One tap was worth having. It was not worth a member of staff who cannot
+/// open a lane, so the → key is the only way in now and it means what it says.
 fn press_pin(app: store.App, key: str) {
     store.press_pin(app, key)
-    // Four digits is the common case, and submitting on the fourth saves a tap
-    // at the busiest moment of the day. A longer PIN uses the → key.
-    if app.pin.len() == 4 {
-        submit_pin(app)
-        return
-    }
     repaint(app)
 }
 
@@ -77,7 +93,12 @@ fn submit_pin(app: store.App) {
     if app.signing_in {
         return
     }
+    // Said rather than ignored. → is the only way in now, so a press that does
+    // nothing at all reads as a broken pad — which is the complaint this whole
+    // screen is being changed to answer.
     if app.pin.len() < 4 {
+        store.went_wrong(app, i18n.t(app.lang, "pin_too_short"))
+        repaint(app)
         return
     }
     store.signing_in(app, true)
@@ -252,7 +273,7 @@ fn scan_typed(app: store.App) {
     if code.len() == 0 {
         return
     }
-    browser.clear_and_focus("#scan")
+    browser.clear_field("#scan")
     store.working(app, true)
     do_scan(app, code, "", 0.0, false, 0, false)
 }
@@ -499,7 +520,7 @@ fn command(app: store.App, id: str) {
                 repaint(app)
                 return
             }
-            browser.clear_and_focus("#scan")
+            browser.clear_field("#scan")
             do_price_check(app, code)
             return
         },
@@ -1079,13 +1100,61 @@ fn clicked(app: store.App, e: dom.Event) {
     }
 }
 
+/// Whether a bare keystroke belongs in the scan box.
+///
+/// Only on the sale screen, only with no dialog in front of it, only when
+/// somebody is signed in — and never when the caret is already in the box,
+/// where the browser is doing the typing itself and a second copy of every
+/// character would land.
+fn routable(app: store.App, field: str) -> bool {
+    if app.session == nil {
+        return false
+    }
+    if app.mode != store.Mode.Sale {
+        return false
+    }
+    if app.overlay != store.Overlay.None {
+        return false
+    }
+    return field != "scan"
+}
+
+/// Whether a keyboard shortcut may stand in for a press of the command bar.
+///
+/// The bar is only drawn when somebody is signed in, on the sale screen, with
+/// no dialog over it — and a press is refused while a request is in flight.
+/// A function key answers to all four.
+fn commandable(app: store.App) -> bool {
+    if app.session == nil {
+        return false
+    }
+    if app.busy {
+        return false
+    }
+    if app.overlay != store.Overlay.None {
+        return false
+    }
+    return app.mode == store.Mode.Sale
+}
+
+/// Every key the page sees, wherever the focus happens to be.
+///
+/// This listener is on the **document**, which is what the comment beside it
+/// always claimed and what the code did not do: it was attached to `#app`, a
+/// descendant of `<body>`, so a keystroke with nothing focused — the ordinary
+/// state of the screen after a tap — travelled body → html → document and never
+/// passed it. The till got away with that only because every repaint dragged
+/// the focus back into the scan box, which is the behaviour being removed.
 fn typed(app: store.App, e: dom.Event) {
     let key = dom.key(e)
     let hit = dom.target(e)
-    if hit == nil {
-        return
+    // A target that is not an element is the document or `<body>` — which is
+    // exactly the case this listener was moved here to catch, so it is a blank
+    // field rather than a reason to return.
+    var field = ""
+    if hit != nil {
+        field = or_else(dom.attribute(hit, "id"), "")
     }
-    let field = or_else(dom.attribute(hit, "id"), "")
 
     // `prevent_default` is called per arm and deliberately not everywhere:
     // Escape and every unnamed key are left to the browser, and so is Enter
@@ -1105,7 +1174,24 @@ fn typed(app: store.App, e: dom.Event) {
                     return
                 },
                 "reason" => { return },
-                _ => { return },
+                // Enter with the focus anywhere else — or nowhere at all.
+                //
+                // A scanner ends its burst with one, and by then its characters
+                // are already in the box because the arm at the bottom of this
+                // match put them there. So a box with something in it is what
+                // says "that was a scanner"; an empty one leaves Enter to the
+                // button under the operator's finger, where it belongs.
+                _ => {
+                    if !routable(app, field) {
+                        return
+                    }
+                    if field_value("#scan").len() == 0 {
+                        return
+                    }
+                    _ = dom.prevent_default(e)
+                    scan_typed(app)
+                    return
+                },
             }
         },
         "Escape" => {
@@ -1119,8 +1205,18 @@ fn typed(app: store.App, e: dom.Event) {
         // Xstore maps every menu button to a function key, and a counter with a
         // keyboard is faster for it. F2 is the commit, which is the one worth
         // having under a finger.
+        //
+        // **Each one is gated exactly as the button beside it is.** They were
+        // not, and the listener moving to the document made that reachable: a
+        // modal focuses no input, so a stray F3 while a manager was typing
+        // their PIN replaced the authorisation dialog with the held list and
+        // took the reason it was carrying with it. A key must not reach a
+        // command a finger could not.
         "F2" => {
             _ = dom.prevent_default(e)
+            if !commandable(app) {
+                return
+            }
             if app.basket.lines.len() > 0 && app.mode == store.Mode.Sale {
                 store.go_to_mode(app, store.Mode.Tender)
                 repaint(app)
@@ -1129,15 +1225,62 @@ fn typed(app: store.App, e: dom.Event) {
         },
         "F3" => {
             _ = dom.prevent_default(e)
+            if !commandable(app) {
+                return
+            }
             command(app, "hold")
             return
         },
         "F4" => {
             _ = dom.prevent_default(e)
+            if !commandable(app) {
+                return
+            }
             command(app, "held")
             return
         },
-        _ => { },
+        // **The scanner, typing into a box it has not got the caret in.**
+        //
+        // One bare character. The operator has tapped a tile, so the focus is
+        // on a button; the scanner fires anyway, because it is a keyboard and
+        // it does not know that. Each character is written into the scan box
+        // instead of going wherever the focus is, and the Enter that ends the
+        // burst rings it up. The till reads exactly as it did when it held the
+        // focus hostage, and the operator's own taps now keep theirs.
+        //
+        // Space is excluded: a space on a focused button is that button being
+        // pressed, and no barcode this shop scans contains one.
+        _ => {
+            if key.len() != 1 || key == " " {
+                return
+            }
+            if !browser.plain_key(e) {
+                return
+            }
+            if routable(app, field) {
+                _ = dom.prevent_default(e)
+                browser.append_value("#scan", key)
+                return
+            }
+            // **A scan that cannot be rung is said out loud.**
+            //
+            // The dialogs a scan itself raises — an age check, a price to ask
+            // for — carry no input of their own, so nothing has the focus while
+            // one is up. A cashier looking at a customer's ID scans the next
+            // two items out of habit, the characters reach a till that is not
+            // in a state to ring them, and without this they go nowhere at all:
+            // no red band, no line on the basket, and the scanner beeped both
+            // times. Those items leave the shop unpaid.
+            //
+            // Only when nothing is focused. A character typed into a dialog's
+            // own box — a manager's PIN, a reason — is the operator answering
+            // the dialog, and belongs to it.
+            if field.len() == 0 && app.session != nil && app.overlay != store.Overlay.None {
+                store.went_wrong(app, i18n.t(app.lang, "finish_this_first"))
+                repaint(app)
+            }
+            return
+        },
     }
 }
 
@@ -1178,8 +1321,12 @@ pub fn main() {
     }
     // On the document rather than the root: a scanner types wherever the focus
     // happens to be, and a keystroke that lands outside the mounted tree still
-    // has to reach the scan box.
-    let (_, kerr) = dom.on(root, "keydown", |e: dom.Event| { typed(app, e) })
+    // has to reach the scan box. `#app` is *inside* `<body>`, so a keydown with
+    // nothing focused never passed it — which is why this now says `document`
+    // instead of `root`, and why `typed` can stop assuming the focus is already
+    // where it wants it.
+    let (_, kerr) = dom.on(browser.document_element(), "keydown",
+        |e: dom.Event| { typed(app, e) })
     if kerr != nil {
         io.error("till: no keys: \(kerr.message())")
     }

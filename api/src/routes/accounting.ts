@@ -33,7 +33,16 @@ export const accounting = new Hono<Ctx>();
  * reason: it is a mistake, not a request for nothing.
  */
 const window = (c: { req: { query: (k: string) => string | undefined } }) => {
-  const to = Number(c.req.query("to") ?? String(now()));
+  // **A `to` of nothing, or of zero, means "up to now" — and now is the
+  // server's.** Every window the back office asks for ends at this instant, and
+  // it used to send that instant from the tablet's own clock. A device running
+  // a minute behind therefore asked for everything up to a moment that had
+  // already passed here, and the last minute of trading fell outside its own
+  // window: today's takings quietly short by whatever the clock was out by. The
+  // client now says nothing rather than guessing, and only a window a manager
+  // actually picks carries an end.
+  const asked = Number(c.req.query("to") ?? "0");
+  const to = Number.isFinite(asked) && asked > 0 ? asked : now();
   const from = Number(c.req.query("from") ?? String(to - 30 * 86400));
   if (!Number.isFinite(from) || !Number.isFinite(to)) {
     throw badRequest("bad_window", "that window is not a pair of times");
@@ -165,7 +174,11 @@ accounting.get("/profit-and-loss", async (c) => {
  * sheet balance without a year-end journal nobody has run yet.
  */
 accounting.get("/balance-sheet", async (c) => {
-  const asAt = Number(c.req.query("as_at") ?? String(now()));
+  // Zero, or absent, is "as things stand" — and that is this Worker's clock,
+  // for the reason `window` above gives. A balance sheet dated from a tablet
+  // running a minute behind leaves the last minute of trading off it.
+  const askedAsAt = Number(c.req.query("as_at") ?? "0");
+  const asAt = Number.isFinite(askedAsAt) && askedAsAt > 0 ? askedAsAt : now();
   const rows = await balances(c.env.DB, 0, asAt);
 
   const assets = rows.filter((r) => r.kind === "asset");

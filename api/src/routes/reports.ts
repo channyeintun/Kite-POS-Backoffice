@@ -21,7 +21,16 @@ export const reports = new Hono<Ctx>();
 
 /** The window, validated — see the note in `accounting.ts`. */
 const window = (c: { req: { query: (k: string) => string | undefined } }) => {
-  const to = Number(c.req.query("to") ?? String(now()));
+  // **A `to` of nothing, or of zero, means "up to now" — and now is the
+  // server's.** Every window the back office asks for ends at this instant, and
+  // it used to send that instant from the tablet's own clock. A device running
+  // a minute behind therefore asked for everything up to a moment that had
+  // already passed here, and the last minute of trading fell outside its own
+  // window: today's takings quietly short by whatever the clock was out by. The
+  // client now says nothing rather than guessing, and only a window a manager
+  // actually picks carries an end.
+  const asked = Number(c.req.query("to") ?? "0");
+  const to = Number.isFinite(asked) && asked > 0 ? asked : now();
   const from = Number(c.req.query("from") ?? String(to - 30 * 86400));
   if (!Number.isFinite(from) || !Number.isFinite(to)) {
     throw badRequest("bad_window", "that window is not a pair of times");
