@@ -242,20 +242,41 @@ fn done(app: desk.App, blocks: [desk.Block]) {
     repaint(app)
 }
 
+/// A screen's answer, for the screen that asked for it.
+///
+/// A shopkeeper who taps Products and then Purchasing before Products has
+/// answered used to see the product list land on the Purchasing page. Each
+/// loader now says which screen it was loading for: the answer is always kept
+/// for that screen, and only drawn if it is still the one on show.
+fn done_for(app: desk.App, asked: desk.Screen, blocks: [desk.Block]) {
+    desk.took_for(app, asked, blocks)
+    repaint(app)
+}
+
+/// A refusal, for the screen that asked. One for a screen already left is
+/// dropped: its trouble bar would sit over a page it says nothing about.
+fn failed_for(app: desk.App, asked: desk.Screen, why: str) {
+    if desk.slug_of(asked) == desk.slug_of(app.screen) {
+        failed(app, why)
+    }
+}
+
 async fn load_overview(app: desk.App) {
+    let asked = app.screen
     let (answer, err) = await api.overview(desk.token_of(app))
     if err != nil {
-        failed(app, err.message())
+        failed_for(app, asked, err.message())
         return
     }
-    done(app, screens.overview(answer, desk.lang_of(app), desk.currency_of(app), desk.who_of(app)))
+    done_for(app, asked, screens.overview(answer, desk.lang_of(app), desk.currency_of(app), desk.who_of(app)))
 }
 
 async fn load_tills(app: desk.App) {
+    let asked = app.screen
     let token = desk.token_of(app)
     let (answer, err) = await api.lanes(token)
     if err != nil {
-        failed(app, err.message())
+        failed_for(app, asked, err.message())
         return
     }
     var entries: [model.AuditEntry] = []
@@ -263,90 +284,99 @@ async fn load_tills(app: desk.App) {
     if aerr == nil {
         entries = audit
     }
-    done(app, screens.tills(answer, entries, desk.lang_of(app), desk.currency_of(app)))
+    done_for(app, asked, screens.tills(answer, entries, desk.lang_of(app), desk.currency_of(app)))
 }
 
 async fn load_sales(app: desk.App) {
+    let asked = app.screen
     // Seven days back from this device's clock, and no upper bound — the
     // Worker's own now is the only honest end for a window that means "until
     // now". See `api.sales_history`.
     let (answer, err) = await api.sales_history(desk.token_of(app), browser.now() - 7 * DAY)
     if err != nil {
-        failed(app, err.message())
+        failed_for(app, asked, err.message())
         return
     }
-    done(app, screens.sales(answer, desk.lang_of(app), desk.currency_of(app)))
+    done_for(app, asked, screens.sales(answer, desk.lang_of(app), desk.currency_of(app)))
 }
 
 async fn load_sale(app: desk.App, id: str) {
+    let asked = app.screen
     let (answer, err) = await api.sale(desk.token_of(app), id)
     if err != nil {
-        failed(app, err.message())
+        failed_for(app, asked, err.message())
         return
     }
     desk.took_sale_lines(app, answer.lines)
-    done(app, screens.sale_detail(answer, desk.lang_of(app), desk.currency_of(app)))
+    done_for(app, asked, screens.sale_detail(answer, desk.lang_of(app), desk.currency_of(app)))
 }
 
 async fn load_shifts(app: desk.App) {
+    let asked = app.screen
     let (answer, err) = await api.shifts(desk.token_of(app))
     if err != nil {
-        failed(app, err.message())
+        failed_for(app, asked, err.message())
         return
     }
-    done(app, screens.shifts(answer, desk.lang_of(app), desk.currency_of(app)))
+    done_for(app, asked, screens.shifts(answer, desk.lang_of(app), desk.currency_of(app)))
 }
 
 async fn load_shift(app: desk.App, id: str) {
+    let asked = app.screen
     let (answer, err) = await api.shift(desk.token_of(app), id)
     if err != nil {
-        failed(app, err.message())
+        failed_for(app, asked, err.message())
         return
     }
-    done(app, screens.shift_detail(answer, desk.lang_of(app), desk.currency_of(app)))
+    done_for(app, asked, screens.shift_detail(answer, desk.lang_of(app), desk.currency_of(app)))
 }
 
 async fn load_products(app: desk.App) {
+    let asked = app.screen
     let (answer, err) = await api.products(desk.token_of(app), app.query)
     if err != nil {
-        failed(app, err.message())
+        failed_for(app, asked, err.message())
         return
     }
-    done(app, screens.products(answer, desk.lang_of(app), desk.currency_of(app), app.query))
+    done_for(app, asked, screens.products(answer, desk.lang_of(app), desk.currency_of(app), app.query))
 }
 
 async fn load_product(app: desk.App, id: str) {
+    let asked = app.screen
     let (answer, err) = await api.product(desk.token_of(app), id)
     if err != nil {
-        failed(app, err.message())
+        failed_for(app, asked, err.message())
         return
     }
     desk.took_product(app, answer.product)
-    done(app, screens.product_detail(answer, desk.lang_of(app), desk.currency_of(app)))
+    done_for(app, asked, screens.product_detail(answer, desk.lang_of(app), desk.currency_of(app)))
 }
 
 async fn load_categories(app: desk.App) {
+    let asked = app.screen
     let (answer, err) = await api.categories(desk.token_of(app))
     if err != nil {
-        failed(app, err.message())
+        failed_for(app, asked, err.message())
         return
     }
-    done(app, screens.categories(answer, desk.lang_of(app)))
+    done_for(app, asked, screens.categories(answer, desk.lang_of(app)))
 }
 
 async fn load_suppliers(app: desk.App) {
+    let asked = app.screen
     let (answer, err) = await api.suppliers(desk.token_of(app))
     if err != nil {
-        failed(app, err.message())
+        failed_for(app, asked, err.message())
         return
     }
-    done(app, screens.suppliers(answer, desk.lang_of(app), desk.currency_of(app)))
+    done_for(app, asked, screens.suppliers(answer, desk.lang_of(app), desk.currency_of(app)))
 }
 
 async fn load_inventory(app: desk.App) {
+    let asked = app.screen
     let (answer, err) = await api.inventory(desk.token_of(app))
     if err != nil {
-        failed(app, err.message())
+        failed_for(app, asked, err.message())
         return
     }
     let attention = answer.totals.low + answer.totals.out
@@ -355,23 +385,25 @@ async fn load_inventory(app: desk.App) {
     } else {
         desk.unbadge(app, "inventory")
     }
-    done(app, screens.inventory(answer, desk.lang_of(app), desk.currency_of(app)))
+    done_for(app, asked, screens.inventory(answer, desk.lang_of(app), desk.currency_of(app)))
 }
 
 async fn load_movements(app: desk.App) {
+    let asked = app.screen
     let (answer, err) = await api.movements(desk.token_of(app), browser.now() - 7 * DAY, "")
     if err != nil {
-        failed(app, err.message())
+        failed_for(app, asked, err.message())
         return
     }
-    done(app, screens.movements(answer, desk.lang_of(app), desk.currency_of(app)))
+    done_for(app, asked, screens.movements(answer, desk.lang_of(app), desk.currency_of(app)))
 }
 
 async fn load_purchasing(app: desk.App) {
+    let asked = app.screen
     let token = desk.token_of(app)
     let (sheet, err) = await api.worksheet(token, 28)
     if err != nil {
-        failed(app, err.message())
+        failed_for(app, asked, err.message())
         return
     }
     var os: [model.PurchaseOrder] = []
@@ -386,25 +418,27 @@ async fn load_purchasing(app: desk.App) {
         desk.took_invoices(app, payables.invoices)
     }
     desk.took_purchasing(app, sheet, os, ps)
-    done(app, screens.purchasing(sheet, os, ps, app.goods_in, desk.goods_in_total(app),
+    done_for(app, asked, screens.purchasing(sheet, os, ps, app.goods_in, desk.goods_in_total(app),
             desk.lang_of(app), desk.currency_of(app)))
 }
 
 async fn load_order(app: desk.App, id: str) {
+    let asked = app.screen
     let (answer, err) = await api.order(desk.token_of(app), id)
     if err != nil {
-        failed(app, err.message())
+        failed_for(app, asked, err.message())
         return
     }
     desk.took_order(app, answer.order, answer.lines)
-    done(app, screens.order_detail(answer, desk.lang_of(app), desk.currency_of(app)))
+    done_for(app, asked, screens.order_detail(answer, desk.lang_of(app), desk.currency_of(app)))
 }
 
 async fn load_customers(app: desk.App) {
+    let asked = app.screen
     let token = desk.token_of(app)
     let (answer, err) = await api.customers(token)
     if err != nil {
-        failed(app, err.message())
+        failed_for(app, asked, err.message())
         return
     }
     // Kept for the two dialogs that need a row rather than an id — the edit
@@ -442,14 +476,15 @@ async fn load_customers(app: desk.App) {
         }
     }
 
-    done(app, screens.customers(answer, debts, desk.lang_of(app), desk.currency_of(app)))
+    done_for(app, asked, screens.customers(answer, debts, desk.lang_of(app), desk.currency_of(app)))
 }
 
 async fn load_promotions(app: desk.App) {
+    let asked = app.screen
     let token = desk.token_of(app)
     let (answer, err) = await api.promotions(token)
     if err != nil {
-        failed(app, err.message())
+        failed_for(app, asked, err.message())
         return
     }
     var p: [model.PromotionResult] = []
@@ -459,11 +494,12 @@ async fn load_promotions(app: desk.App) {
     }
     // `.0` is the offers and `.1` the moment the server judged them at — see
     // `api.promotions`, which is where the pair is named.
-    done(app, screens.promotions(answer.0, answer.1, p, desk.lang_of(app),
+    done_for(app, asked, screens.promotions(answer.0, answer.1, p, desk.lang_of(app),
             desk.currency_of(app)))
 }
 
 async fn load_reports(app: desk.App) {
+    let asked = app.screen
     let token = desk.token_of(app)
     // Zero is "up to now", resolved by the Worker — the same rule
     // `desk.window_seconds` states for the books.
@@ -471,7 +507,7 @@ async fn load_reports(app: desk.App) {
     let from = browser.now() - 30 * DAY
     let (products, err) = await api.product_report(token, from, to)
     if err != nil {
-        failed(app, err.message())
+        failed_for(app, asked, err.message())
         return
     }
     var d: Option<model.SalesReport> = nil
@@ -494,7 +530,7 @@ async fn load_reports(app: desk.App) {
     if ierr == nil {
         dead = idle
     }
-    done(app, screens.reports(products, d, s, tax, dead, desk.lang_of(app),
+    done_for(app, asked, screens.reports(products, d, s, tax, dead, desk.lang_of(app),
             desk.currency_of(app)))
 }
 
@@ -506,14 +542,15 @@ async fn load_reports(app: desk.App) {
 /// fail on its own — a health sweep that times out should not take the
 /// revenue figure down with it.
 async fn load_accounting(app: desk.App) {
+    let asked = app.screen
     let token = desk.token_of(app)
     let (summary, serr) = await api.accounting_summary(token)
     if serr != nil {
-        failed(app, serr.message())
+        failed_for(app, asked, serr.message())
         return
     }
     if !summary.enabled {
-        done(app, screens.accounting_off(desk.lang_of(app)))
+        done_for(app, asked, screens.accounting_off(desk.lang_of(app)))
         return
     }
 
@@ -532,7 +569,7 @@ async fn load_accounting(app: desk.App) {
     if view == "summary" || view == "pl" {
         let (pl, perr) = await api.profit_and_loss(token, from, to)
         if perr != nil {
-            failed(app, perr.message())
+            failed_for(app, asked, perr.message())
             return
         }
         data = screens.Books{..data, pl: pl }
@@ -546,7 +583,7 @@ async fn load_accounting(app: desk.App) {
         // ledger. The other four books views already failed here; this one
         // was the odd one out.
         if berr != nil {
-            failed(app, berr.message())
+            failed_for(app, asked, berr.message())
             return
         }
         data = screens.Books{..data, sheet: sheet }
@@ -564,7 +601,7 @@ async fn load_accounting(app: desk.App) {
     if view == "trial" {
         let (trial, terr) = await api.trial_balance(token, from, to)
         if terr != nil {
-            failed(app, terr.message())
+            failed_for(app, asked, terr.message())
             return
         }
         data = screens.Books{..data, trial: trial }
@@ -573,7 +610,7 @@ async fn load_accounting(app: desk.App) {
         let (journal, jerr) = await api.journal_filtered(token, from, to,
             app.journal_cause, app.journal_account, app.journal_query)
         if jerr != nil {
-            failed(app, jerr.message())
+            failed_for(app, asked, jerr.message())
             return
         }
         data = screens.Books{..data, journal: journal }
@@ -581,7 +618,7 @@ async fn load_accounting(app: desk.App) {
     if view == "accounts" {
         let (accounts, aerr) = await api.accounts(token)
         if aerr != nil {
-            failed(app, aerr.message())
+            failed_for(app, asked, aerr.message())
             return
         }
         data = screens.Books{..data, accounts: accounts }
@@ -589,13 +626,13 @@ async fn load_accounting(app: desk.App) {
     if view == "ledger" && app.books_account.len() > 0 {
         let (ledger, lerr) = await api.general_ledger(token, app.books_account, from, to)
         if lerr != nil {
-            failed(app, lerr.message())
+            failed_for(app, asked, lerr.message())
             return
         }
         data = screens.Books{..data, ledger: ledger }
     }
 
-    done(app, screens.accounting(view, app.books_window, data,
+    done_for(app, asked, screens.accounting(view, app.books_window, data,
             app.books_account, desk.lang_of(app), desk.currency_of(app)))
 }
 
@@ -629,31 +666,34 @@ async fn do_export_books(app: desk.App, view: str) {
 }
 
 async fn load_expenses(app: desk.App) {
+    let asked = app.screen
     let (answer, err) = await api.expenses(desk.token_of(app), browser.now() - 90 * DAY, 0)
     if err != nil {
-        failed(app, err.message())
+        failed_for(app, asked, err.message())
         return
     }
-    done(app, screens.expenses(answer, desk.lang_of(app), desk.currency_of(app)))
+    done_for(app, asked, screens.expenses(answer, desk.lang_of(app), desk.currency_of(app)))
 }
 
 async fn load_staff(app: desk.App) {
+    let asked = app.screen
     let (answer, err) = await api.staff(desk.token_of(app))
     if err != nil {
-        failed(app, err.message())
+        failed_for(app, asked, err.message())
         return
     }
-    done(app, screens.staff(answer.0, answer.1, desk.lang_of(app)))
+    done_for(app, asked, screens.staff(answer.0, answer.1, desk.lang_of(app)))
 }
 
 async fn load_settings(app: desk.App) {
+    let asked = app.screen
     let (answer, err) = await api.settings(desk.token_of(app))
     if err != nil {
-        failed(app, err.message())
+        failed_for(app, asked, err.message())
         return
     }
     desk.took_settings(app, doc.field(answer, "settings"))
-    done(app, screens.settings(answer, desk.lang_of(app)))
+    done_for(app, asked, screens.settings(answer, desk.lang_of(app)))
 }
 
 // ---- opening a form --------------------------------------------------------

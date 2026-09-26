@@ -849,3 +849,22 @@ body:has(.shade) .scroll { overflow: hidden; }
   font: 500 18px/1.35 Roboto, sans-serif;
   color: var(--ink-dim);
 }
+
+/* The page is working: a thin green bar along the top edge, over everything.
+ * Indeterminate, because the Worker does not say how far along it is. */
+.progress {
+  position: fixed; inset: 0 0 auto 0; height: 3px; z-index: 1000;
+  overflow: hidden; pointer-events: none; background: var(--ok-bg);
+}
+.progress-bar {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 40%;
+  background: var(--ok);
+  animation: progress-slide 1.1s ease-in-out infinite;
+}
+@keyframes progress-slide {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(250%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .progress-bar { animation: none; width: 100%; opacity: 0.7; }
+}

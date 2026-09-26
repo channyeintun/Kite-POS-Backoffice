@@ -149,10 +149,6 @@ fn header(app: desk.App) -> html.Node {
         right.push(html.keyed("off", html.txt("span", [html.class("lane-pill warn")],
                     words.fill_n(app.lang, "tills.n_offline", "\(app.lanes_offline)"))))
     }
-    if app.busy {
-        right.push(html.keyed("busy", html.txt("span", [html.class("lane-pill")],
-                    words.t(app.lang, "common.loading"))))
-    }
 
     // English ⇄ မြန်မာ, last in the group and reachable from every screen
     // without opening anything. The same two-button shape as the till's, so a
@@ -781,10 +777,6 @@ pub fn page(app: desk.App) -> [html.Node] {
     for (i, block) in enumerate(app.blocks) {
         body.push(block_of(block, i, app.lang))
     }
-    if app.blocks.len() == 0 && app.trouble.len() == 0 {
-        body.push(html.keyed("loading", html.txt("p", [html.class("empty-note")],
-                    words.t(app.lang, "common.loading"))))
-    }
 
     main.push(html.keyed("scroll", html.el("div", [html.class("scroll")], [
                     html.keyed("inner", html.el("div", [html.class("inner")], body)),
@@ -805,6 +797,17 @@ pub fn page(app: desk.App) -> [html.Node] {
                             [html.class(if app.busy { "page working" } else { "page" })], main)),
                 ])),
     ]
+    // **One sign that the page is working: a thin green bar across the top.**
+    // It replaced a "Loading…" line in the page and another in the header,
+    // which between them made every tap of the rail look like a page load.
+    // Drawn only while busy, so it is gone the moment the answer lands.
+    if app.busy {
+        out.push(html.keyed("progress", html.el("div", [
+                        html.class("progress"),
+                        html.attr("role", "progressbar"),
+                        html.attr("aria-label", words.t(app.lang, "common.loading")),
+                    ], [html.keyed("bar", html.el("div", [html.class("progress-bar")], []))])))
+    }
     let open = app.form
     if open != nil {
         out.push(dialog(open, app.lang))

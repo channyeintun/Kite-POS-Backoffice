@@ -460,6 +460,17 @@ pub struct App {
     /// inventing a second one.
     pub var lang: i18n.Lang
     pub var blocks: [Block]
+    /// Each screen as it was last drawn, keyed by slug.
+    ///
+    /// **So going back to a screen is instant.** Every visit used to start
+    /// from an empty page reading "Loading…" until the Worker answered, and
+    /// with the Worker a continent away that is most of a second on every tap
+    /// of the rail. Now a screen seen before is drawn at once from here while
+    /// its fresh copy is fetched, and the page's buttons stay inert until the
+    /// fresh copy lands — see `.page.working` in `office.css` — so nothing is
+    /// written from a figure that has since moved. A screen never seen still
+    /// says "Loading…", because there is nothing honest to show instead.
+    pub var seen: { str: [Block] }
 
     /// What the header says about the lanes, from the last Tills read.
     pub var lanes_open: int
@@ -582,6 +593,7 @@ pub fn holding(root: dom.Element, view: html.Mounted) -> App {
         screen: Screen.Overview,
         lang: i18n.Lang.En,
         blocks: [],
+        seen: { },
         lanes_open: 0,
         lanes_offline: 0,
         drawer_expected: "",
@@ -625,6 +637,8 @@ pub fn holding(root: dom.Element, view: html.Mounted) -> App {
 
 pub fn set_lang(var app: App, l: i18n.Lang) {
     app.lang = l
+    // Every kept screen is in the language it was drawn in.
+    app.seen = { }
 }
 
 pub fn lang_of(app: App) -> i18n.Lang {
@@ -703,12 +717,15 @@ pub fn signed_in(var app: App, session: model.Session) {
 pub fn signed_out(var app: App) {
     app.session = nil
     app.blocks = []
+    // The next person to sign in at this desk must not be shown the last
+    // one's screens, even for the moment before theirs arrive.
+    app.seen = { }
     app.badges = { }
 }
 
 pub fn go(var app: App, screen: Screen) {
     app.screen = screen
-    app.blocks = []
+    app.blocks = or_else(app.seen[slug_of(screen)], [])
     app.trouble = ""
     app.rail_open = false
     // The drill-down subjects belong to the screen that loaded them.
@@ -727,6 +744,18 @@ pub fn go(var app: App, screen: Screen) {
 }
 
 pub fn took(var app: App, blocks: [Block]) {
+    took_for(app, app.screen, blocks)
+}
+
+/// A screen's answer, kept for the screen that asked and drawn only if that
+/// screen is still the one on show — see `done_for` in `office.kite`.
+pub fn took_for(var app: App, asked: Screen, blocks: [Block]) {
+    var next = app.seen
+    next[slug_of(asked)] = blocks
+    app.seen = next
+    if slug_of(asked) != slug_of(app.screen) {
+        return
+    }
     app.blocks = blocks
     app.busy = false
     app.trouble = ""
