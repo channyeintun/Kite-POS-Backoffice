@@ -162,6 +162,12 @@ input { font: inherit; }
   letter-spacing: 0.14em;
   white-space: nowrap;
 }
+/* **The pill, and only the pill.** In tender mode it carries the class
+ * `tender`, which is also the tender *button's* class — so it picked up that
+ * button's 64 px height, 8 px corners and border, and in a 56 px bar it was a
+ * square block spilling past both edges. Scoped to the status bar, which is
+ * specific enough to win over the button's rule without touching it. */
+.status .mode { height: 26px; border: 0; border-radius: 999px; font-size: 11px; }
 .mode.sale { background: rgba(18, 163, 92, 0.18); color: #35d489; }
 .mode.tender { background: rgba(77, 163, 255, 0.18); color: var(--info); }
 
@@ -1403,6 +1409,165 @@ img.tile-photo {
   margin: 0;
   font: 500 18px/1.35 Roboto, sans-serif;
   color: var(--ink-dim);
+}
+
+/* ---- dialogs: one rhythm ------------------------------------------------- */
+
+/* **A dialog is a column with one gap in it.**
+ *
+ * Each part used to carry its own margin — the title 14 px under itself, a
+ * lede 12 px under itself, a list nothing at all — so two parts that both
+ * forgot met with no space between them. That is how "Nobody found" came to
+ * sit on the bottom edge of the customer search box. The panel now owns the
+ * spacing and the parts own none, so every pair is 14 px apart whichever two
+ * they are. */
+.panel { display: flex; flex-direction: column; gap: 14px; }
+.panel > * { flex: none; margin: 0; }
+.panel h2 { margin: 0; }
+.panel .lede, .panel .detail, .panel .keypad { margin: 0; }
+.panel .panel-actions { margin-top: 4px; }
+/* A sentence standing in for an empty list reads as a quiet note, not as a
+ * heading squeezed under the search box. */
+.panel .lede.empty-note { color: var(--ink-dim); font-size: 15px; }
+
+/* **Inputs in a dialog span the dialog.** They borrow `.scan-field`, which is
+ * `flex: 1` so it fills the scan *row* — but a dialog is a column, and in a
+ * column `flex: 1` says nothing about width, so the box fell back to an
+ * input's twenty-character default and stopped a third of the way across. */
+.panel .scan-field { flex: none; width: 100%; }
+
+/* **The figure being typed has a box before anything is typed in it.**
+ * Quantity opened with an empty string, which drew nothing at all: no box, no
+ * zero, nowhere to look for the number the keys were about to write. */
+.panel .entry-value {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 64px;
+  padding: 8px 16px;
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  background: var(--bg);
+}
+.panel .entry-value:empty::before { content: "0"; color: var(--ink-faint); }
+/* The manager's PIN shows dots or nothing — a "0" there would read as a digit. */
+.panel .entry-value.pin:empty::before { content: "\2007"; }
+
+/* **Every key in a dialog looks like a key.** `.key.util` is `--panel` so it
+ * steps back from the digits on the lane's black — and the dialog *is*
+ * `--panel`, so ⌫ and Clear vanished into it and read as loose words. */
+.panel .key { background: var(--raised); }
+/* In a dialog the pad spans the dialog, so its edges line up with the figure
+ * above it and the two buttons below. Its lane-wide ceiling exists to stop keys
+ * going twice as wide as they are tall on an 800 px strip; a 600 px dialog is
+ * not that, and the ceiling only left a gap down the right-hand side. */
+.panel .keypad:not(.pin-pad) { width: 100%; max-width: none; }
+.panel .key.util { background: transparent; border: 1px solid var(--edge); }
+
+/* **A list row is a name with its detail underneath, and figures to the right.**
+ *
+ * Rows are emitted as flat cells — name, detail, amount, maybe a button — into
+ * `1fr auto auto auto`, so the detail took a column of its own: a phone number
+ * floating at the top of the row between the name and the points, in 12 px.
+ * Placed by name instead, whatever the row carries: the first column holds the
+ * two lines of text, and everything else takes a column of its own beside
+ * them, centred on both. A row with fewer cells makes fewer columns, so there
+ * are no empty tracks leaving gaps behind them. */
+.held-row {
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-columns: auto;
+  grid-auto-flow: column;
+  column-gap: 14px;
+  row-gap: 2px;
+  min-height: 64px;
+  padding: 10px 14px;
+}
+.held-row > .name { grid-column: 1; grid-row: 1; align-self: end; }
+.held-row > .detail { grid-column: 1; grid-row: 2; align-self: start; }
+.held-row > :not(.name):not(.detail) { grid-row: 1 / span 2; }
+/* No detail to put under it — a customer with no phone — and the name centres
+ * rather than sitting on top of an empty line. */
+.held-row > .detail:empty { display: none; }
+.held-row:not(:has(> .detail:not(:empty))) > .name { grid-row: 1 / span 2; align-self: center; }
+.held-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.held-row[data-action]:active { background: var(--edge); }
+
+/* **The empty shelf says so.** See `shelf()` in `till.kite`. */
+.shelf-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 8px 20px 20px;
+  padding: 24px;
+  border: 1px dashed var(--edge);
+  border-radius: 12px;
+  color: var(--ink-faint);
+  font-size: 15px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+/* ---- tablets, both ways up ------------------------------------------------ */
+
+/* Everything in here is for the screen a till actually is: a tablet, either
+ * way up. The phone layouts above — the thumb rail in landscape, the stacked
+ * tender in portrait — are left exactly as they are. */
+@media (min-width: 561px) and (min-height: 431px) {
+  /* **A dialog that takes typing opens near the top.** Centred, it sat where
+   * the on-screen keyboard comes up, and it jumped every time a search added
+   * or removed a row. Anchored, the box stays put and the results grow down. */
+  .shade:has(.scan-field) { align-items: flex-start; padding-top: max(24px, 7vh); padding-top: max(24px, 7dvh); }
+  .panel { width: min(600px, 100%); padding: 24px; }
+
+  /* **The command strip is a grid, so its rows line up.**
+   *
+   * It was two flex groups side by side that wrapped into each other: the
+   * everyday commands on one line at whatever widths their labels happened to
+   * be, the restricted ones on the next with a 14 px indent and a left rule
+   * that — once the group had wrapped onto a line of its own — was a stray
+   * line against the screen edge. Now each group is its own row of equal
+   * columns, both rows start and end on the same edges, and a group with more
+   * commands than fit wraps onto another row at the same widths rather than
+   * squeezing. The restricted row keeps its own line, which is the
+   * separation it needs from the high-frequency targets above it. */
+  .commands {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--gap);
+    align-content: center;
+    /* Its own breathing room top and bottom. Portrait zeroes the strip's
+     * vertical padding, which put the second row flush on the PAY bar. The
+     * two-row ceiling in the portrait block already counts these two gaps. */
+    padding-top: var(--gap);
+    padding-bottom: calc(var(--gap) + env(safe-area-inset-bottom));
+  }
+  .commands .gap { display: none; }
+  .commands .command-group {
+    display: grid;
+    /* 80 px, so the eight everyday commands still make one row on a 768 px
+     * portrait iPad; at 88 the eighth wrapped onto a third row that the
+     * strip's two-row ceiling then clipped. A label that needs more width
+     * than that takes a second line instead — see `.command` below. */
+    grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+    gap: var(--gap);
+  }
+  .command-group.restricted { padding-left: 0; border-left: 0; }
+  /* Two lines for a long label rather than a clipped one — "Price override",
+   * and most of the Burmese set, are wider than an eighth of a portrait
+   * tablet. */
+  .command { min-width: 0; padding: 0 8px; line-height: 1.2; white-space: normal; }
+  html[lang="my"] .command { line-height: 1.4; }
+}
+
+/* **A smaller tablet on its side gives the scan box the room.** At 1024 the
+ * work column is 600 px, and Search and Keypad at their drawn 132 and 110 px
+ * left the box too narrow for its own hint, which read "Scan barcode or
+ * type". Here they take what their labels need. Above 1100 px they keep the
+ * fixed widths that stop the box's edge moving with the language. */
+@media (min-width: 561px) and (max-width: 1100px) and (orientation: landscape) and (min-height: 431px) {
+  .scan { gap: 10px; }
+  .scan .chip:nth-last-child(2), .scan .chip:last-child { width: auto; min-width: 88px; }
 }
 
 /* ---- the receipt ---------------------------------------------------------- */

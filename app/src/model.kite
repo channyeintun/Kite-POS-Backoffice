@@ -86,6 +86,9 @@ pub struct Session {
     pub name: str
     pub role: Role
     pub register_id: str
+    /// What the lane is called, for the status bar; the id when the Worker
+    /// predates the field.
+    pub register_name: str
     pub shop_name: str
     pub currency: money.Currency
 }
@@ -103,6 +106,7 @@ pub fn session_of(d: doc.Doc, token: str) -> Session {
         name: doc.text(user, "name", ""),
         role: role_of(doc.text(user, "role", "sale_staff")),
         register_id: doc.text(d, "register_id", ""),
+        register_name: doc.text(d, "register_name", doc.text(d, "register_id", "")),
         shop_name: doc.text(shop, "name", ""),
         currency: money.Currency{
             code: doc.text(shop, "currency", "MMK"),

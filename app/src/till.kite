@@ -71,7 +71,7 @@ fn status_bar(app: store.App) -> html.Node {
     let session = app.session
     let name = if session == nil { "" } else { session.name }
     let shop = if session == nil { "" } else { session.shop_name }
-    let lane = if session == nil { "" } else { session.register_id }
+    let lane = if session == nil { "" } else { session.register_name }
 
     var right: [html.Node] = []
     right.push(html.keyed("conn", html.txt("span",
@@ -347,9 +347,23 @@ fn work_sale(app: store.App) -> html.Node {
                             html.keyed("keypad", button(t(app, "keypad"), "chip", [act("keypad")])),
                         ])),
                 tabs(app),
-                html.keyed("grid", html.el("div", [html.class("grid")],
-                        map(store.tiles(app), |p: model.Product| tile(app, p)))),
+                shelf(app),
             ]))
+}
+
+/// The tiles on the tab that is open, or a sentence saying there are none.
+///
+/// An empty shelf used to be an empty rectangle — most of a portrait screen
+/// with nothing in it and nothing to say why, which reads as broken. A shop
+/// with no quick keys set up yet is the ordinary first morning, so the lane
+/// says what to do instead: the scan box above still rings anything.
+fn shelf(app: store.App) -> html.Node {
+    let tiles = store.tiles(app)
+    if tiles.len() == 0 {
+        return html.keyed("shelf-empty", html.txt("p", [html.class("shelf-empty")], t(app, "no_tiles")))
+    }
+    return html.keyed("grid", html.el("div", [html.class("grid")],
+            map(tiles, |p: model.Product| tile(app, p))))
 }
 
 // ---- tender ----------------------------------------------------------------
@@ -576,7 +590,7 @@ fn command_bar(app: store.App) -> html.Node {
 /// treat the change as a removal and an insertion, which is what it is.
 fn held_body(app: store.App) -> html.Node {
     if app.held.len() == 0 {
-        return html.keyed("none", html.txt("p", [html.class("lede")], t(app, "no_held")))
+        return html.keyed("none", html.txt("p", [html.class("lede empty-note")], t(app, "no_held")))
     }
     var rows: [html.Node] = []
     for h in app.held {
@@ -633,7 +647,7 @@ fn customers_body(app: store.App) -> html.Node {
                         html.data("id", cu.id)], cells)))
     }
     if rows.len() == 0 {
-        return html.keyed("none", html.txt("p", [html.class("lede")], t(app, "no_customers")))
+        return html.keyed("none", html.txt("p", [html.class("lede empty-note")], t(app, "no_customers")))
     }
     return html.keyed("list", html.el("ul", [html.class("held-list")], rows))
 }
@@ -651,7 +665,7 @@ fn receipts_body(app: store.App) -> html.Node {
                     ])))
     }
     if rows.len() == 0 {
-        return html.keyed("none", html.txt("p", [html.class("lede")], t(app, "no_receipts")))
+        return html.keyed("none", html.txt("p", [html.class("lede empty-note")], t(app, "no_receipts")))
     }
     return html.keyed("list", html.el("ul", [html.class("held-list")], rows))
 }
@@ -687,7 +701,7 @@ fn returning_body(app: store.App) -> html.Node {
                     ])))
     }
     if rows.len() == 0 {
-        return html.keyed("none", html.txt("p", [html.class("lede")], t(app, "nothing_returnable")))
+        return html.keyed("none", html.txt("p", [html.class("lede empty-note")], t(app, "nothing_returnable")))
     }
     rows.push(html.keyed("reason", html.empty("input", [
                     html.id("reason"),
@@ -711,7 +725,7 @@ fn returning_body(app: store.App) -> html.Node {
 /// the customer is holding.
 fn slip_body(app: store.App, maybe: Option<model.Slip>) -> html.Node {
     if maybe == nil {
-        return html.keyed("none", html.txt("p", [html.class("lede")], t(app, "no_receipts")))
+        return html.keyed("none", html.txt("p", [html.class("lede empty-note")], t(app, "no_receipts")))
     }
     let slip = maybe
     let c = store.currency_of(app)
@@ -897,7 +911,7 @@ fn overlay_of(app: store.App) -> [html.Node] {
         ManagerPin(purpose, line_id, amount_value) => [
             shade("mgr", t(app, "manager_pin"), [
                     html.keyed("lede", html.txt("p", [html.class("lede")], t(app, "needs_manager"))),
-                    html.keyed("dots", html.txt("div", [html.class("entry-value")],
+                    html.keyed("dots", html.txt("div", [html.class("entry-value pin")],
                             repeat_dots(app.entry.len()))),
                     keypad(app, "m"),
                     html.keyed("actions", html.el("div", [html.class("panel-actions")], [

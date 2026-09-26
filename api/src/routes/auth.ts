@@ -160,9 +160,9 @@ auth.post("/pin", async (c) => {
 
   await guardAttempts(c.env.DB, scope);
 
-  const register = await one<{ id: string; active: number }>(
+  const register = await one<{ id: string; name: string; active: number }>(
     c.env.DB,
-    "SELECT id, active FROM registers WHERE id = ?1",
+    "SELECT id, name, active FROM registers WHERE id = ?1",
     registerId,
   );
   if (!register || register.active !== 1) throw badRequest("no_register", "that lane is not set up");
@@ -187,6 +187,9 @@ auth.post("/pin", async (c) => {
         expires_at: expiresAt,
         user: { id: user.id, name: user.name, role: user.role },
         register_id: registerId,
+        // The lane's own name, for the till's status bar. "reg_1" is an id
+        // for the database; the person at the counter knows it as "Lane 1".
+        register_name: register.name,
         app: "pos",
       });
     }
@@ -268,9 +271,13 @@ auth.get("/me", authenticate, async (c) => {
         actor.registerId,
       )
     : null;
+  const lane = actor.registerId
+    ? await one<{ name: string }>(c.env.DB, "SELECT name FROM registers WHERE id = ?1", actor.registerId)
+    : null;
   return c.json({
     user: { id: actor.userId, name: actor.name, role: actor.role },
     register_id: actor.registerId,
+    register_name: lane?.name ?? "",
     app: actor.role === "sale_staff" ? "pos" : "office",
     shift: openShift,
     shop: {
