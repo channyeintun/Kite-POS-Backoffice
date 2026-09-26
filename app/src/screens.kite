@@ -1071,7 +1071,7 @@ fn delivery_table(lines: [desk.GoodsInLine], value: int, l: i18n.Lang,
                     line.name,
                     money.quantity(line.qty),
                     money.show(line.unit_cost, c),
-                    new_price_of(line.new_price, c),
+                    new_price_of(line.new_price, line.price_now, l, c),
                     money.show(desk.goods_in_line_value(line), c),
                 ], "warn", "goods-in-drop", line.product_id))
     }
@@ -1087,11 +1087,14 @@ fn delivery_table(lines: [desk.GoodsInLine], value: int, l: i18n.Lang,
             words.t(l, "common.value")], rows)
 }
 
-fn new_price_of(price: Option<int>, c: money.Currency) -> str {
+/// The new price on a delivery line, and when it starts — so the table says
+/// which of the two was chosen before anything is booked.
+fn new_price_of(price: Option<int>, now: bool, l: i18n.Lang, c: money.Currency) -> str {
     if price == nil {
         return "—"
     }
-    return money.show(price, c)
+    let when = if now { words.t(l, "purchasing.from_now") } else { words.t(l, "purchasing.after_the_shelf") }
+    return "\(money.show(price, c)) · \(when)"
 }
 
 /// What a delivery's new price is waiting on, as one line: each price still to

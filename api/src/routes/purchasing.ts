@@ -3,9 +3,9 @@ import type { Ctx } from "../env.js";
 import { now } from "../env.js";
 import { all, batch, need, nextNumber, one, readSettings, run, settingBool, stmt } from "../lib/db.js";
 import { newId } from "../lib/crypto.js";
-import { badRequest, conflict, int, num, oneOf, optInt, optStr, str } from "../lib/http.js";
+import { badRequest, bool, conflict, int, num, oneOf, optInt, optStr, str } from "../lib/http.js";
 import { extend } from "../lib/money.js";
-import { repriceOnDelivery } from "../lib/layers.js";
+import { repriceNow, repriceOnDelivery } from "../lib/layers.js";
 import { invoiceEntry, post, receiptEntry, reversalEntry, supplierPaymentEntry } from "../lib/ledger.js";
 
 export const purchasing = new Hono<Ctx>();
@@ -113,7 +113,7 @@ purchasing.get("/orders/:id", async (c) => {
  * worksheet, a hand-built order, and Goods In — and a quantity read one way in
  * one of them and another way in the next is how two figures start to differ.
  */
-type LineIn = { productId: string; qty: number; unitCost: number; newPrice: number | null };
+type LineIn = { productId: string; qty: number; unitCost: number; newPrice: number | null; priceNow: boolean };
 
 function linesOf(body: unknown, said: string, costed = false): LineIn[] {
   const wanted = (body as { lines?: unknown }).lines;
@@ -141,7 +141,15 @@ function linesOf(body: unknown, said: string, costed = false): LineIn[] {
     if (costed && (line as { new_price?: unknown }).new_price != null && newPrice < 0) {
       throw badRequest("bad_price", "a price cannot be negative");
     }
-    out.push({ productId: str(line, "product_id"), qty, unitCost, newPrice: newPrice >= 0 ? newPrice : null });
+    // `price_now`: the new price is for the old stock too, from this moment,
+    // rather than waiting for the shelf to sell. Meaningless without a price.
+    out.push({
+      productId: str(line, "product_id"),
+      qty,
+      unitCost,
+      newPrice: newPrice >= 0 ? newPrice : null,
+      priceNow: costed && bool(line, "price_now", false),
+    });
   }
   if (out.length === 0) throw badRequest("no_lines", "every line had a quantity of nothing");
   return out;
@@ -445,7 +453,13 @@ purchasing.post("/goods-in", async (c) => {
     );
     // Before the stock goes up, so the old price is kept for what was already
     // on the shelf and no more.
-    if (line.newPrice !== null) statements.push(...repriceOnDelivery(c.env.DB, line.productId, line.newPrice));
+    if (line.newPrice !== null) {
+      statements.push(
+        ...(line.priceNow
+          ? repriceNow(c.env.DB, line.productId, line.newPrice)
+          : repriceOnDelivery(c.env.DB, line.productId, line.newPrice)),
+      );
+    }
     statements.push(
       stmt(
         c.env.DB,

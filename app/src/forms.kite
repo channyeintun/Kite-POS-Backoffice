@@ -865,6 +865,10 @@ pub fn goods_in_line(products: [model.CatalogProduct], l: i18n.Lang,
                 desk.hinted(desk.field("new_price", words.t(l, "purchasing.new_sell_price"),
                         desk.FieldKind.Money, ""),
                     words.t(l, "purchasing.new_sell_price_hint")),
+                // Off by default: the shelf sells out at the price it was
+                // bought to sell at, and the operator has to say otherwise.
+                toggle_field("price_now", words.t(l, "purchasing.price_now"), false,
+                    words.t(l, "purchasing.price_now_hint")),
             ]),
         words.t(l, "purchasing.goods_in_lede"))
 }

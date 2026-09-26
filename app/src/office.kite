@@ -1604,6 +1604,7 @@ async fn do_submit(app: desk.App, id: str, subject: str, key: str) {
                     qty: qty,
                     unit_cost: money_of(app, "unit_cost"),
                     new_price: money.from_text(value_of("new_price"), desk.currency_of(app)),
+                    price_now: checked("price_now"),
                 })
             desk.close_form(app)
             redraw_purchasing(app)
@@ -1635,6 +1636,7 @@ async fn do_submit(app: desk.App, id: str, subject: str, key: str) {
                 let new_price = held.new_price
                 if new_price != nil {
                     line["new_price"] = json.Json.Number(new_price as float)
+                    line["price_now"] = json.Json.Bool(held.price_now)
                 }
                 lines.push(json.Json.Object(line))
             }

@@ -318,6 +318,9 @@ pub struct GoodsInLine {
     /// alone — which is nearly every delivery. The Worker keeps the old price
     /// for what is already on the shelf and switches once that has sold.
     pub new_price: Option<int>
+    /// Whether the new price is for the stock already on the shelf too, at
+    /// once, rather than waiting for it to sell. Nothing without a price.
+    pub price_now: bool
 }
 
 /// A pair of label and value, for a detail header.
@@ -794,6 +797,7 @@ pub fn goods_in_add(var app: App, minted: str, line: GoodsInLine) {
                 // A second case with no price typed keeps the one the first
                 // was given; a price typed on it is the newer word.
                 new_price: if line.new_price != nil { line.new_price } else { held.new_price },
+                price_now: if line.new_price != nil { line.price_now } else { held.price_now },
             })
             folded = true
         } else {
@@ -847,6 +851,7 @@ pub fn goods_in_took(var app: App, sent: [GoodsInLine]) {
                 qty: left,
                 unit_cost: held.unit_cost,
                 new_price: held.new_price,
+                price_now: held.price_now,
             })
         }
     }

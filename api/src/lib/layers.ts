@@ -52,6 +52,21 @@ export function repriceOnDelivery(db: D1Database, productId: string, price: numb
 }
 
 /**
+ * Statements that change the price for everything, the shelf included.
+ *
+ * The other answer to a delivery at a new price: the shop has decided the old
+ * stock goes up too. Whatever an earlier delivery left waiting is cancelled,
+ * for the same reason a price typed in on the product cancels it — this is
+ * the newer decision, and it is about every unit.
+ */
+export function repriceNow(db: D1Database, productId: string, price: number): D1PreparedStatement[] {
+  return [
+    stmt(db, "DELETE FROM price_layers WHERE product_id = ?1", productId),
+    stmt(db, "UPDATE products SET price = ?2 WHERE id = ?1", productId, price),
+  ];
+}
+
+/**
  * Statements that bring `products.price` up to date with what has been sold,
  * and drop the layers that are used up.
  *

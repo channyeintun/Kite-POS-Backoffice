@@ -168,6 +168,33 @@ async function main() {
   p = await look(keep);
   ok("still waiting", p.waiting.length === 2, JSON.stringify(p.waiting));
 
+  say("old stock too: the new price is for everything at once");
+  const now = await product(1000);
+  await goodsIn([{ product_id: now, qty: 3, unit_cost: 700 }]);
+  await goodsIn([{ product_id: now, qty: 2, unit_cost: 1100, new_price: 1500, price_now: true }]);
+  p = await look(now);
+  ok("1500 straight away, with old stock on the shelf", p.product.price === 1500, JSON.stringify(p.product.price));
+  ok("nothing waiting", p.waiting.length === 0, JSON.stringify(p.waiting));
+  const nowScan = await scan(now);
+  ok("the till charges 1500 for an old tin", nowScan.json.lines?.at(-1)?.unit_price === 1500,
+     JSON.stringify(nowScan.json.lines));
+  await call("DELETE", `/api/till/line/${nowScan.json.lines.at(-1).id}`, { token: till });
+
+  say("old stock too cancels a price that was waiting");
+  const over = await product(1000);
+  await goodsIn([{ product_id: over, qty: 2, unit_cost: 700 }]);
+  await goodsIn([{ product_id: over, qty: 2, unit_cost: 1100, new_price: 1500 }]);
+  await goodsIn([{ product_id: over, qty: 2, unit_cost: 1300, new_price: 1800, price_now: true }]);
+  p = await look(over);
+  ok("1800", p.product.price === 1800, JSON.stringify(p.product.price));
+  ok("nothing waiting", p.waiting.length === 0, JSON.stringify(p.waiting));
+
+  say("old stock too without a price does nothing");
+  const bare = await product(1000);
+  await goodsIn([{ product_id: bare, qty: 2, unit_cost: 700, price_now: true }]);
+  p = await look(bare);
+  ok("still 1000", p.product.price === 1000, JSON.stringify(p.product.price));
+
   say("a negative new price is refused");
   const neg = await goodsIn([{ product_id: keep, qty: 1, unit_cost: 700, new_price: -5 }]);
   ok("400 bad_price", neg.json.error?.code === "bad_price", JSON.stringify(neg.json));
