@@ -392,9 +392,11 @@ npm run deploy:api:khant
 npm run deploy:app:khant
 ```
 
-A new shop is five things: `wrangler d1 create <name> --location apac`
-(**apac** — a till is a round trip per scan and the shops are in Myanmar),
-`wrangler r2 bucket create <name>-photos`, an `[env.<name>]` block in
+A new shop is five things: `wrangler d1 create <name>-db --location weur`
+(**not apac**: Myanmar blocks Cloudflare's Southeast Asia region, so both shops
+were moved to Western Europe in September 2026, and the Worker runs with
+`[placement] mode = "smart"` to sit next to its database),
+`wrangler r2 bucket create <name>-photos-eu --location weur`, an `[env.<name>]` block in
 `api/wrangler.toml`, `wrangler pages project create <name>`, and a
 `POST /api/auth/setup` to make the first owner. The chart of accounts, the
 settings and Lane 1 come from the migrations.
@@ -403,8 +405,8 @@ settings and Lane 1 come from the migrations.
 
 ```bash
 # once
-npx wrangler d1 create kite-pos                 # put the id in api/wrangler.toml
-npx wrangler r2 bucket create kite-pos-photos
+npx wrangler d1 create thirisan-store-db --location weur   # put the id in api/wrangler.toml
+npx wrangler r2 bucket create thirisan-store-photos-eu --location weur
 npm run deploy:api --workspace=@kite-pos/api    # note the Worker's URL
 
 # point the apps at the Worker: set <meta name="api-base"> in index.html and

@@ -9,14 +9,14 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "types": "wrangler types",
-    "db:migrate:local": "wrangler d1 migrations apply kite-pos --local",
-    "db:migrate": "wrangler d1 migrations apply kite-pos --remote",
-    "db:seed:local": "wrangler d1 execute kite-pos --local --file=./seed/demo.sql",
-    "db:seed": "wrangler d1 execute kite-pos --remote --file=./seed/demo.sql",
-    "db:console:local": "wrangler d1 execute kite-pos --local --command",
+    "db:migrate:local": "wrangler d1 migrations apply thirisan-store-db --local",
+    "db:migrate": "wrangler d1 migrations apply thirisan-store-db --remote",
+    "db:seed:local": "wrangler d1 execute thirisan-store-db --local --file=./seed/demo.sql",
+    "db:seed": "wrangler d1 execute thirisan-store-db --remote --file=./seed/demo.sql",
+    "db:console:local": "wrangler d1 execute thirisan-store-db --local --command",
     "test": "vitest run",
     "deploy:khant": "wrangler deploy --env khant",
-    "db:migrate:khant": "wrangler d1 migrations apply khant-pos --remote --env khant"
+    "db:migrate:khant": "wrangler d1 migrations apply khant-pos-db --remote --env khant"
   },
   "dependencies": {
     "hono": "^4.13.1"
