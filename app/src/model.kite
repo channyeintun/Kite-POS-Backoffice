@@ -945,6 +945,17 @@ pub struct ProductPage {
     pub barcodes: [Barcode]
     pub movements: [ProductMovement]
     pub sold: [SoldDay]
+    /// A delivery's new price waiting for the old stock to sell, oldest first.
+    /// Empty when nothing is waiting — nearly always.
+    pub waiting: [PendingPrice]
+}
+
+/// One price in a product's queue. `left` is how many more sell at it before
+/// the next one starts; the last has no end and reads `-1.0`, because the
+/// Worker sends `null` there and a count cannot be negative.
+pub struct PendingPrice {
+    pub price: int
+    pub left: float
 }
 
 pub fn product_page_of(d: doc.Doc) -> (ProductPage, error) {
@@ -966,11 +977,19 @@ pub fn product_page_of(d: doc.Doc) -> (ProductPage, error) {
         check errors.wrap(err, "that product's sales history would not read")
         sold.push(one)
     }
+    var waiting: [PendingPrice] = []
+    for item in doc.items(doc.field(d, "waiting")) {
+        waiting.push(PendingPrice{
+                price: doc.int_of(item, "price", 0),
+                left: doc.num_of(item, "left", -1.0),
+            })
+    }
     return ProductPage{
         product: catalog_product_of(doc.field(d, "product")),
         barcodes: barcodes,
         movements: movements,
         sold: sold,
+        waiting: waiting,
     }, nil
 }
 

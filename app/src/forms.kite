@@ -858,6 +858,13 @@ pub fn goods_in_line(products: [model.CatalogProduct], l: i18n.Lang,
                 desk.required(
                     desk.hinted(money_field("unit_cost", words.t(l, "purchasing.cost_each"), cost, c),
                         words.t(l, "purchasing.cost_each_hint"))),
+                // Empty, and left empty for nearly every delivery. Not
+                // pre-filled with the current price: a figure sitting in the
+                // box would be sent, and would queue a "new" price that is the
+                // old one.
+                desk.hinted(desk.field("new_price", words.t(l, "purchasing.new_sell_price"),
+                        desk.FieldKind.Money, ""),
+                    words.t(l, "purchasing.new_sell_price_hint")),
             ]),
         words.t(l, "purchasing.goods_in_lede"))
 }

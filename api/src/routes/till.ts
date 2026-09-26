@@ -25,6 +25,7 @@ import { expectedInDrawer } from "./shifts.js";
 import { post, saleEntry, sweepEntry, varianceEntry } from "../lib/ledger.js";
 import { applyRefund } from "../lib/refunds.js";
 import { settleTab } from "../lib/credit.js";
+import { priceNow, settle } from "../lib/layers.js";
 
 export const till = new Hono<Ctx>();
 
@@ -311,7 +312,17 @@ till.post("/scan", async (c) => {
       422,
     );
   }
-  const unitPrice = product.ask_price === 1 && askedIsAmount ? askedPrice : product.price;
+  // A price the operator was asked for is theirs. Otherwise it is the shelf
+  // price in force for the next unit — which, while a delivery's new price is
+  // waiting for the old stock to sell, depends on how many are already here.
+  const inBasket = await one<{ qty: number }>(
+    c.env.DB,
+    "SELECT COALESCE(SUM(qty), 0) AS qty FROM sale_items WHERE sale_id = ?1 AND product_id = ?2",
+    sale.id,
+    product.id,
+  );
+  const unitPrice =
+    product.ask_price === 1 && askedIsAmount ? askedPrice : await priceNow(c.env.DB, product, inBasket?.qty ?? 0);
   if (unitPrice < 0) throw badRequest("bad_price", "a price cannot be negative");
 
   // Scanning an age-restricted item stops the sale and asks for ID. The dialog
@@ -321,9 +332,11 @@ till.post("/scan", async (c) => {
   const existing = await one<LineRow>(
     c.env.DB,
     `SELECT * FROM sale_items
-      WHERE sale_id = ?1 AND product_id = ?2 AND price_override = 0 AND line_discount = 0`,
+      WHERE sale_id = ?1 AND product_id = ?2 AND price_override = 0 AND line_discount = 0
+        AND unit_price = ?3`,
     sale.id,
     product.id,
+    unitPrice,
   );
   const alreadyChecked = existing?.age_checked === 1;
   if (product.min_age > 0 && !alreadyChecked && body.age_checked !== true) {
@@ -1087,11 +1100,12 @@ async function completeSale(
     statements.push(
       stmt(
         c.env.DB,
-        "UPDATE products SET stock = stock - ?2 WHERE id = ?1",
+        "UPDATE products SET stock = stock - ?2, sold_qty = sold_qty + ?2 WHERE id = ?1",
         line.product_id,
         line.qty,
       ),
     );
+    if (line.product_id) statements.push(...settle(c.env.DB, line.product_id));
     statements.push(
       stmt(
         c.env.DB,

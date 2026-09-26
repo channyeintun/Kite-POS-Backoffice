@@ -5,6 +5,7 @@ import { all, batch, need, nextNumber, one, readSettings, run, settingBool, stmt
 import { newId } from "../lib/crypto.js";
 import { badRequest, conflict, int, num, oneOf, optInt, optStr, str } from "../lib/http.js";
 import { extend } from "../lib/money.js";
+import { repriceOnDelivery } from "../lib/layers.js";
 import { invoiceEntry, post, receiptEntry, reversalEntry, supplierPaymentEntry } from "../lib/ledger.js";
 
 export const purchasing = new Hono<Ctx>();
@@ -112,7 +113,7 @@ purchasing.get("/orders/:id", async (c) => {
  * worksheet, a hand-built order, and Goods In — and a quantity read one way in
  * one of them and another way in the next is how two figures start to differ.
  */
-type LineIn = { productId: string; qty: number; unitCost: number };
+type LineIn = { productId: string; qty: number; unitCost: number; newPrice: number | null };
 
 function linesOf(body: unknown, said: string, costed = false): LineIn[] {
   const wanted = (body as { lines?: unknown }).lines;
@@ -133,7 +134,14 @@ function linesOf(body: unknown, said: string, costed = false): LineIn[] {
     if (costed && unitCost <= 0) {
       throw badRequest("no_cost", "say what each line cost — it becomes the product's cost price");
     }
-    out.push({ productId: str(line, "product_id"), qty, unitCost });
+    // A new shelf price is Goods In's alone, and optional there: absent means
+    // the delivery leaves the price where it is. An order is a request and
+    // has no business moving a price, so one on an order is not read.
+    const newPrice = costed ? optInt(line, "new_price", -1) : -1;
+    if (costed && (line as { new_price?: unknown }).new_price != null && newPrice < 0) {
+      throw badRequest("bad_price", "a price cannot be negative");
+    }
+    out.push({ productId: str(line, "product_id"), qty, unitCost, newPrice: newPrice >= 0 ? newPrice : null });
   }
   if (out.length === 0) throw badRequest("no_lines", "every line had a quantity of nothing");
   return out;
@@ -425,15 +433,19 @@ purchasing.post("/goods-in", async (c) => {
     statements.push(
       stmt(
         c.env.DB,
-        `INSERT INTO purchase_order_items (id, po_id, product_id, qty, qty_received, unit_cost)
-         VALUES (?1, ?2, ?3, ?4, ?4, ?5)`,
+        `INSERT INTO purchase_order_items (id, po_id, product_id, qty, qty_received, unit_cost, new_price)
+         VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6)`,
         newId("poi"),
         poId,
         line.productId,
         line.qty,
         line.unitCost,
+        line.newPrice,
       ),
     );
+    // Before the stock goes up, so the old price is kept for what was already
+    // on the shelf and no more.
+    if (line.newPrice !== null) statements.push(...repriceOnDelivery(c.env.DB, line.productId, line.newPrice));
     statements.push(
       stmt(
         c.env.DB,

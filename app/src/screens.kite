@@ -841,6 +841,8 @@ pub fn product_detail(answer: model.ProductPage, l: i18n.Lang,
             value: money.quantity(p.reorder_point), tone: "" },
         desk.Fact { label: words.t(l, "common.supplier"),
             value: or_dash(p.supplier_name), tone: "" },
+        desk.Fact { label: words.t(l, "products.next_price"),
+            value: or_dash(next_prices(answer.waiting, l, c)), tone: "" },
     ]
     let actions: [desk.Action] = [
         desk.action(words.t(l, "common.edit"), "form-product", id, "soft"),
@@ -1069,18 +1071,49 @@ fn delivery_table(lines: [desk.GoodsInLine], value: int, l: i18n.Lang,
                     line.name,
                     money.quantity(line.qty),
                     money.show(line.unit_cost, c),
+                    new_price_of(line.new_price, c),
                     money.show(desk.goods_in_line_value(line), c),
                 ], "warn", "goods-in-drop", line.product_id))
     }
     if rows.len() > 0 {
         rows.push(row("total", [
-                    words.t(l, "common.total"), "", "", money.show(value, c),
+                    words.t(l, "common.total"), "", "", "", money.show(value, c),
                 ], "ok"))
     }
     return table(words.t(l, "purchasing.delivery_being_booked"),
         words.t(l, "purchasing.touch_a_line_to_take_it_off"),
         [words.t(l, "common.product"), words.t(l, "purchasing.qty_arrived"),
-            words.t(l, "purchasing.cost_each"), words.t(l, "common.value")], rows)
+            words.t(l, "purchasing.cost_each"), words.t(l, "purchasing.new_sell_price"),
+            words.t(l, "common.value")], rows)
+}
+
+fn new_price_of(price: Option<int>, c: money.Currency) -> str {
+    if price == nil {
+        return "—"
+    }
+    return money.show(price, c)
+}
+
+/// What a delivery's new price is waiting on, as one line: each price still to
+/// come and how many more have to sell before it starts. Empty when nothing is
+/// waiting, which is nearly always.
+fn next_prices(waiting: [model.PendingPrice], l: i18n.Lang, c: money.Currency) -> str {
+    var out = ""
+    var before = 0.0
+    var i = 0
+    for w in waiting {
+        if i > 0 {
+            if out.len() > 0 {
+                out = out + " · "
+            }
+            out = out + "\(money.show(w.price, c)) \(words.fill(l, "products.after_more_sold", money.quantity(before)))"
+        }
+        if w.left >= 0.0 {
+            before = before + w.left
+        }
+        i = i + 1
+    }
+    return out
 }
 
 pub fn purchasing(sheet: [model.WorksheetLine], orders: [model.PurchaseOrder],

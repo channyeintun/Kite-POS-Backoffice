@@ -3,6 +3,7 @@ import type { Ctx } from "../env.js";
 import { now } from "../env.js";
 import { all, batch, need, one, run, stmt } from "../lib/db.js";
 import { newId } from "../lib/crypto.js";
+import type { PendingPrice } from "../lib/layers.js";
 import { badRequest, bool, conflict, int, notFound, num, optInt, optStr, str } from "../lib/http.js";
 
 export const catalog = new Hono<Ctx>();
@@ -82,7 +83,22 @@ catalog.get("/products/:id", async (c) => {
     id,
     now() - 30 * 86400,
   );
-  return c.json({ product, barcodes, movements, sold });
+  // A new price from a delivery that is still waiting for the old stock to
+  // sell: each price in turn, with how many are left at it. The last has no
+  // count — it is the price the product keeps. Empty when nothing is waiting.
+  const layers = await all<{ price: number; until_sold: number | null }>(
+    c.env.DB,
+    "SELECT price, until_sold FROM price_layers WHERE product_id = ?1 ORDER BY seq",
+    id,
+  );
+  let reached = (product as { sold_qty: number }).sold_qty;
+  const waiting: PendingPrice[] = layers.map((l) => {
+    if (l.until_sold === null) return { price: l.price, left: null };
+    const left = Math.max(0, l.until_sold - reached);
+    reached = Math.max(reached, l.until_sold);
+    return { price: l.price, left };
+  });
+  return c.json({ product, barcodes, movements, sold, waiting });
 });
 
 function productFields(body: unknown) {
@@ -155,6 +171,16 @@ catalog.post("/products", async (c) => {
 catalog.patch("/products/:id", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const f = productFields(body);
+  // A price typed in by hand is the manager's last word: any price a delivery
+  // left waiting for the old stock to sell is cancelled. A save that leaves the
+  // price alone — editing the name, say — keeps it. First, so the comparison
+  // is against the price before this save.
+  await run(
+    c.env.DB,
+    "DELETE FROM price_layers WHERE product_id = ?1 AND ?2 <> (SELECT price FROM products WHERE id = ?1)",
+    c.req.param("id"),
+    f.price,
+  );
   const result = await run(
     c.env.DB,
     `UPDATE products SET name=?2, name_my=?3, category_id=?4, supplier_id=?5, cost=?6, price=?7,
