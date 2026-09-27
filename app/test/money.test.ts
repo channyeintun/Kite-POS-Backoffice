@@ -51,3 +51,16 @@ test("an amount is read as digits, and anything else is refused", () => {
   assert.equal(money.from_text("-300", mmk), -300);
   assert.equal(money.from_text("abc", mmk), null);
 });
+
+test("a figure too long to hold exactly is refused, not wrapped", () => {
+  // Twenty nines used to wrap at 64 bits and be saved as
+  // K7,766,279,631,452,241,920. Now the form refuses them.
+  assert.equal(money.from_text("99999999999999999999", mmk), null);
+  assert.equal(money.from_text("9007199254740993", mmk), null);
+  assert.equal(money.from_text("9007199254740991", mmk), 9007199254740991);
+  assert.equal(money.from_text("99999999999999999.99", usd), null);
+});
+
+test("a figure already stored past 2^53 is still shown digit for digit", () => {
+  assert.equal(money.show(7766279631452241920, mmk), "K7,766,279,631,452,241,920");
+});

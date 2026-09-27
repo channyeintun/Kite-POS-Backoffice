@@ -566,13 +566,14 @@ input { font: inherit; }
   font: 400 12px/28px Roboto, sans-serif;
 }
 
-.trouble-bar {
+.trouble-bar, .notice-bar {
   padding: 14px 16px;
   border-radius: 12px;
-  background: var(--stop-bg);
-  color: var(--stop-ink);
   font: 400 14px/20px Roboto, sans-serif;
 }
+.trouble-bar { background: var(--stop-bg); color: var(--stop-ink); }
+/* What went right, in the colours the lane pills use for "open". */
+.notice-bar { background: var(--ok-bg); color: var(--ok-ink); }
 
 /* ---- signing in ---------------------------------------------------------- */
 
@@ -733,7 +734,7 @@ body:has(.shade) .scroll { overflow: hidden; }
  * rail, no navigation, no card the reader was not looking at.
  */
 @media print {
-  .rail, .page-head, .buttons, .trouble-bar, .shade { display: none !important; }
+  .rail, .page-head, .buttons, .trouble-bar, .notice-bar, .shade { display: none !important; }
   /* A page with a receipt on it prints the receipt and nothing else. Any other
    * page prints its cards — which is what an accounting sheet *is*, and the
    * blanket `.card { display: none }` that used to be here meant printing the

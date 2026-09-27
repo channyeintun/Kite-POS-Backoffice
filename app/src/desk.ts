@@ -49,6 +49,16 @@ export type Screen =
   | { tag: "Staff" }
   | { tag: "Settings" }
   /**
+   * The categories, a page under Products rather than a rail item of its own.
+   *
+   * It has its own address all the same. Drawn under `#/products`, it could
+   * not be left: "Back to products" set the address the page already had, no
+   * `hashchange` fired and nothing happened; saving a category reloaded the
+   * product list instead; and the categories were kept as the Products screen's
+   * copy, so the next visit to Products opened on them.
+   */
+  | { tag: "Categories" }
+  /**
    * Drill-downs. Not in the rail — they are reached by touching a row, and
    * they carry the thing they are about in the address, so a manager can
    * send somebody a link to one receipt.
@@ -130,6 +140,8 @@ export function slug_of(s: Screen): string {
       return "staff";
     case "Settings":
       return "settings";
+    case "Categories":
+      return "categories";
     case "Product":
       return `products/${s.id}`;
     case "Sale":
@@ -153,6 +165,9 @@ export function screen_of(hash: string): Screen {
     if (slug_of(s) === body) {
       return s;
     }
+  }
+  if (body === "categories") {
+    return screen("Categories");
   }
   // `products/prd_x` is the product screen with a thing on it. Split rather
   // than matched, so one more drill-down is one more line here and nothing
@@ -221,6 +236,8 @@ function key_of(s: Screen): string {
       return "nav.staff_access";
     case "Settings":
       return "common.settings";
+    case "Categories":
+      return "common.categories";
     case "Product":
       return "common.product";
     case "Sale":
@@ -236,6 +253,7 @@ function key_of(s: Screen): string {
 export function rail_screen_of(s: Screen): Screen {
   switch (s.tag) {
     case "Product":
+    case "Categories":
       return screen("Products");
     case "Sale":
       return screen("Sales");
@@ -269,6 +287,7 @@ export function group_of(s: Screen): string {
     case "Suppliers":
     case "Customers":
     case "Promotions":
+    case "Categories":
     case "Product":
     case "Order":
       return "nav.store";
@@ -439,10 +458,20 @@ export interface Field {
   value: string;
   hint: string;
   required: boolean;
+  /**
+   * Whether an empty box is an answer — "nothing to say here" — rather than
+   * an amount that could not be read.
+   *
+   * Only for a field whose submission reads the empty box itself, like the
+   * Goods in line's new sell price, where empty means "keep the price". Every
+   * other amount refuses an empty box, because the way it would otherwise be
+   * sent is as 0, and a shelf price of 0 gives the product away.
+   */
+  blank: boolean;
 }
 
 export function field(name: string, label: string, kind: FieldKind, value: string): Field {
-  return { name, label, kind, value, hint: "", required: false };
+  return { name, label, kind, value, hint: "", required: false, blank: false };
 }
 
 export function required(f: Field): Field {
@@ -451,6 +480,11 @@ export function required(f: Field): Field {
 
 export function hinted(f: Field, hint: string): Field {
   return { ...f, hint };
+}
+
+/** A field that may be sent empty — see [`Field.blank`]. */
+export function blank_allowed(f: Field): Field {
+  return { ...f, blank: true };
 }
 
 /**
@@ -581,6 +615,13 @@ export interface App {
    */
   ref_customers: model.CustomerAccount[];
   /**
+   * The offers the Promotions screen is showing, for the same reason: the
+   * edit form opens on the offer that was touched. It used to open blank,
+   * and a blank offer is one "for one product" with no product named, so
+   * its Save was refused and no offer could be changed at all.
+   */
+  ref_promotions: model.Promotion[];
+  /**
    * The shop's own settings, and the one thing here still held as a
    * document — see [`api.settings`] for why a key→value map of setting
    * names has no type.
@@ -693,6 +734,7 @@ export function holding(): App {
     ref_accounts: [],
     ref_invoices: [],
     ref_customers: [],
+    ref_promotions: [],
     ref_settings: doc.nothing(),
     subject_product: null,
     subject_order: null,
@@ -809,9 +851,16 @@ export function signed_out(app: App): void {
   // one's screens, even for the moment before theirs arrive.
   app.seen = new Map();
   app.badges = new Map();
+  app.notice = "";
 }
 
 export function go(app: App, to: Screen): void {
+  // A notice is about the screen it was said on. Arriving at that screen again
+  // keeps it — a write that moves to its list says so after moving — and
+  // leaving for another drops it, so it is not news on a page it is not about.
+  if (slug_of(to) !== slug_of(app.screen)) {
+    app.notice = "";
+  }
   app.screen = to;
   app.blocks = app.seen.get(slug_of(to)) ?? [];
   app.trouble = "";
@@ -877,11 +926,14 @@ export function unbadge(app: App, slug: string): void {
 
 export function went_wrong(app: App, trouble: string): void {
   app.trouble = trouble;
+  app.notice = "";
   app.busy = false;
 }
 
+/** Something that went right, shown above the page until it stops being news. */
 export function say(app: App, notice: string): void {
   app.notice = notice;
+  app.trouble = "";
 }
 
 export function working(app: App, busy: boolean): void {
@@ -1051,10 +1103,17 @@ export function toggle_rail(app: App): void {
 export function open_form(app: App, f: Form): void {
   app.form = f;
   app.trouble = "";
+  app.notice = "";
 }
 
+/**
+ * The dialog goes, and so does any notice said while it was open: a picture
+ * uploaded into a form that is then cancelled was never saved to anything.
+ * A write that succeeded says so after this.
+ */
 export function close_form(app: App): void {
   app.form = null;
+  app.notice = "";
 }
 
 /** A form that was refused, with the reason on it. */
@@ -1062,6 +1121,7 @@ export function form_refused(app: App, why: string): void {
   const open = app.form;
   if (open === null) {
     app.trouble = why;
+    app.notice = "";
     return;
   }
   app.form = { ...open, trouble: why, busy: false };
@@ -1121,6 +1181,10 @@ export function took_invoices(app: App, invoices: model.Invoice[]): void {
 
 export function took_customers(app: App, people: model.CustomerAccount[]): void {
   app.ref_customers = people;
+}
+
+export function took_promotions(app: App, offers: model.Promotion[]): void {
+  app.ref_promotions = offers;
 }
 
 export function took_settings(app: App, settings: Doc): void {

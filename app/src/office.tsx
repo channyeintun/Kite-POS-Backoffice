@@ -250,6 +250,9 @@ function load(app: App): void {
     case "Suppliers":
       void load_suppliers(app);
       return;
+    case "Categories":
+      void load_categories(app);
+      return;
     case "Customers":
       void load_customers(app);
       return;
@@ -546,6 +549,7 @@ async function load_promotions(app: App): Promise<void> {
     failed_for(app, asked, err.message);
     return;
   }
+  desk.took_promotions(app, answer[0]);
   let p: model.PromotionResult[] = [];
   const [perf, perr] = await attempt(api.promotion_performance(tok, browser.now() - 30 * DAY));
   if (perr === null) {
@@ -773,6 +777,13 @@ function customer_by(list: model.CustomerAccount[], id: string): model.CustomerA
   return list.find((cu) => cu.id === id) ?? null;
 }
 
+function promotion_by(list: model.Promotion[], id: string): model.Promotion | null {
+  if (id.length === 0) {
+    return null;
+  }
+  return list.find((p) => p.id === id) ?? null;
+}
+
 /**
  * A product's name, for a line of a delivery held on this device.
  *
@@ -839,7 +850,7 @@ function open_form(app: App, what: string, id: string): void {
       desk.open_form(app, forms.supplier(supplier_by(app.ref_suppliers, id), id, l));
       break;
     case "form-promotion":
-      desk.open_form(app, forms.promotion(null, id, app.ref_products, app.ref_categories, l, c));
+      desk.open_form(app, forms.promotion(promotion_by(app.ref_promotions, id), id, app.ref_products, app.ref_categories, l, c));
       break;
     // The row, not nothing. Opening this blank would write the blanks back on
     // Save, which is survivable for a name and a phone number and is not for
@@ -1035,6 +1046,12 @@ function value_of(name: string): string {
   return trim(typeof f.value === "string" ? f.value : "");
 }
 
+/** Whether a number box holds input the browser could not read as a number. */
+function unreadable_box(name: string): boolean {
+  const f = field_of(name);
+  return f !== null && f.validity !== undefined && f.validity.badInput;
+}
+
 function checked(name: string): boolean {
   const f = field_of(name);
   if (f === null) {
@@ -1141,30 +1158,23 @@ function pressed(app: App, what: string, id: string): void {
     return;
   }
   if (what === "go") {
-    if (id === "categories") {
-      desk.go(app, desk.screen("Products"));
-      desk.working(app, true);
-      repaint(app);
-      void load_categories(app);
-      return;
-    }
-    browser.set_hash(`#/${id}`);
+    navigate(app, `#/${id}`);
     return;
   }
   if (what === "open-product") {
-    browser.set_hash(`#/products/${id}`);
+    navigate(app, `#/products/${id}`);
     return;
   }
   if (what === "open-sale") {
-    browser.set_hash(`#/sales/${id}`);
+    navigate(app, `#/sales/${id}`);
     return;
   }
   if (what === "open-shift-detail") {
-    browser.set_hash(`#/shifts/${id}`);
+    navigate(app, `#/shifts/${id}`);
     return;
   }
   if (what === "open-order") {
-    browser.set_hash(`#/purchasing/${id}`);
+    navigate(app, `#/purchasing/${id}`);
     return;
   }
   if (what === "print") {
@@ -1362,7 +1372,8 @@ function submit(app: App): void {
 }
 
 /**
- * The label of the first amount or quantity the parser refuses, or "".
+ * The label of the first amount, quantity or whole number the parser refuses,
+ * or "".
  *
  * **The refusal has to stop the submission.** `money.from_text` returns
  * nothing rather than guess — "anything that is not an amount is refused
@@ -1378,13 +1389,30 @@ function submit(app: App): void {
 function first_unreadable(app: App, open: desk.Form): string {
   const c = desk.currency_of(app);
   for (const f of open.fields) {
+    const text = value_of(f.name);
+    // Empty, where empty is an answer: the Goods in line's new sell price is
+    // left blank for nearly every delivery, and refusing the blank meant no
+    // line could be added without queueing a price.
+    if (f.blank && text.length === 0) {
+      continue;
+    }
     if (f.kind.tag === "Money") {
-      if (money.from_text(value_of(f.name), c) === null) {
+      if (money.from_text(text, c) === null) {
         return f.label;
       }
     }
     if (f.kind.tag === "Quantity") {
-      if (parse_float(value_of(f.name)) === null) {
+      if (parse_float(text) === null) {
+        return f.label;
+      }
+    }
+    // A whole number that is there but cannot be read. `whole_of` would send
+    // it as 0 — twenty digits in a lead time saved as nothing without a word.
+    // A number box holding what the browser itself cannot read (`e`, `--`, a
+    // pasted `12abc`) reports its value as empty, so that is asked separately.
+    // An empty box is still 0, as it always was.
+    if (f.kind.tag === "Whole") {
+      if ((text.length > 0 && parse_int(text) === null) || unreadable_box(f.name)) {
         return f.label;
       }
     }
@@ -1486,6 +1514,16 @@ async function do_submit(app: App, id: string, subject: string, key: string): Pr
       body = text_if(body, "category_id", value_of("category_id"));
       body["priority"] = whole_of("priority");
       body["active"] = checked("active");
+      // The form has no dates, and the Worker writes the whole row from what
+      // it is sent: an offer with a window keeps it through an edit rather
+      // than losing it to a change of name.
+      const was = promotion_by(app.ref_promotions, subject);
+      if (was !== null && was.starts_at > 0) {
+        body["starts_at"] = was.starts_at;
+      }
+      if (was !== null && was.ends_at > 0) {
+        body["ends_at"] = was.ends_at;
+      }
       const [, err] = await attempt(api.save_promotion(tok, subject, body));
       settle(app, err, words.t(l, "toast.saved"));
       return;
@@ -1789,10 +1827,11 @@ async function do_submit(app: App, id: string, subject: string, key: string): Pr
         return;
       }
       desk.close_form(app);
-      desk.say(app, words.t(l, "purchasing.draft_deleted"));
       // Back to the list: the order this page was about is gone, and leaving
-      // the manager looking at a 404 is not an answer.
+      // the manager looking at a 404 is not an answer. Said after moving, so
+      // it is the list's news and the move does not take it away.
       desk.go(app, desk.screen("Purchasing"));
+      desk.say(app, words.t(l, "purchasing.draft_deleted"));
       browser.set_hash(desk.href_of(desk.screen("Purchasing")));
       load(app);
       return;
@@ -2050,6 +2089,42 @@ function arrived(app: App): void {
 }
 
 /**
+ * Go to an address.
+ *
+ * Setting the hash to the one already there fires no `hashchange`, so a
+ * button whose target was the current address did nothing at all — "Back to
+ * products" among them. Arriving directly is what the event would have done.
+ */
+function navigate(app: App, fragment: string): void {
+  if (browser.hash() === fragment) {
+    arrived(app);
+    return;
+  }
+  browser.set_hash(fragment);
+}
+
+/**
+ * A rail link to the screen already open.
+ *
+ * The browser follows every other link itself, and `hashchange` arrives. This
+ * one changes nothing it would report, so the page is arrived at again here:
+ * the screen reloads and, on a phone, the rail closes, as for any other link.
+ */
+function linked(app: App, e: Event): void {
+  const target = e.target;
+  if (!(target instanceof Element)) {
+    return;
+  }
+  const link = target.closest("a[href^='#/']");
+  if (link === null) {
+    return;
+  }
+  if (link.getAttribute("href") === browser.hash()) {
+    arrived(app);
+  }
+}
+
+/**
  * A press on anything that carries a `data-action`.
  *
  * The element the handler is attached to is the one whose action counts, and
@@ -2192,6 +2267,7 @@ function main(): void {
   // the picker and the file arrives later, on a second event.
   root.addEventListener("change", (e) => changed(app, e));
   root.addEventListener("keydown", (e) => typed(app, e as KeyboardEvent));
+  root.addEventListener("click", (e) => linked(app, e));
   browser.on_window("hashchange", () => arrived(app));
 
   // The lanes are the one thing on this page that is about *now*, so they are

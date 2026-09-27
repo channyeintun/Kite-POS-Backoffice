@@ -1018,7 +1018,7 @@ export function goods_in_line(products: model.CatalogProduct[], l: Lang, c: Curr
       // pre-filled with the current price: a figure sitting in the box would
       // be sent, and would queue a "new" price that is the old one.
       desk.hinted(
-        desk.field("new_price", words.t(l, "purchasing.new_sell_price"), { tag: "Money" }, ""),
+        desk.blank_allowed(desk.field("new_price", words.t(l, "purchasing.new_sell_price"), { tag: "Money" }, "")),
         words.t(l, "purchasing.new_sell_price_hint"),
       ),
       // Off by default: the shelf sells out at the price it was bought to

@@ -889,10 +889,19 @@ export function Page({ app, press }: Props): ReactElement {
       </div>,
     );
   }
+  // Trouble first, and a notice only when there is none — the till's rule. The
+  // notice was set by every write that succeeded and never drawn, so a save
+  // closed its dialog and said nothing about whether it had worked.
   if (app.trouble.length > 0) {
     body.push(
       <div key="trouble" className="trouble-bar">
         {app.trouble}
+      </div>,
+    );
+  } else if (app.notice.length > 0) {
+    body.push(
+      <div key="notice" className="notice-bar" role="status">
+        {app.notice}
       </div>,
     );
   }

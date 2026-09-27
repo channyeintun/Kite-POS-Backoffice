@@ -12,16 +12,19 @@
  * spaces, no `+`, no separators, no trailing units. A caller who wants those
  * trims first, which is a decision this cannot make for them.
  *
- * Read as 64-bit integer arithmetic reads it, wrapping and all: twenty nines
- * are 7,766,279,631,452,241,919, not a refusal, and a figure past 2^53 that
- * does fit is held as the nearest double. Nobody types either on purpose, and
- * one typed by accident reaches the Worker as the number it always has.
+ * A number too long to hold exactly is `null` as well. It used to wrap, the
+ * way 64-bit integers do, and twenty nines typed into a price were saved as
+ * K7,766,279,631,452,241,920 — a figure nobody meant, stored without a word.
  */
 export function parse_int(text: string): number | null {
   if (!/^-?[0-9]+$/.test(text)) {
     return null;
   }
-  return Number(BigInt.asIntN(64, BigInt(text)));
+  const value = Number(text);
+  if (!Number.isSafeInteger(value)) {
+    return null;
+  }
+  return value === 0 ? 0 : value;
 }
 
 /**
@@ -166,9 +169,10 @@ export function words(s: string): string[] {
  *
  * `String` agrees below 2^53. Above it every double is still a whole number,
  * but `String` writes the shortest spelling that reads back as the same double
- * and pads it with zeros, so 7,766,279,631,452,241,920 — twenty nines, wrapped
- * — would read 7,766,279,631,452,242,000 in one place and its real digits
- * everywhere the Worker sends it back.
+ * and pads it with zeros. Nothing typed here gets that big any more — see
+ * [`parse_int`] — but a price saved before that rule, like the
+ * 7,766,279,631,452,241,920 twenty nines used to wrap to, still has to read
+ * as the figure it is rather than as 7,766,279,631,452,242,000.
  */
 export function int_text(n: number): string {
   return Number.isInteger(n) && !Number.isSafeInteger(n) ? BigInt(n).toString() : `${n}`;
