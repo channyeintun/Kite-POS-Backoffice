@@ -2,7 +2,7 @@
   "name": "kite-pos",
   "private": true,
   "version": "0.1.0",
-  "description": "A point of sale for a corner shop: a Hono Worker over D1 and R2, and two Kite PWAs.",
+  "description": "A point of sale for a corner shop: a Hono Worker over D1 and R2, and two React PWAs.",
   "workspaces": [
     "api",
     "app"

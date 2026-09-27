@@ -424,7 +424,7 @@ main.lane { display: flex; flex: 1; min-width: 0; min-height: 0; }
  * sub-regions of its own, so it takes the landscape 20 px inset back here. */
 /* The work area in tender mode is the surface a cashier types on, and nothing
  * else. What has been taken, what is still due and the two buttons that end the
- * sale sit in the *ledger* — see `tender_summary` in `till.kite`.
+ * sale sit in the *ledger* — see `TenderSummary` in `till.tsx`.
  *
  * **The numeric surface must not need scrolling, at any size, in either
  * orientation.** The last key on it is `0` and every kyat price ends in one, so
@@ -845,7 +845,7 @@ main.lane { display: flex; flex: 1; min-width: 0; min-height: 0; }
  * The height is stated rather than left to the text, so every calculation
  * below it can subtract a number instead of guessing one — and so a long
  * sentence in မြန်မာ, whose line box is half again as tall, cannot quietly take
- * a second line out of the keypad. `go_to_mode` in `store.kite` clears the
+ * a second line out of the keypad. `go_to_mode` in `store.ts` clears the
  * message when the mode changes, which is what stops a sale-screen complaint
  * sitting under the tender keypad for the rest of the transaction. */
 .notice-bar, .trouble-bar {
@@ -1492,7 +1492,7 @@ img.tile-photo {
 .held-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .held-row[data-action]:active { background: var(--edge); }
 
-/* **The empty shelf says so.** See `shelf()` in `till.kite`. */
+/* **The empty shelf says so.** See `Shelf` in `till.tsx`. */
 .shelf-empty {
   flex: 1;
   display: flex;

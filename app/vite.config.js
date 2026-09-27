@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
-import kite from "vite-plugin-kite";
+import react from "@vitejs/plugin-react";
 
-// Two pages, two programs, one module.
+// Two pages, two programs, one source tree.
 //
 // A role decides which app a sign-in opens and there is no navigation between
 // them — so the till and the back office are separate HTML entries with
@@ -9,11 +9,11 @@ import kite from "vite-plugin-kite";
 // it. A counter tablet installs the till and never carries the back office's
 // icon; the owner's phone does the opposite.
 //
-// They share every sibling in `src/`, because a Kite module is a directory:
-// `api.kite`, `money.kite` and `i18n.kite` are compiled into both without a
-// line of either being duplicated.
+// They share the modules in `src/` — `api.ts`, `money.ts`, `model.ts` — and
+// each bundle carries only what its own entry reaches, so the back office's
+// vocabulary (`words.ts`) is never on a lane.
 export default {
-  plugins: [kite()],
+  plugins: [react()],
   server: {
     port: 5173,
     // The Worker runs on 8787 in development. Proxying rather than pointing the

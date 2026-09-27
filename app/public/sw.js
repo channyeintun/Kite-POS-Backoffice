@@ -1,13 +1,12 @@
 /* The service worker.
  *
- * This is the one piece of JavaScript in the front end, and it is here because
- * a service worker *is* JavaScript — the browser will not run WebAssembly in
- * this slot. Everything the operator touches is Kite.
+ * It is plain JavaScript rather than part of the React build, because the
+ * browser loads it on its own, from a fixed address, outside either page.
  *
  * What it does is deliberately narrow. It is a **shell cache**, not an offline
  * database:
  *
- *   * The app shell — HTML, CSS, the compiled module — is cached on install and
+ *   * The app shell — HTML, CSS, the bundled scripts — is cached on install and
  *     served cache-first, so a till that loses its connection mid-shift still
  *     starts, and a cold start on a slow line is instant. **The page itself is
  *     also re-fetched behind that answer** and written back, so a deploy
@@ -69,10 +68,11 @@ const SHELL = [
  * The hashed files a page needs, found by reading it.
  *
  * A build's real shell is not the six URLs above — it is those plus
- * `/assets/index-<hash>.js`, its stylesheet, and the WebAssembly module that
- * *the script* asks for, whose name appears nowhere in the HTML. So the scan
- * goes two deep: what the page names, and then what its scripts name. Two text
- * passes at install, against a program that cannot start without any of them.
+ * `/assets/index-<hash>.js`, its stylesheet, the chunks the two pages share,
+ * and anything *a script* asks for whose name appears nowhere in the HTML. So
+ * the scan goes two deep: what the page names, and then what its scripts name.
+ * Two text passes at install, against a program that cannot start without any
+ * of them.
  *
  * Nothing here knows the hashes, which is the point: they change on every
  * build and this file does not.

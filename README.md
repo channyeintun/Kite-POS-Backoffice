@@ -2,8 +2,8 @@
 
 A point of sale for a single corner shop, built to run on Cloudflare's free
 tier. One Hono Worker over D1 and R2, and **two installable PWAs written in
-[Kite](https://kite-lang.dev)** — a till for the counter and a back office for
-whoever owns the place.
+React and TypeScript** — a till for the counter and a back office for whoever
+owns the place.
 
 ```bash
 npm install
@@ -33,9 +33,9 @@ a cashier's session is refused by the Worker on every back-office route — the
 separation is enforced at the API, not by hiding links.
 
 They are separate HTML entries with separate manifests, so a counter tablet
-installs the till and never carries the office's icon. They share every module
-in `app/src/`, because a Kite module is a directory: `api.kite`, `money.kite`
-and `i18n.kite` are compiled into both without a line of either duplicated.
+installs the till and never carries the office's icon. They share the modules
+in `app/src/`: `api.ts`, `money.ts` and `i18n.ts` are bundled into both without
+a line of either duplicated.
 
 ## What it does
 
@@ -319,13 +319,12 @@ in the building. It seeds from the shop's `locale.default` until somebody at
 that desk chooses for themselves.
 
 **The two vocabularies are separate files, and that is a size decision rather
-than a filing one.** Both programs compile from one `src/` directory, and
-everything reachable from a program's imports lands in its WebAssembly — so
-`i18n.kite` holds the till's 75 phrases and `words.kite` holds the back
-office's 1,300. Putting them together took the till from 184 KB to 529 KB: a
-lane device paying, on every cold start, for a chart-of-accounts vocabulary it
-will never show. `pos.kite` reaches neither `desk.kite` nor `words.kite`, so
-none of the back office's ~780 translated phrases are on the lane.
+than a filing one.** Both pages are built from one `src/` directory, and
+everything reachable from an entry's imports lands in its bundle — so
+`i18n.ts` holds the till's phrases and `words.ts` holds the back office's,
+which is most of that app's JavaScript. `pos.tsx` reaches neither `desk.ts` nor
+`words.ts`, so a lane device never pays, on a cold start, for a
+chart-of-accounts vocabulary it will never show.
 
 The Burmese is the reviewed set from the Corner Mart build rather than a fresh
 translation — the same shop, the same tills, the same accounting vocabulary a
@@ -352,21 +351,30 @@ api/                      the Worker
   test/money.test.ts      the arithmetic, in isolation
   test/smoke.mjs          the money path end to end, against `wrangler dev`
 app/                      both front ends
-  index.html              the till          → src/pos.kite
-  office.html             the back office   → src/office.kite
-  src/*.kite              one Kite module; every file is a sibling of the others
-  test/run-kite.mjs       runs a Kite program that has siblings
+  index.html              the till          → src/pos.tsx
+  office.html             the back office   → src/office.tsx
+  src/                    React and TypeScript, shared by both pages
+  test/money.test.ts      money and the till's phrases, run directly by Node
 ```
 
-Read `app/src/` top to bottom: `pos.kite` and `office.kite` are the wiring,
-`till.kite` and `office_view.kite` are pure functions from a store to
-`html.Node`, `store.kite` and `desk.kite` are the values, and `doc.kite` and
-`browser.kite` are the only files that know a host exists.
+Read `app/src/` top to bottom: `pos.tsx` and `office.tsx` are the wiring,
+`till.tsx` and `office_view.tsx` are React components that draw a store and
+nothing else, `store.ts` and `desk.ts` are the values, `doc.ts` and
+`browser.ts` are where the page and the browser are reached, and `lang.ts`
+holds the number and text rules every other module leans on — how a typed
+amount is read, which way a half rounds.
 
-**There are no event handlers in the described elements.** `html.Node` has
-nowhere to put one, so a `data-action` attribute names what an element means and
-one listener on the root reads it off whatever was touched. A rebuilt
-description has nothing to reattach.
+**Every control says what it means in a `data-action`.** Each one hands the
+same handler to `onClick`, which reads the action and its `data-id` off the
+element and passes them to one table — `clicked` in `pos.tsx`, `pressed` in
+`office.tsx` — so the markup says what an element is and the wiring says what
+that does.
+
+**Drawing is explicit.** The store is one mutable value, written only by the
+small functions at the bottom of `store.ts` and `desk.ts`, and nothing reaches
+the screen until `repaint()` renders it — synchronously, so a handler decides
+exactly when the operator sees what it did, and a guard written before a
+request is already up when the next tap arrives.
 
 ## More than one shop
 
@@ -438,9 +446,9 @@ else and "who rang this sale" has to have an answer.
 ## Tests
 
 ```bash
-npm test                 # arithmetic, in TypeScript and in Kite
+npm test                 # arithmetic: the Worker's, and the apps' money and phrases
 npm run test:smoke       # the money path end to end (needs `npm run dev:api`)
-npm run check            # both Kite programs compile, and their wasm validates
+npm run check            # typecheck the Worker and both apps
 ```
 
 The Worker is typechecked by **TypeScript 7**, which is the native compiler —
@@ -510,22 +518,6 @@ Stated rather than implied:
   an idempotency key that was written and never read. All fixed, each with a
   regression check. Worth reading before extending this: the same mistakes are
   the ones easiest to make again.
-- **A dispatch table is a `match`; a condition stays an `if`.** A sweep over
-  every Kite file found 65 chains and 203 branches, and forty of them were
-  conditions wearing a chain's shape — nil checks, length tests, `starts_with`
-  predicates. Two of the large ones survive as `if` deliberately: `pressed()`
-  and `clicked()` each have arms that do not return, and converting them drops
-  a command silently. Two rules the compiler taught rather than the spec: a
-  bare `return` is a statement, so an arm that leaves the function must be a
-  block; and an arm ending in a call to an `async fn` yields that call's
-  `Task<()>`, which will not unify with a sibling arm's `()` — keeping the
-  arm's `return` is what makes it diverge instead.
-
-- **`npm run check` validates the emitted WebAssembly**, not just the types.
-  `kitec` checking clean is not the same as a module the engine will load — this
-  build hit a codegen bug where it wasn't, and nothing caught it until the page
-  was open. Fixed upstream in Kite 0.1.5; the validation stays, because it costs
-  a millisecond and the failure mode is a blank screen with no error.
 - **Writing a debt off is not built.** A tab that will never be paid can be
   cleared by refunding the goods against it, which is right when the goods came
   back and wrong when they did not. A real write-off is a posting to a bad-debt
@@ -539,8 +531,8 @@ Stated rather than implied:
   what the chart is read for.
 - **One tablet item is CSS-complete but structurally deferred.** The command
   strip still spans the full width rather than the work column in landscape.
-  That is a `page()` change in
-  `till.kite` that would invalidate the four-viewport verification behind the
+  That is a `Page` change in
+  `till.tsx` that would invalidate the four-viewport verification behind the
   rest of the tablet work, so it is written down rather than half-done.
 
   The other one is now done: the tender screen's summary has moved into the

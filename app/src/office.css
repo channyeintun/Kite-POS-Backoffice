@@ -613,7 +613,7 @@ input { font: inherit; }
 .buttons { display: flex; flex-wrap: wrap; gap: 8px; }
 /* **While the page is working, the things that write it are inert.**
  *
- * The handlers already refuse a second press — see `writing` in `office.kite` —
+ * The handlers already refuse a second press — see `writing` in `office.tsx` —
  * but a button that looks untouched is a button a shopkeeper on a slow line
  * taps again, and again, which is how one press of "Raise orders from the
  * worksheet" became twelve draft orders nobody could delete. This is the half

@@ -3,23 +3,27 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "The till and the back office: two pages, two Kite programs, one module.",
+  "description": "The till and the back office: two pages, two React programs, one source tree.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "node test/check-kite.mjs src/pos.kite src/office.kite",
-    "fmt": "npx kitec fmt src/*.kite",
-    "fmt:check": "npx kitec fmt --check src/*.kite",
-    "test": "node test/run-kite.mjs test/money_test.kite",
+    "check": "tsc -p .",
+    "test": "node --test test/*.test.ts",
     "deploy": "wrangler pages deploy dist --project-name thirisan-store",
     "build:khant": "VITE_API_BASE=https://khant-pos-api.chanyeintun.workers.dev/api vite build",
     "deploy:khant": "wrangler pages deploy dist --project-name khant-pos"
   },
+  "dependencies": {
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
   "devDependencies": {
-    "@kite-lang/compiler-wasm": "^0.1.9",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "typescript": "^7.0.2",
     "vite": "^7.0.0",
-    "vite-plugin-kite": "^0.1.9",
     "wrangler": "^4.120.0"
   },
   "//allowScripts": "esbuild is Vite's bundler and workerd is what `wrangler pages dev` serves through; both fetch a platform binary their tool is useless without.",

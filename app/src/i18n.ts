@@ -1,0 +1,297 @@
+//! English and မြန်မာ.
+//!
+//! A lane setting rather than a user preference, which is why the switch lives
+//! in the status bar and is reachable from every screen without opening a menu.
+//! It is also deliberately small — 44 px, below the transaction target scale
+//! and outside the scan-to-pay path — because switching language mid-basket is
+//! a mistake rather than a workflow.
+//!
+//! **What does not translate**: money, quantities, SKUs and dates stay in Latin
+//! digits, and product names come from one database field and are shown as
+//! stored. Chrome switches; the catalogue does not.
+//!
+//! Burmese needs a taller line box than Roboto — 1.6–1.7 against 1.2–1.3 — and
+//! the stylesheet handles that with a `lang` attribute on the root rather than
+//! a class per string. Command labels are sized for the longer of the two, so
+//! nothing reflows when the language changes.
+//!
+//! The Burmese here is aligned with the reviewed set the back office uses
+//! (`words.ts`) wherever the same phrase appears in both — a sweep comparing
+//! them found this file still carrying placeholder wording: "shift" as the
+//! transliteration ဆစ်ဖ်, and the lane's no-drawer message naming ငွေတိုက် (the
+//! *safe*) for a till drawer, in a system that posts the two to different
+//! accounts. What is left different is left on purpose: `items` is the counter
+//! ခု, which is what "7 ခု" needs and what ပစ္စည်းများ would break.
+//!
+//! **This file is the till's vocabulary, and only the till's.** The back
+//! office has its own — `words.ts` — because both pages are built from the
+//! same `src/` directory and everything reachable from an entry's imports ends
+//! up in its bundle. Putting all the back office's phrases here would have a
+//! lane device paying, on every cold start, for a chart-of-accounts vocabulary
+//! it will never show.
+//!
+//! The tab vocabulary — `on_account`, `owes`, `pay_tab` and the three `tab_*`
+//! sentences — is **composed rather than reviewed**. It is built from words the
+//! Corner Mart set already uses (အကြွေးဖြင့် on account, ဖောက်သည် customer,
+//! ကန့်သတ်ချက် limit) and deliberately says ကြွေးကျန် for what a customer owes
+//! the shop, to keep it apart from ပေးရန်ရှိ — which the reviewed set uses for
+//! what the *shop* owes, in `payables.owed` and in `customers.store_credit_owed`
+//! on the very same person. A cashier reading one for the other has the sign
+//! backwards on somebody's money, so this pair is first on the list for the
+//! native speaker who signs off the command words.
+//!
+//! **A missing key returns the key itself**, not an empty string. A screen
+//! reading `products.shelf_price` where nothing is defined shows
+//! "products.shelf_price" — ugly, findable, and obviously wrong, which is what
+//! you want from a gap. An empty string is a blank column nobody notices.
+
+import { replace } from "./lang.ts";
+
+export type Lang = "En" | "My";
+
+export function of_code(code: string): Lang {
+  if (code === "my") {
+    return "My";
+  }
+  return "En";
+}
+
+export function code_of(l: Lang): string {
+  return l === "En" ? "en" : "my";
+}
+
+/** The `lang` attribute, which is what the stylesheet keys its line height on. */
+export function tag_of(l: Lang): string {
+  return l === "En" ? "en" : "my";
+}
+
+export function other(l: Lang): Lang {
+  return l === "En" ? "My" : "En";
+}
+
+/**
+ * One string, in the current language.
+ *
+ * Falls back to English when a phrase has no Burmese yet, and to the key
+ * itself when it has neither — so a missing translation degrades to a
+ * readable word rather than to a blank column nobody notices.
+ */
+export function t(l: Lang, key: string): string {
+  const found = l === "En" ? english(key) : burmese(key);
+  if (found.length > 0) {
+    return found;
+  }
+  const fallback = english(key);
+  if (fallback.length > 0) {
+    return fallback;
+  }
+  return key;
+}
+
+/** A phrase with a value in it, where the phrase carries a `%s`. */
+export function fill(l: Lang, key: string, value: string): string {
+  return replace(t(l, key), "%s", value);
+}
+
+function english(key: string): string {
+  return Object.hasOwn(ENGLISH, key) ? ENGLISH[key] : "";
+}
+
+function burmese(key: string): string {
+  return Object.hasOwn(BURMESE, key) ? BURMESE[key] : "";
+}
+
+type Table = Readonly<Record<string, string>>;
+
+const ENGLISH: Table = {
+  "add_tender": "Add tender",
+  "age_check": "Check ID",
+  "age_min": "Minimum age",
+  "approve": "Approve",
+  "back_to_sale": "Back to sale",
+  "balance_due": "Balance due",
+  "born_before": "Born on or before",
+  "cancel": "Cancel",
+  "card": "Card",
+  "cash": "Cash",
+  "cash_tendered": "Cash tendered",
+  "change_due": "Change",
+  "clear": "Clear",
+  "close_lane": "Close lane",
+  "confirm": "Confirm",
+  "credit_needs_customer": "Store credit needs a customer — attach one first.",
+  "counted": "Counted in the drawer",
+  "customer": "Customer",
+  "discount": "Discount",
+  "each": "each",
+  "empty_basket": "Scan something to begin",
+  "enter_pin": "Enter your PIN, then press →",
+  "favourites": "Favourites",
+  "finish": "Finish",
+  "held": "Held",
+  "hold": "Hold",
+  "item_count": "Items",
+  "items": "items",
+  "keypad": "Keypad",
+  "label": "Label",
+  "ledger": "LEDGER",
+  "manager_pin": "Manager PIN",
+  "more": "More…",
+  "needs_manager": "A manager has to approve that",
+  "new_customer": "New customer",
+  "no_customers": "Nobody found",
+  "no_tiles": "Nothing on this shelf yet. Scan the barcode, or use Search.",
+  "no_held": "Nothing is parked",
+  "no_receipts": "No receipts found",
+  "no_sale": "No sale",
+  "no_shift": "No drawer is open at this lane",
+  "nothing_returnable": "Everything on this receipt has come back already",
+  "offline": "Offline",
+  "only_cash_change": "Only cash gives change.",
+  "on_account": "On account",
+  "online": "Online",
+  "owes": "Owes",
+  "pay": "PAY",
+  "pay_tab": "Pay tab",
+  // The splash's one line. Not new wording: `words.ts` already carries
+  // this phrase as `layout.point_of_sale`, and the till cannot reach that
+  // file — see this module's header for what importing it costs a lane.
+  "point_of_sale": "Point of sale",
+  "price": "Price",
+  "print": "Print",
+  "price_check": "Price check",
+  "price_override": "Price override",
+  "promotions_saved": "Promotions saved",
+  "quantity": "Quantity",
+  "queued": "queued",
+  "reason": "Reason",
+  "receipt": "Receipt",
+  "receipt_number": "Receipt number",
+  "refuse": "Refuse sale",
+  "resume": "Resume",
+  "return": "Return",
+  "returnable": "can return",
+  "sale": "SALE",
+  "saved": "saved",
+  "scan": "SCAN",
+  "scan_hint": "Scan barcode or type SKU…",
+  "search": "Search",
+  "shift_open": "Shift open",
+  "sign_in": "Sign in",
+  "sign_out": "Sign off",
+  "sign_out_busy": "Hold or void the basket before signing off.",
+  "store_credit": "Store credit",
+  "subtotal": "Subtotal",
+  "tab_needs_customer": "A tab needs a customer — attach one first.",
+  "tab_no_room": "That is more than this customer may owe.",
+  "tab_paid": "Taken off the tab:",
+  "tab_room": "Can still go on the tab:",
+  "tax_added": "Tax",
+  "tax_included": "Tax included",
+  "tender": "TENDER",
+  "the_lot": "All of it",
+  "tender_type": "TENDER TYPE",
+  "total": "TOTAL",
+  "void": "Void sale",
+  "void_line": "Void line",
+  "wallet": "KBZPay / Wave",
+  "why": "Why",
+  "finish_this_first": "Finish this first — that scan was not rung up",
+  "pin_too_short": "A PIN is at least four digits",
+  "wrong_pin": "That PIN was not recognised",
+};
+
+const BURMESE: Table = {
+  "add_tender": "ငွေထည့်မည်",
+  "age_check": "မှတ်ပုံတင်စစ်ဆေးပါ",
+  "age_min": "အနည်းဆုံးအသက်",
+  "approve": "အတည်ပြု",
+  "back_to_sale": "ရောင်းချမှုသို့ပြန်",
+  "balance_due": "ကျန်ငွေ",
+  "born_before": "မွေးနေ့ ဤရက်နှင့်မတိုင်မီ",
+  "cancel": "မလုပ်တော့",
+  "card": "ကတ်",
+  "cash": "ငွေသား",
+  "cash_tendered": "ပေးသောငွေသား",
+  "change_due": "အကြွေ",
+  "clear": "ရှင်းလင်း",
+  "close_lane": "လိုင်းပိတ်",
+  "confirm": "အတည်ပြု",
+  "credit_needs_customer": "ဆိုင်ခရက်ဒစ်အတွက် ဖောက်သည် လိုအပ်သည် — ဦးစွာ ချိတ်ဆက်ပါ။",
+  "counted": "ငွေတိုက်တွင် ရေတွက်ရရှိ",
+  "customer": "ဖောက်သည်",
+  "discount": "လျှော့ဈေး",
+  "each": "တစ်ခုလျှင်",
+  "empty_basket": "စတင်ရန် စကန်ဖတ်ပါ",
+  "enter_pin": "သင့် PIN ရိုက်ထည့်ပြီး → ကို နှိပ်ပါ",
+  "favourites": "အသုံးများ",
+  "finish": "ပြီးဆုံး",
+  "held": "ဆိုင်းငံ့စာရင်း",
+  "hold": "ဆိုင်းငံ့",
+  "item_count": "ပစ္စည်း",
+  "items": "ခု",
+  "keypad": "ကီးပက်",
+  "label": "အညွှန်း",
+  "ledger": "စာရင်း",
+  "manager_pin": "မန်နေဂျာ PIN",
+  "more": "နောက်ထပ်",
+  "needs_manager": "မန်နေဂျာ ခွင့်ပြုချက် လိုအပ်သည်",
+  "new_customer": "ဖောက်သည်အသစ်",
+  "no_customers": "ရှာမတွေ့ပါ",
+  "no_tiles": "ဤစင်တွင် ပစ္စည်း မရှိသေးပါ။ ဘားကုဒ်ဖတ်ပါ သို့မဟုတ် ရှာဖွေပါ။",
+  "no_held": "ဆိုင်းငံ့ထားသည် မရှိပါ",
+  "no_receipts": "ပြေစာ ရှာမတွေ့ပါ",
+  "no_sale": "အရောင်းမရှိ",
+  "no_shift": "ဤလိုင်းတွင် ငွေအံဆွဲ ဖွင့်မထားပါ",
+  "nothing_returnable": "ဤပြေစာမှ အားလုံး ပြန်အမ်းပြီးဖြစ်သည်",
+  "offline": "အော့ဖ်လိုင်း",
+  "only_cash_change": "ငွေသားဖြင့်သာ အကြွေ ပြန်အမ်းနိုင်သည်။",
+  "on_account": "အကြွေးဖြင့်",
+  "online": "အွန်လိုင်း",
+  "owes": "ကြွေးကျန်",
+  "pay": "ငွေရှင်းမည်",
+  "pay_tab": "အကြွေးဆပ်",
+  "point_of_sale": "အရောင်းစနစ်",
+  "price": "ဈေးနှုန်း",
+  "print": "ပုံနှိပ်",
+  "price_check": "စျေးနှုန်းစစ်",
+  "price_override": "စျေးနှုန်းပြင်",
+  "promotions_saved": "လျှော့စျေး",
+  "quantity": "အရေအတွက်",
+  "queued": "စောင့်ဆိုင်းဆဲ",
+  "reason": "အကြောင်းပြချက်",
+  "receipt": "ပြေစာ",
+  "receipt_number": "ပြေစာနံပါတ်",
+  "refuse": "ငြင်းပယ်",
+  "resume": "ပြန်လည်စတင်",
+  "return": "ပြန်အမ်း",
+  "returnable": "ပြန်အမ်းနိုင်",
+  "sale": "ရောင်းချမှု",
+  "saved": "သက်သာ",
+  "scan": "စကန်ဖတ်",
+  "scan_hint": "ဘားကုဒ်ဖတ်ပါ သို့မဟုတ် SKU ရိုက်ပါ…",
+  "search": "ရှာဖွေ",
+  "shift_open": "အလှည့်ဖွင့်ထား",
+  "sign_in": "ဝင်ရောက်",
+  "sign_out": "ထွက်မည်",
+  "sign_out_busy": "မထွက်မီ စာရင်းကို ဆိုင်းငံ့ပါ သို့မဟုတ် ဖျက်ပါ။",
+  "store_credit": "ဆိုင်ခရက်ဒစ်",
+  "subtotal": "ကြားပေါင်း",
+  "tab_needs_customer": "အကြွေးအတွက် ဖောက်သည် လိုအပ်သည် — ဦးစွာ ချိတ်ဆက်ပါ။",
+  "tab_no_room": "ဤဖောက်သည်၏ အကြွေးကန့်သတ်ချက် ကျော်လွန်နေသည်။",
+  "tab_paid": "အကြွေးမှ နုတ်ပြီး —",
+  "tab_room": "အကြွေးအဖြစ် ထပ်တင်နိုင်သည် —",
+  "tax_added": "အခွန်",
+  "tax_included": "အခွန်ပါဝင်ပြီး",
+  "tender": "ငွေရှင်းမှု",
+  "the_lot": "အားလုံး",
+  "tender_type": "ငွေပေးချေမှုအမျိုးအစား",
+  "total": "စုစုပေါင်း",
+  "void": "ပယ်ဖျက်",
+  "void_line": "စာကြောင်းဖျက်",
+  "wallet": "KBZPay / Wave",
+  "why": "အကြောင်းပြချက်",
+  "finish_this_first": "ဤအဆင့်ကို အရင်ပြီးအောင်လုပ်ပါ — ထိုစကန်ကို မသွင်းရသေးပါ",
+  "pin_too_short": "PIN သည် အနည်းဆုံး ဂဏန်း ၄ လုံး ဖြစ်ရမည်",
+  "wrong_pin": "PIN မမှန်ကန်ပါ",
+};
