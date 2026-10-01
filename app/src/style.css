@@ -79,6 +79,20 @@
   --critical-ink: #ff8a7a;
   --info-fill: #002477;
   --info-ink: #8fcbff;
+  /* **The toast** a message is drawn as on a tablet: the design's own, a
+   * light pill even on the dark till, so it reads as something laid over the
+   * lane rather than as one more part of it. The tone is in its glyph — the
+   * light theme's success and critical inks, which are what read on `--toast`. */
+  --toast: #eeeff1;
+  --toast-ink: #050506;
+  --toast-ok: #356530;
+  --toast-critical: #ce2717;
+  --toast-shadow: 0 10px 28px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.35);
+  /* How tall the toast is, and how far it stands off what it floats above.
+   * Stated, because in sale it takes no room in the layout by giving back
+   * exactly its own height as a negative margin. */
+  --toast-h: 44px;
+  --toast-gap: 12px;
 
   --r-card: 16px;
   --r-ctl: 12px;
@@ -1445,12 +1459,13 @@ html[lang="my"] .key.util:not([data-id="back"]) { font-size: 17px; }
 
 /* ---- what just happened -------------------------------------------------- */
 
-/* **In the flow, and a stated height.**
+/* **On a phone, in the flow, and a stated height.** On a tablet it floats —
+ * see "A message floats" near the end of this file, which says why.
  *
- * It stays a region rather than floating over the bottom edge, because the
- * bottom edge is where the commands are in sale and where `Add tender` is in
- * tender, and a message that covers the thing it is complaining about is worse
- * than one that costs a strip of height.
+ * On a phone it stays a region rather than floating over the bottom edge,
+ * because the bottom edge is where the commands are in sale and where `Add
+ * tender` is in tender, and on a screen that small there is nowhere else for
+ * it to lie that is not something the cashier needs.
  *
  * The height is stated rather than left to the text, so every calculation
  * below it can subtract a number instead of guessing one — and so a long
@@ -2432,18 +2447,14 @@ img.tile-photo {
   .panel:has(> .keypad) { gap: var(--gap); padding-top: 20px; padding-bottom: 20px; }
 }
 
-/* The message band on a portrait tablet is the same inset banner it is on
- * one lying down, on the strip's 16 px edges, rather than a tinted stripe
- * run edge to edge between the commands and the PAY bar. No layout here
- * subtracts the band's height by hand, so its margin costs the grid above it
- * 8 px and nothing else. */
-@media (orientation: portrait) and (min-width: 561px) {
-  .notice-bar, .trouble-bar {
-    margin: 0 16px 8px;
-    margin-left: max(16px, env(safe-area-inset-left));
-    margin-right: max(16px, env(safe-area-inset-right));
-    border-radius: var(--r-ctl);
-  }
+/* The toast on a portrait tablet, in sale: drawn before the commands rather
+ * than after them, so the margin trick in "A message floats" below lays it
+ * over the foot of the tile grid — 12 px above the strip — instead of over
+ * the strip itself. The commands, the PAY bar and everything above them stay
+ * exactly where they were. */
+@media (orientation: portrait) and (min-width: 561px) and (min-height: 431px) {
+  .commands { order: 2; }
+  .notice-bar, .trouble-bar { order: 1; }
 }
 
 /* **Tablets on their side: the cart is a card down the right-hand side.**
@@ -2484,8 +2495,8 @@ img.tile-photo {
       grid-template-areas:
         "status status"
         "work   ledger"
-        "cmds   ledger"
-        "band   ledger";
+        "band   ledger"
+        "cmds   ledger";
     }
     main.lane { display: contents; }
     /* The bar's far end lines up with the card's, 12 px in, rather than
@@ -2495,26 +2506,18 @@ img.tile-photo {
      * device the left inset is its padding rather than the ledger's. */
     .work { grid-area: work; padding-left: env(safe-area-inset-left); }
     /* The strip ends 12 px off the bottom edge, where the card beside it
-     * does, so the two largest blocks on the screen share a foot. With a band
-     * under it the band takes that edge — and the inset, on a device with a
-     * home indicator — and the strip keeps 12 px above it. */
+     * does, so the two largest blocks on the screen share a foot — with a
+     * message up or without one, because the message no longer takes a row
+     * under it. */
     .commands {
       grid-area: cmds;
       padding-right: 20px;
       padding-bottom: max(12px, env(safe-area-inset-bottom));
     }
-    #app:has(> :is(.notice-bar, .trouble-bar)) .commands { padding-bottom: 12px; }
-    /* The band under the commands, in the left column, as an inset banner. */
-    .notice-bar, .trouble-bar {
-      grid-area: band;
-      margin: 0 20px 12px;
-      margin-left: max(20px, env(safe-area-inset-left));
-      margin-bottom: max(12px, env(safe-area-inset-bottom));
-      border-radius: var(--r-ctl);
-    }
-    /* In tender it sits under the payment panel, so it takes the panel's
-     * edges rather than the tiles'. */
-    .tendering ~ :is(.notice-bar, .trouble-bar) { margin-left: max(12px, env(safe-area-inset-left)); margin-right: 12px; }
+    /* The toast's row sits between the tiles and the strip, and is no height
+     * at all — see "A message floats" below — so the toast lies over the foot
+     * of the tile grid, 12 px above the commands. */
+    .notice-bar, .trouble-bar { grid-area: band; }
     /* The card. Its column is `--cart-col`; the card is that less the 12 px it
      * stands off the screen's right edge — or the inset, on a device with one,
      * which is where the ledger's own padding used to go when it was the left
@@ -2589,9 +2592,8 @@ img.tile-photo {
  * work column 1020 px leaves; narrower, the strip went to three rows and the
  * product grid lost the row of tiles the portrait rules exist to keep — at
  * 853 × 533, an 8" tablet's CSS size, not one whole tile was left. So the
- * strip, and the band under it, run the full width again, the card stops
- * above them, and the commands go back to the 80 px floor they have across a
- * full width.
+ * strip runs the full width again, the card stops above it, and the commands
+ * go back to the 80 px floor they have across a full width.
  *
  * The card narrows too, down to 320 px: the tender panel beside it needs
  * 420 px for its two floors — a 156 px chooser and four 56 px keys — and 32
@@ -2605,15 +2607,14 @@ img.tile-photo {
       grid-template-areas:
         "status status"
         "work   ledger"
-        "cmds   cmds"
-        "band   band";
+        "band   ledger"
+        "cmds   cmds";
     }
     /* 4 px, and the strip's own 8 px of padding make the 12 the card keeps
      * everywhere else. Tender has no strip, and keeps the 12. */
     #app:has(> .commands) .ledger { margin-bottom: 4px; }
     .commands { padding-right: max(12px, env(safe-area-inset-right)); }
     .commands .command-group { grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); }
-    .notice-bar, .trouble-bar { margin-right: max(12px, env(safe-area-inset-right)); }
   }
 }
 
@@ -2626,6 +2627,107 @@ img.tile-photo {
 @media (orientation: landscape) and (min-width: 561px) and (min-height: 431px) and (max-height: 571px) {
   :root { --tender-min: 420px; }
   .tender-keys .quicks { display: none; }
+}
+
+/* ---- a message floats ---------------------------------------------------- */
+
+/* **A message floats, on a tablet.** It used to be a band in the flow, under
+ * the commands, and every time one came up or went away everything above it
+ * jumped by its height: the command strip rose 50 px under the cashier's
+ * finger, in tender the keypad shrank and `Add tender` moved, and on a 768 px
+ * portrait iPad `Back to sale` and `Finish` moved with them. A message stays
+ * up until the next one or a change of mode, so that was a jump at both ends
+ * of every message.
+ *
+ * Now it is a toast, the design's own: a light pill laid over the lane, which
+ * moves nothing when it comes or goes.
+ *
+ * **In sale it lies over the foot of the tile grid, 12 px above the
+ * commands.** It does that in the flow, by giving back its own height and its
+ * gap as a negative margin: its place — a grid row between the tiles and the
+ * strip lying down, a slot before the strip standing up — is no height at
+ * all, so no layout has to know how tall the strip is. The grid gains the
+ * toast's height of scroll while one is up, so its last row can still be
+ * brought out from under it.
+ *
+ * **In tender it lies across the top of the cart card instead**, over the
+ * locked basket — the one thing on that screen nobody is about to touch. The
+ * foot of the screen there is `Add tender`, `Back to sale` and `Finish`, and a
+ * message laid over the button it is complaining about is worse than one that
+ * moves it.
+ *
+ * Behind `:has()`, like the card itself: without it the cart is still on the
+ * left, and the band stays in the flow as it was. Phones keep the band in the
+ * flow too — see "On a phone" above. */
+@media screen and (min-width: 561px) and (min-height: 431px) {
+  @supports selector(:has(> *)) {
+    .notice-bar, .trouble-bar {
+      position: relative;
+      z-index: 4;
+      align-self: center;
+      justify-self: center;
+      width: fit-content;
+      max-width: calc(100% - 40px);
+      height: var(--toast-h);
+      margin: calc(-1 * (var(--toast-h) + var(--toast-gap))) auto var(--toast-gap);
+      padding: 0 18px 0 14px;
+      gap: 10px;
+      border-radius: var(--r-ctl);
+      background: var(--toast);
+      color: var(--toast-ink);
+      box-shadow: var(--toast-shadow);
+      font-size: 15px;
+      line-height: 18px;
+    }
+    .notice-bar::before, .trouble-bar::before { width: 20px; height: 20px; }
+    .notice-bar::before { background: var(--toast-ok); }
+    .trouble-bar::before { background: var(--toast-critical); }
+    /* Two lines of Burmese in the pill's 44 px, rather than one and a cut. */
+    html[lang="my"] :is(.notice-bar, .trouble-bar) { font-size: 14px; line-height: 21px; }
+    #app:has(> :is(.notice-bar, .trouble-bar)) .grid {
+      padding-bottom: calc(20px + var(--toast-h) + var(--toast-gap));
+    }
+
+    /* Tender: fixed, 12 px under the status bar, across the cart card's inner
+     * width — its 16 px padding in from either edge of the card. */
+    /* `normal` alignment as well as `auto` width: a browser that aligns
+     * positioned boxes reads the `center` above as "shrink to the words and
+     * centre them between the insets", which is not the card's width. */
+    .tendering ~ :is(.notice-bar, .trouble-bar) {
+      position: fixed;
+      top: calc(56px + env(safe-area-inset-top) + 12px);
+      align-self: normal;
+      justify-self: normal;
+      width: auto;
+      max-width: none;
+      height: auto;
+      min-height: var(--toast-h);
+      margin: 0;
+      padding-top: 8px;
+      padding-bottom: 8px;
+    }
+    /* The card's heading is what the toast lies on, and its first letter
+     * showed round the toast's corner. Hidden while the toast is up —
+     * `visibility`, which leaves its room where it was, so nothing moves. */
+    .lane.tendering:has(~ :is(.notice-bar, .trouble-bar)) .ledger-head { visibility: hidden; }
+  }
+}
+@media screen and (orientation: landscape) and (min-width: 561px) and (min-height: 431px) {
+  @supports selector(:has(> *)) {
+    .tendering ~ :is(.notice-bar, .trouble-bar) {
+      left: auto;
+      right: calc(max(12px, env(safe-area-inset-right)) + 16px);
+      width: calc(var(--cart-col) - max(12px, env(safe-area-inset-right)) - 32px);
+    }
+  }
+}
+@media screen and (orientation: portrait) and (min-width: 561px) and (min-height: 431px) {
+  @supports selector(:has(> *)) {
+    .tendering ~ :is(.notice-bar, .trouble-bar) {
+      left: calc(max(16px, env(safe-area-inset-left)) + 16px);
+      right: calc(max(16px, env(safe-area-inset-right)) + 16px);
+    }
+  }
 }
 
 /* ---- the receipt ---------------------------------------------------------- */
