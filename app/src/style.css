@@ -1027,6 +1027,10 @@ span.tile-photo {
 @media (max-height: 820px) { :root { --key: 100px; } }
 @media (max-height: 740px) { :root { --key: 88px; } }
 @media (max-height: 660px) { :root { --key: 76px; } }
+/* An old 4" phone, 568 px tall: the PIN pad at 76 px a key, under its padlock
+ * and title and over the language switch, is 32 px taller than the screen,
+ * and the switch was the part past the bottom. 64 px is still 10.8 mm. */
+@media (max-height: 600px) { :root { --key: 64px; } }
 
 /* What has been taken, one row a payment, the amount in green: it is money
  * that is in, which is what green means here. Inset 16 px, the same as the
@@ -1402,15 +1406,22 @@ html[lang="my"] .key.util:not([data-id="back"]) { font-size: 17px; }
 
 /* The lock screen: a padlock, a line of instruction, the dots, and a round
  * PIN pad, centred on the canvas. */
+/* `safe` centring and a scroll as the last resort: a column taller than the
+ * screen used to be centred on it, which cut its top and its bottom off
+ * together with nothing to scroll — the padlock above, the language switch
+ * below. Every size this till is laid out for fits it; this is for one that
+ * is not. */
 .signin {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  justify-content: safe center;
   gap: 16px;
   height: 100vh;
   height: 100dvh;
   padding: 16px 24px;
+  overflow-y: auto;
 }
 .signin h1 {
   margin: 0;
@@ -2045,6 +2056,13 @@ html[lang="my"] .key.util:not([data-id="back"]) { font-size: 17px; }
    * on a notched phone held sideways its own left padding is what keeps the
    * balance due and `Back to sale` out from under the sensor housing. */
   .tendering .ledger { width: 200px; padding-left: env(safe-area-inset-left); }
+  /* On the shortest of them — 320 px — the total, a payment, the balance due
+   * and both exits are taller than the column, and the hard stop that keeps
+   * a stacked layout's foot off the chooser cut `Back to sale` and `Finish`
+   * in half. Side by side there is no chooser under the foot to protect, so
+   * here the column scrolls instead and every exit stays whole. */
+  .tendering .ledger { overflow-y: auto; }
+  .tendering .ledger-foot { flex: none; }
   .tendering .ledger-body { display: none; }
   /* The card's head at a phone's size. In the 200 px tender card the title at
    * 20 px pushed "12 items · locked" onto a second line; the 260 px sale card
@@ -2066,11 +2084,27 @@ html[lang="my"] .key.util:not([data-id="back"]) { font-size: 17px; }
    * beside it, which is the only arrangement that fits without taking the pad
    * below the 9.5 mm floor a PIN is tapped at. The padlock over the title is
    * the one thing here that is neither, so it goes. */
-  .signin { flex-direction: row; flex-wrap: wrap; align-content: center; justify-content: center; gap: 8px 28px; padding: 10px 20px; }
+  /* A grid, not a wrapping row. As a row the words' 40 % bases and the pad
+   * did not fit one line, so the pad wrapped onto a line of its own under
+   * them, and its bottom row — ⌫, 0 and → — was below the screen. Now the
+   * pad holds the right-hand column, all four rows of it, and the words are
+   * centred as one block in the left. */
+  .signin {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: 1fr repeat(4, auto) 1fr;
+    align-content: center;
+    gap: 8px 28px;
+    padding: 10px 20px;
+  }
   .signin h1 { font-size: 17px; }
   .signin h1::before { display: none; }
-  .signin > *:not(.pin-pad) { flex: 1 1 40%; min-width: 0; text-align: center; }
-  .signin .pin-pad { flex: none; order: 2; gap: 8px 14px; }
+  .signin > *:not(.pin-pad) { grid-column: 1; min-width: 0; text-align: center; }
+  .signin > h1 { grid-row: 2; }
+  .signin > .pin-dots { grid-row: 3; }
+  .signin > .trouble { grid-row: 4; }
+  .signin > .lang { grid-row: 5; }
+  .signin .pin-pad { grid-column: 2; grid-row: 1 / -1; align-self: center; gap: 8px 14px; }
   /* The switch's item is 40% of the row wide here, so its track would be a
    * long grey bar with two buttons in the middle of it. */
   .signin .lang { justify-content: center; padding: 0; background: none; }
@@ -2356,7 +2390,15 @@ img.tile-photo {
   .panel:has(> .due + .entry-value) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .panel:has(> .due + .entry-value) > * { grid-column: 1 / -1; }
   .panel:has(> .due + .entry-value) > :is(.due, .entry-value) { grid-column: auto; }
+}
 
+
+/* **The command strip, on a tablet either way up and on a phone held
+ * upright.** Its own block rather than the tablet one above, because a phone
+ * in portrait draws the strip the same way — equal columns, an icon over each
+ * label — four to a row; see "A phone held upright" further down. A phone on
+ * its side keeps its two-column thumb rail. */
+@media (min-width: 561px) and (min-height: 431px), (max-width: 560px) and (orientation: portrait) {
   /* **The command strip is a grid, so its rows line up.**
    *
    * It was two flex groups side by side that wrapped into each other: the
@@ -2728,6 +2770,136 @@ img.tile-photo {
       right: calc(max(16px, env(safe-area-inset-right)) + 16px);
     }
   }
+}
+
+/* ---- a phone held upright --------------------------------------------------- */
+
+/* **On a phone the lane scrolls, between a pinned status bar and the pinned
+ * PAY bar.**
+ *
+ * Everything else in this file is arithmetic for a screen that holds the
+ * whole lane at once, and a phone does not. At 375 × 667 the status bar, the
+ * basket, the scan row, the category strip, twelve commands and the PAY bar
+ * want about 140 px more than there is — so the tile grid came out at no
+ * height at all, the command strip's two-row ceiling cut the top off every
+ * button in it and half the restricted row off under the PAY bar, and the
+ * strip's rows spilled up over the category pills. Tender was the same story
+ * told the other way: the keypad's four rows were squeezed to 30 px keys, and
+ * `Back to sale` and `Finish` were cut in half by the foot of the cart card.
+ * No ladder of things to give up fixes that; the only answer that leaves
+ * every button whole and reachable is letting the screen move.
+ *
+ * So on a phone the lane scrolls, and what may not move does not: the status
+ * bar sticks to the top, with the connection dot on it; in sale PAY stays the
+ * fixed bar at the bottom, carrying the running total, so the number the
+ * cashier answers for never scrolls away; and a scanner's keystrokes reach
+ * the scan box wherever the screen has been scrolled to, because `typed` in
+ * `pos.tsx` listens on the document. In between, everything is its natural
+ * height. In sale: the basket, a card that stops at 300 px and scrolls inside
+ * itself; the scan row; the category strip; every tile, two to a row; and all
+ * twelve commands, four to a row. In tender: the total, what has been taken,
+ * the balance due and both exits; then the tenders, the amount, the quick
+ * notes back again, and a keypad of 60 px keys. A phone a little taller than
+ * this one simply does not need to scroll. */
+@media (max-width: 560px) and (orientation: portrait) {
+  #app:has(> main.lane) {
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
+  #app:has(> main.lane) > :not(.shade) { flex: none; }
+  #app:has(> main.lane) > .status {
+    position: sticky;
+    top: 0;
+    z-index: 6;
+    background: var(--canvas);
+  }
+  #app:has(> main.lane) .work { flex: none; min-height: 0; }
+
+  /* Sale. */
+  #app:has(> .commands) .grid {
+    flex: none;
+    overflow: visible;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-rows: 120px;
+    padding-bottom: 12px;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+  #app:has(> .commands) .shelf-empty { flex: none; min-height: 120px; }
+  /* An empty basket is a line, not a third of the screen: the bag and its
+   * sentence at half the room they take on a tablet. */
+  .empty { gap: 8px; padding: 20px 16px; }
+  .empty::before { width: 24px; height: 24px; }
+  /* All twelve commands, four to a row, at the 64 px the strip has everywhere
+   * but a phone on its side — the 52 px this block used to set was bought
+   * back to fit a strip that could not fit anyway. A label longer than two
+   * lines makes its row taller rather than losing its second line. */
+  :root { --command: 64px; }
+  .commands {
+    max-height: none;
+    overflow: visible;
+    padding-top: 4px;
+    padding-bottom: 16px;
+  }
+  .commands .command-group { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .command { height: auto; min-height: var(--command); font-size: 12px; }
+  html[lang="my"] .command { font-size: 11.5px; }
+
+  /* Tender. The reservations and the hidden rows above were all about making
+   * it fit without scrolling; here it scrolls, so the card is its whole
+   * height, the payments taken are listed again, and the pad is four rows of
+   * 60 px rather than whatever was left. */
+  /* And it scrolls in a scroller of its own — the lane, under a status bar
+   * that no longer needs to stick — rather than the page sale scrolled in.
+   * The page's scroll position outlives a change of mode, so Pay pressed from
+   * down among the commands opened tender part-way down, with the total and
+   * the balance due above the screen. The lane is a new scroller every time
+   * tender starts, so it starts at the top; and while it is up the page has
+   * nothing to scroll, so sale starts at the top again afterwards too. */
+  #app:has(> main.lane.tendering) { overflow-y: hidden; }
+  #app:has(> main.lane.tendering) > main.lane {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
+  .tendering .ledger { flex: none; max-height: none; overflow: visible; }
+  .tendering .ledger-foot { overflow: visible; }
+  .tender-summary .takens { display: flex; max-height: none; overflow: visible; }
+  .tendering .work { flex: none; min-height: 0; }
+  .tender-work { overflow: visible; }
+  .tender-keys { flex: none; }
+  .tender-keys .quicks { display: flex; }
+  .tender-keys .keypad { flex: none; min-height: 0; max-height: none; grid-auto-rows: 60px; }
+  .tender-keys .key { min-height: 60px; }
+
+  /* **A message is the last thing on the page, held to the foot of the
+   * screen.** In the flow at the very end, so its arrival moves nothing above
+   * it; and sticky, so while the end of the page is out of view it stands
+   * 12 px above the foot of the screen — above PAY, in sale — instead of
+   * waiting down there unread. Scrolled to the end, it lies in its own place
+   * under the last button rather than over it. */
+  #app:has(> main.lane) > :is(.notice-bar, .trouble-bar) {
+    position: sticky;
+    bottom: calc(env(safe-area-inset-bottom) + 12px);
+    z-index: 4;
+    height: auto;
+    min-height: 44px;
+    margin: 0 16px 12px;
+    margin-left: max(16px, env(safe-area-inset-left));
+    margin-right: max(16px, env(safe-area-inset-right));
+    padding: 8px 16px 8px 14px;
+    gap: 10px;
+    border-radius: var(--r-ctl);
+    background: var(--toast);
+    color: var(--toast-ink);
+    box-shadow: var(--toast-shadow);
+    font-size: 15px;
+  }
+  #app:has(> .commands) > :is(.notice-bar, .trouble-bar) { bottom: calc(72px + env(safe-area-inset-bottom) + 12px); }
+  #app:has(> main.lane) > .notice-bar::before { background: var(--toast-ok); }
+  #app:has(> main.lane) > .trouble-bar::before { background: var(--toast-critical); }
+  html[lang="my"] #app:has(> main.lane) > :is(.notice-bar, .trouble-bar) { font-size: 14px; line-height: 1.5; }
 }
 
 /* ---- the receipt ---------------------------------------------------------- */
