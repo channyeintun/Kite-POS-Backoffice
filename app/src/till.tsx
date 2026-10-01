@@ -5,6 +5,11 @@
 //! compares the new tree against the last one and changes only what differs,
 //! and `pos.tsx` holds the two ends.
 //!
+//! One exception, and it is about time rather than about the sale: a dialog
+//! the store has closed stays on the screen for the 180 ms it takes to go —
+//! see `Overlay`. It is inert for those milliseconds, so it can be seen
+//! leaving and cannot be touched.
+//!
 //! **Every control says what it means in a `data-action`**, and every one of
 //! them hands the same `press` handler to `onClick`. The handler reads the
 //! action and its `data-id` off the element that was touched and `pos.tsx`
@@ -30,6 +35,7 @@
 //! locked rather than hidden; and the connection state is on screen at all
 //! times, because this till is online and that dot is load-bearing.
 
+import { useEffect, useRef, useState } from "react";
 import type { MouseEvent, ReactElement, ReactNode } from "react";
 import * as store from "./store.ts";
 import type { App } from "./store.ts";
@@ -1256,8 +1262,80 @@ export function Page({ app, press }: Props): ReactElement {
       </div>,
     );
   }
-  for (const node of overlay_of(app, press)) {
-    out.push(node);
-  }
+  // Always drawn, so the dialog it holds can outlive the store's own: see
+  // `Overlay`. `overlay_of` gives at most one.
+  out.push(<Overlay key="overlay" node={overlay_of(app, press)[0] ?? null} />);
   return <>{out}</>;
+}
+
+/**
+ * How long a closing dialog stays on the screen. It is the stylesheet's
+ * `--t-close`, which is what the leaving animation runs for; the two are kept
+ * equal by hand.
+ */
+const CLOSE_MS = 180;
+
+/**
+ * **Where a dialog comes and goes.**
+ *
+ * A dialog used to be in the tree while the store said so and gone in the same
+ * frame that it stopped saying so — which is a cut, and nothing a stylesheet
+ * can animate, because there is no element left to animate. This holds on to
+ * the last dialog it was given for `CLOSE_MS` after the store lets it go, and
+ * marks it `leaving` so the stylesheet can play it out. It is the same element
+ * throughout — React keeps it, typed reasons and scrolled lists and all — and
+ * it is `inert` while it leaves, so the tap that closed it cannot land on it
+ * twice and nothing in it can take the focus.
+ *
+ * A dialog that replaces another while it is open — the receipt list giving
+ * way to the receipt, a reason to the manager's PIN — is a `swap`: the
+ * dimming stays where it is and only the sheet changes, rather than the till
+ * flashing up between the two. And a new dialog arriving while the last one
+ * is still leaving takes its place at once, so there are never two.
+ *
+ * The state here is about the screen, never the sale: what the store says is
+ * open is what `pos.tsx` acts on, from the moment it says so.
+ */
+function Overlay({ node }: { node: ReactElement | null }): ReactElement | null {
+  const kept = useRef<ReactElement | null>(null);
+  const swap = useRef(false);
+  const [, redraw] = useState(0);
+
+  if (node !== null) {
+    if (kept.current === null) {
+      swap.current = false;
+    } else if (kept.current.key !== node.key) {
+      swap.current = true;
+    }
+    kept.current = node;
+  }
+  const leaving = node === null && kept.current !== null;
+
+  useEffect(() => {
+    if (!leaving) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      kept.current = null;
+      redraw((n) => n + 1);
+    }, CLOSE_MS);
+    return () => clearTimeout(timer);
+  }, [leaving]);
+
+  const shown = node ?? kept.current;
+  if (shown === null) {
+    return null;
+  }
+  let classes = "overlay";
+  if (swap.current) {
+    classes = classes + " swap";
+  }
+  if (leaving) {
+    classes = classes + " leaving";
+  }
+  return (
+    <div className={classes} inert={leaving}>
+      {shown}
+    </div>
+  );
 }

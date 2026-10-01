@@ -94,6 +94,27 @@
   --toast-h: 44px;
   --toast-gap: 12px;
 
+  /* **Motion.** The design this follows moves things the way a hand does:
+   * something arriving comes in fast and settles slowly — the emphasised
+   * deceleration, `--ease-enter` — and something leaving starts slowly and
+   * gets out of the way — `--ease-exit`, an acceleration — and leaving is
+   * quicker than arriving, because by then the cashier has already moved on.
+   * `--t-close` is also `CLOSE_MS` in `till.tsx`, which keeps a closing
+   * dialog on the screen for exactly as long as it takes to go. */
+  --ease-enter: cubic-bezier(0.2, 0.8, 0, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --ease-standard: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --t-open: 280ms;
+  --t-scrim: 220ms;
+  --t-swap: 200ms;
+  --t-close: 180ms;
+  /* Where a dialog's sheet comes from and goes to. Further on a phone, where
+   * it rises like a sheet; nowhere at all for anyone who has asked their
+   * device for less motion, who gets the fades alone. */
+  --sheet-from: translateY(16px) scale(0.96);
+  --sheet-to: translateY(8px) scale(0.97);
+  --toast-from: translateY(8px);
+
   --r-card: 16px;
   --r-ctl: 12px;
   --r-sm: 10px;
@@ -1359,6 +1380,45 @@ html[lang="my"] .key.util:not([data-id="back"]) { font-size: 17px; }
   background: var(--s2);
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
 }
+
+/* **A dialog arrives and leaves; it does not cut in and out.**
+ *
+ * It used to be there in the frame the store opened it and gone in the frame
+ * the store closed it, which is how a web page behaves and not how anything
+ * on a counter tablet does — every dialog on the device this till is used
+ * beside rises out of the dimming and sinks back into it. So the dimming
+ * fades up while the sheet rises 16 px and grows from 96 %, decelerating into
+ * place; and on the way out both go in less time, accelerating away, the
+ * sheet dropping 8 px as it fades. `Overlay` in `till.tsx` is what keeps a
+ * closing dialog on the screen long enough to be seen going, inside a wrapper
+ * that draws no box of its own.
+ *
+ * One dialog replacing another — the receipt list giving way to a receipt, a
+ * reason giving way to the manager's PIN — keeps the dimming still and only
+ * cross-fades the sheet, quickly, rather than the till flashing up between
+ * them. */
+.overlay { display: contents; }
+.shade { animation: scrim-in var(--t-scrim) var(--ease-standard) both; }
+.panel { animation: sheet-in var(--t-open) var(--ease-enter) both; }
+.overlay.swap .shade { animation: none; }
+.overlay.swap .panel { animation: sheet-swap var(--t-swap) var(--ease-enter) both; }
+.overlay.leaving .shade {
+  animation: scrim-out var(--t-close) var(--ease-exit) both;
+  pointer-events: none;
+}
+.overlay.leaving .panel { animation: sheet-out var(--t-close) var(--ease-exit) both; }
+@keyframes scrim-in { from { opacity: 0; } }
+@keyframes scrim-out { to { opacity: 0; } }
+@keyframes sheet-in { from { opacity: 0; transform: var(--sheet-from); } }
+@keyframes sheet-swap { from { opacity: 0; transform: scale(0.98); } }
+@keyframes sheet-out { to { opacity: 0; transform: var(--sheet-to); } }
+@media (max-width: 560px) {
+  :root { --sheet-from: translateY(40px); --sheet-to: translateY(24px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root { --sheet-from: none; --sheet-to: none; --toast-from: none; }
+  .overlay.swap .panel { animation-name: scrim-in; }
+}
 .panel h2 { margin: 0 0 14px; font-size: 22px; font-weight: 700; line-height: 1.2; }
 .panel .lede { margin: 0 0 12px; font-size: 16px; line-height: 1.45; color: var(--ink); }
 .panel .detail { margin: 0 0 12px; }
@@ -1512,6 +1572,12 @@ html[lang="my"] .key.util:not([data-id="back"]) { font-size: 17px; }
 }
 .notice-bar { --icon: var(--i-check-circle); background: var(--success-tint); color: var(--success); }
 .trouble-bar { --icon: var(--i-alert); background: var(--critical-tint); color: var(--critical-ink); }
+/* A message rises into its place the way a dialog does, on the same
+ * deceleration, a little quicker and a little nearer. It is only ever drawn
+ * arriving: it goes when the next thing happens, and that next thing is what
+ * the cashier is watching. */
+.notice-bar, .trouble-bar { animation: toast-in 240ms var(--ease-enter) both; }
+@keyframes toast-in { from { opacity: 0; transform: var(--toast-from); } }
 
 /* ---- what gives way, in order -------------------------------------------- */
 /*
@@ -2946,10 +3012,10 @@ img.tile-photo {
 @media print {
   .status, .lane, .commands, .panel-actions,
   .trouble-bar, .notice-bar { display: none !important; }
-  .shade { position: static; background: none; display: block; }
+  .shade { position: static; background: none; display: block; animation: none; }
   /* And at its full length: on screen the dialog stops at 90% of the window
    * and scrolls, and on paper a scroller is a receipt with its foot cut off. */
-  .panel { position: static; max-width: none; max-height: none; width: auto; padding: 0; overflow: visible; background: #fff; box-shadow: none; }
+  .panel { position: static; max-width: none; max-height: none; width: auto; padding: 0; overflow: visible; background: #fff; box-shadow: none; animation: none; }
   /* The dialog's own heading says "Receipt"; the paper does not need telling. */
   .panel > h2 { display: none !important; }
   html, body, #app { display: block; height: auto; overflow: visible; background: #fff; }
