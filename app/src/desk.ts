@@ -8,7 +8,7 @@
 //! ## A screen is a list of blocks
 //!
 //! The design gives the back office five ways of showing something: a row of
-//! stat cards with a tone bar, a ranked list with a meter under each name, a
+//! stat cards with a tone dot, a ranked list with a meter under each name, a
 //! table, a grid of lane cards, and the pair of role cards on Staff & access.
 //! So a screen here is `Block[]`, and adding one is a function that returns a
 //! list — `office_view.tsx` already knows how to draw every shape.
@@ -305,8 +305,8 @@ export function group_of(s: Screen): string {
 /**
  * A figure worth putting at the top of a screen.
  *
- * `tone` is machine state and only machine state — "" is neutral, and the
- * others paint the 4 px bar across the top of the card.
+ * `tone` is machine state and only machine state — "" is neutral (a grey
+ * dot), and the others colour the 8 px dot before the card's label.
  */
 export interface Stat {
   label: string;

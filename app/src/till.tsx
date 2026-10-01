@@ -597,14 +597,22 @@ function CommandBar({ app, press }: Props): ReactElement {
     if (c.id === "held" && app.basket.held_count > 0) {
       label = `${label} (${app.basket.held_count})`;
     }
-    if (!c.allowed) {
-      label = `${label} 🔒`;
-    }
     let classes = c.danger ? "command danger" : "command";
     if (!c.allowed) {
       classes = classes + " locked";
     }
-    const node = <Button key={c.id} label={label} classes={classes} action="command" id={c.id} press={press} />;
+    // Drawn inline rather than through `Button`, for the one thing `Button`
+    // cannot carry: the padlock after the label. It used to be a `🔒` in the
+    // label itself — an emoji, in colour — and is a drawn glyph now, which
+    // the stylesheet places in the button's corner. The glyph keeps the
+    // emoji as its accessible name, so a screen reader still hears exactly
+    // what the label used to say: that this command is locked.
+    const node = (
+      <button key={c.id} className={classes} type="button" data-action="command" data-id={c.id} onClick={press}>
+        {label}
+        {!c.allowed && <span className="lock" role="img" aria-label="🔒" />}
+      </button>
+    );
     if (c.danger) {
       destructive.push(node);
     } else {

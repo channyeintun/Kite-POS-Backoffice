@@ -5,14 +5,15 @@
 //! names what it means in a `data-action` and hands one `press` handler to
 //! `onClick`; `office.tsx` decides what the name means.
 //!
-//! The shapes come from the design: a filled surface card with a 12 px radius
-//! on a slightly darker page (no borders anywhere), a stat card with a 4 px
-//! tone bar across its top, a ranked list with a meter under each name, pill
-//! buttons, and a dark rail with a section heading between groups.
+//! The shapes follow the Shopify admin's new look, drawn in `office.css`: a
+//! white sheet inset in a near-black frame that is also the rail, white cards
+//! told apart from it by a hairline ring, a stat card with a tone dot before
+//! its label, a ranked list with a meter under each name, pill buttons, and a
+//! section heading between the rail's groups.
 //!
-//! Colour means what it means at the till: green is open or valid, amber and
-//! magenta are attention, red is closed or wrong. A shop should not have to
-//! learn two vocabularies.
+//! Colour means what it means at the till: green is open or valid, amber is
+//! attention, red is closed or wrong. A shop should not have to learn two
+//! vocabularies.
 
 import type { MouseEvent, ReactElement, ReactNode } from "react";
 import * as desk from "./desk.ts";
@@ -233,8 +234,8 @@ function Header({ app, press }: Props): ReactElement {
 function StatCard({ s }: { s: desk.Stat }): ReactElement {
   return (
     <div className="stat">
-      {/* A 4 px field of colour across the top, which is the whole of how a
-          stat card carries machine state. */}
+      {/* An 8 px dot before the label, which is the whole of how a stat
+          card carries machine state. */}
       <span className={s.tone.length > 0 ? `stat-tone ${s.tone}` : "stat-tone"} />
       <span className="stat-label">{s.label}</span>
       <span className="stat-value">{s.value}</span>

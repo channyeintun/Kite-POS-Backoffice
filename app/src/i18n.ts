@@ -10,7 +10,7 @@
 //! digits, and product names come from one database field and are shown as
 //! stored. Chrome switches; the catalogue does not.
 //!
-//! Burmese needs a taller line box than Roboto — 1.6–1.7 against 1.2–1.3 — and
+//! Burmese needs a taller line box than Inter — 1.6–1.7 against 1.2–1.3 — and
 //! the stylesheet handles that with a `lang` attribute on the root rather than
 //! a class per string. Command labels are sized for the longer of the two, so
 //! nothing reflows when the language changes.

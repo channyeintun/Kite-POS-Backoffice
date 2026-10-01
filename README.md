@@ -43,14 +43,15 @@ Modelled on the feature set of `corner-mart-pos`, **without the AI assistant**.
 
 ![The till, in မြန်မာ, mid-basket](docs/screenshots/till-my.png)
 
-The four regions, in the language the lane is set to: the **ledger** on the
-left with the 3-for-2,500 offer pricing the colas and the shelf price struck
-through, the **work area** with the scan box and the tile grid, the **commands**
+The four regions, in the language the lane is set to: the **ledger** as a card
+down the right-hand edge with the running total and Pay at its foot, the **work
+area** with the scan box, the category tabs and the tile grid, the **commands**
 across the bottom with the manager-only ones shown locked rather than hidden,
 and the **status** bar carrying lane health and nothing else. Product names come
 from `name_my` where the catalogue has one and fall back to the stored name
-where it does not; amounts, quantities and SKUs stay in Latin digits. The tile
-pictures are placeholders — a shopkeeper takes their own, from the product form.
+where it does not; amounts, quantities and SKUs stay in Latin digits. A tile
+with no picture shows a drawn tag — a shopkeeper takes their own photo, from the
+product form.
 
 **At the till** — a scan box that never loses focus, a quick-key grid and
 category tabs, search, a merged basket (a rescan makes "×3", not three rows),
@@ -286,7 +287,18 @@ claim, read back what landed, then derive everything else from that.
 Implemented from the four design documents in the Claude Design project
 *"POS and Backoffice separation"*. The till is **four fixed regions in one order
 of authority** — ledger, work area, commands, status — which never reorder
-between viewports; they resize, demote to icons, or become a tab.
+between viewports; they resize, demote to icons, or become a tab. On a tablet
+on its side the ledger is drawn as a full-height card down the right-hand
+edge, where Shopify POS puts its cart; the markup order, and with it what gives
+way first, is the same.
+
+The look is Shopify's, rebuilt by hand rather than imported: the till follows
+Shopify POS 11 in its dark theme (a near-black canvas, layered greys, one blue
+for Pay and selection) and the back office follows the Shopify admin's 2026
+look (a white sheet inside a black navigation frame, black primary buttons).
+Both are set in Inter with Noto Sans Myanmar, and the icons are drawn for this
+project. No Shopify package, icon or typeface ships in either app — their
+licence does not allow it outside Shopify's own platform.
 
 Touch sizes are in millimetres at a stated density, because the published minima
 are physical: **20 mm** keypad and commit keys (Colle & Hiszem 2004, where 25 mm
